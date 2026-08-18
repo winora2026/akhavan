@@ -1,0 +1,1665 @@
+"use client"
+
+import { useRouter } from "next/navigation"
+import { useState, useMemo, useRef, useEffect, Fragment } from "react"
+import DatePicker from "react-multi-date-picker"
+import persian from "react-date-object/calendars/persian"
+import persian_fa from "react-date-object/locales/persian_fa"
+import customersSeedRaw from "../../customers/customers-seed.json"
+
+type ServiceItem = {
+  id: number
+  title: string
+  unit: string
+  count: string
+  unitQuantity: string
+  unitPrice: string
+  totalPrice: string
+  lengthCount?: string
+  widthCount?: string
+}
+
+type OrderItem = {
+  id: number
+  productName: string
+  partNumber: string
+  installCode: string
+  unit: string
+  length: string
+  width: string
+  quantity: string
+  meterage: string
+  perimeter: string
+  unitPrice: string
+  totalPrice: string
+  description: string
+  services: ServiceItem[]
+}
+
+type MapImage = {
+  id: number
+  name: string
+  url: string
+}
+
+const productList = [
+  "شیشه سفید ۶ میل", "شیشه سفید ۸ میل", "شیشه سفید ۱۰ میل",
+  "شیشه برنز ۶ میل", "شیشه دودی ۶ میل",
+  "آینه سوپرکلیر ۶ میل", "آینه برنز 5 میل", "آینه دودی 5 میل",
+  "لاکوبل مشکی ۶ میل", "لاکوبل سفید ۶ میل",
+]
+
+const serviceCategories: Record<string, string[]> = {
+  "تراش‌ها": ["تراش ۰.۷", "تراش ۱", "تراش ۱.۵", "تراش ۲", "تراش ۲.۵", "دو طول تراش ۱.۵", "یک طول + دو عرض تراش ۱.۵"],
+  "اینگروینگ": ["اینگروینگ ۱", "اینگروینگ ۲"],
+  "ماشین‌کاری": ["CNC", "UV", "سندبلاست", "دیاموند", "MDF"],
+  "اجرت‌ها": ["کرایه ","اجرت اندازه‌گیری", "چسب", "اجرت برش", "اجرت نصب", "هزینه بسته‌بندی"],
+  "قاب و یراق": ["قاب چوبی", "قاب فلزی", "لول معمولی", "فیتینگ"],
+}
+
+const serviceUnits = ["مترمربع", "مترطول", "عددی", "درصد", "محیط", "ابعاد دایره", "چند طول چند عرض"]
+const descriptionsList = [
+  "رو میزی",
+  "گوشه ها ۱*۱",
+  "تیزی خیلی کم گرفته شود",
+  "گوشه ها ۱.۵*۱.۵",
+  "طبق فایل شبکه",
+  "تیزی گرفته",
+  "گوشه ها طبق الگو",
+  "بیضی",
+  "گوشه ها ۰.۵*۰.۵",
+  "طبق الگو",
+  "گرد",
+  "گوشه ها ۲.۵*۲.۵ شود",
+  "گوشه ها تیز",
+  "دالبری",
+  "قواره",
+  "گوشه ها ۶*۶",
+  "تراش ۱.۵",
+  "گوشه ها فارسی بری",
+  "گوشه ها الگویی",
+  "گوشه ها طبق الگو زده شود",
+  "گوشه ها الگویی با هماهنگی",
+  "لوزی",
+  "آبشاری، تراش دار ۱.۵",
+  "گوشه ها ۳*۳",
+  "گوشه متری",
+  "دوسر گرد",
+  "۱۲ضلعی",
+  "الماسی",
+  "کچی دارد",
+  "مدل بری",
+  "الگویی",
+  "فارسی بری دارد",
+  "خیلی دقیق باشد همه ی ابعاد",
+  "گوش ها ۲.۵*۲.۵",
+  "شش ضلعی تراش ۱.۵",
+  "منسی بیرنگ",
+  "۸ضلعی",
+  "کاپریس تراش ۱",
+  "لاکوبل سفید ۱۱۰",
+  "یک گوشه ۲*۲ زده شود",
+]
+const customersList = (customersSeedRaw as any[]).map((c: any) => {
+  let name = ""
+
+  if (c.customerType === "حقوقی") {
+    name = (c.companyName || "").trim()
+    if (!name) name = `${c.lastName || ""} ${c.firstName || ""}`.trim()
+  } else {
+    name = `${c.lastName || ""} ${c.firstName || ""}`.trim()
+    if (!name) name = (c.companyName || "").trim()
+  }
+
+  // اگر هنوز خالی بود، از هر فیلدی که موجوده استفاده کن
+  if (!name) {
+    name = c.companyName || c.lastName || c.firstName || c.code || "بدون نام"
+  }
+
+  return {
+    id: c.id,
+    code: c.code || "",
+    name: name,
+    group: c.group || "همکار",
+  }
+})
+const formatWithCommas = (value: string) => {
+  const raw = value.replace(/[^\d]/g, "")
+  if (!raw) return ""
+  return raw.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+}
+
+const parsePrice = (value: string) => parseFloat(value.replace(/,/g, "")) || 0
+
+const inputClass = "w-full rounded-xl border border-teal-500/30 bg-white/40 px-3 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none hover:bg-yellow-100 transition-colors duration-150"
+const labelClass = "mb-1 block text-sm font-bold text-blue-900"
+const selectClass = inputClass
+
+export default function NewOrderPage() {
+  const router = useRouter()
+
+  const [orderDate, setOrderDate] = useState<any>(null)
+  const [deliveryDate, setDeliveryDate] = useState<any>(null)
+  const [customerName, setCustomerName] = useState("")
+  const [customerSearch, setCustomerSearch] = useState("")
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
+  const [productionLine, setProductionLine] = useState("دکوراتیو")
+  const [customerGroup, setCustomerGroup] = useState("همکار")
+  const [priority, setPriority] = useState("عادی")
+  const [customerOrderNumber, setCustomerOrderNumber] = useState("—")
+  const [orderNumber, setOrderNumber] = useState("—")
+  const [hasInstallation, setHasInstallation] = useState(false)
+  const [showInstallModal, setShowInstallModal] = useState(false)
+  const [installDate, setInstallDate] = useState<any>(null)
+  const [installAddress, setInstallAddress] = useState("")
+  const [installPhone, setInstallPhone] = useState("")
+  const [installNotes, setInstallNotes] = useState("")
+  const [manualTotalQuantity, setManualTotalQuantity] = useState("")
+  const [manualTotalMeterage, setManualTotalMeterage] = useState("")
+  const [quantityLocked, setQuantityLocked] = useState(false)
+  const [meterageLocked, setMeterageLocked] = useState(false)
+  const [newProduct, setNewProduct] = useState("")
+  const [newPartNumber, setNewPartNumber] = useState("")
+  const [newInstallCode, setNewInstallCode] = useState("")
+  const [newUnit, setNewUnit] = useState("مترمربع")
+  const [newLength, setNewLength] = useState("")
+  const [newWidth, setNewWidth] = useState("")
+  const [newQuantity, setNewQuantity] = useState("1")
+  const [newUnitPrice, setNewUnitPrice] = useState("")
+  const [items, setItems] = useState<OrderItem[]>([])
+  const [mapImages, setMapImages] = useState<MapImage[]>([])
+  const [previewImage, setPreviewImage] = useState<string | null>(null)
+  const [showServices, setShowServices] = useState(false)
+  const [currentItemId, setCurrentItemId] = useState<number | null>(null)
+  const [tempServices, setTempServices] = useState<ServiceItem[]>([])
+  const [svcTitle, setSvcTitle] = useState("")
+  const [svcUnit, setSvcUnit] = useState("مترطول")
+  const [svcCount, setSvcCount] = useState("1")
+  const [svcUnitQuantity, setSvcUnitQuantity] = useState("")
+  const [svcUnitPrice, setSvcUnitPrice] = useState("")
+  const [svcLengthCount, setSvcLengthCount] = useState("1")
+  const [svcWidthCount, setSvcWidthCount] = useState("1")
+  const [serviceSearch, setServiceSearch] = useState("")
+  const [editingServiceId, setEditingServiceId] = useState<number | null>(null)
+  const [showInvoice, setShowInvoice] = useState(false)
+  const [invoiceMode, setInvoiceMode] = useState<"detailed" | "summary">("detailed")
+  const [isOfficialInvoice, setIsOfficialInvoice] = useState(false)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; itemId: number } | null>(null)
+  const [svcDiameter, setSvcDiameter] = useState("")
+
+  // پاپ‌آپ توضیحات هر قلم
+  const [showDescriptionModal, setShowDescriptionModal] = useState(false)
+  const [currentDescItemId, setCurrentDescItemId] = useState<number | null>(null)
+  const [modalDescription, setModalDescription] = useState("")
+  const [modalDescriptionSearch, setModalDescriptionSearch] = useState("")
+  const [showModalDescDropdown, setShowModalDescDropdown] = useState(false)
+
+  const productRef = useRef<HTMLSelectElement>(null)
+  const partNumberRef = useRef<HTMLInputElement>(null)
+  const installCodeRef = useRef<HTMLInputElement>(null)
+  const unitRef = useRef<HTMLSelectElement>(null)
+  const lengthRef = useRef<HTMLInputElement>(null)
+  const widthRef = useRef<HTMLInputElement>(null)
+  const quantityRef = useRef<HTMLInputElement>(null)
+  const unitPriceRef = useRef<HTMLInputElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const invoiceRef = useRef<HTMLDivElement>(null)
+
+  const calculatedTotalQuantity = useMemo(() => items.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0), [items])
+  const calculatedTotalMeterage = useMemo(() => items.reduce((sum, item) => sum + (parseFloat(item.meterage) || 0), 0).toFixed(4), [items])
+  const grandTotal = useMemo(() => items.reduce((sum, item) => sum + parsePrice(item.totalPrice), 0), [items])
+  const vatAmount = isOfficialInvoice ? Math.round(grandTotal * 0.1) : 0
+  const finalTotal = grandTotal + vatAmount
+
+  const quantityMismatch = manualTotalQuantity !== "" && Number(manualTotalQuantity) !== calculatedTotalQuantity
+  const meterageMismatch = manualTotalMeterage !== "" && Number(manualTotalMeterage) !== Number(calculatedTotalMeterage)
+
+  const filteredCustomers = useMemo(() => {
+    const q = customerSearch.trim().toLowerCase()
+    if (!q) return customersList.slice(0, 8)
+    return customersList.filter((c) => c.name.toLowerCase().includes(q) || c.code.includes(q)).slice(0, 12)
+  }, [customerSearch])
+
+  const filteredModalDescriptions = useMemo(() => {
+    const q = modalDescriptionSearch.trim().toLowerCase()
+    if (!q) return descriptionsList.slice(0, 8)
+    return descriptionsList.filter((d) => d.toLowerCase().includes(q)).slice(0, 12)
+  }, [modalDescriptionSearch])
+
+  const calculatedUnitQuantity = useMemo(() => {
+  const item = items.find((i) => i.id === currentItemId)
+  if (!item && svcUnit !== "ابعاد دایره") return ""
+
+  const l = parseFloat(item?.length || "0") || 0
+  const w = parseFloat(item?.width || "0") || 0
+  const q = parseFloat(item?.quantity || "1") || 1
+
+  if (svcUnit === "مترمربع") {
+    return ((l * w) / 10000 * q).toFixed(4)
+  }
+
+  if (svcUnit === "محیط") {
+    return ((2 * (l + w)) / 100 * q).toFixed(2)
+  }
+
+  if (svcUnit === "چند طول چند عرض") {
+    const lCount = parseFloat(svcLengthCount) || 0
+    const wCount = parseFloat(svcWidthCount) || 0
+    return (lCount * (l / 100) + wCount * (w / 100)).toFixed(3)
+  }
+
+  if (svcUnit === "ابعاد دایره") {
+    const diameter = parseFloat(svcDiameter) || 0
+    // محیط دایره = ۳.۱۴ × قطر (بر حسب متر)
+    return ((3.14 * diameter) / 100).toFixed(3)
+  }
+
+  return ""
+}, [svcUnit, svcLengthCount, svcWidthCount, svcDiameter, currentItemId, items])
+  const serviceTotalPreview = useMemo(() => {
+    const count = parseFloat(svcCount) || 0
+   const unitQty = parseFloat(
+  svcUnit === "مترمربع" || svcUnit === "محیط" || svcUnit === "چند طول چند عرض" || svcUnit === "ابعاد دایره"
+    ? calculatedUnitQuantity
+    : svcUnitQuantity
+) || 0
+    const price = parsePrice(svcUnitPrice)
+    return (count * unitQty * price).toLocaleString("en-US")
+  }, [svcCount, svcUnitQuantity, svcUnitPrice, svcUnit, calculatedUnitQuantity])
+
+  useEffect(() => {
+    if (!quantityLocked) setManualTotalQuantity(String(calculatedTotalQuantity || ""))
+  }, [calculatedTotalQuantity, quantityLocked])
+
+  useEffect(() => {
+    if (!meterageLocked) setManualTotalMeterage(calculatedTotalMeterage === "0.0000" ? "" : calculatedTotalMeterage)
+  }, [calculatedTotalMeterage, meterageLocked])
+
+  useEffect(() => {
+    const handleClick = () => {
+      setContextMenu(null)
+      setShowCustomerDropdown(false)
+      setShowModalDescDropdown(false)
+    }
+    window.addEventListener("click", handleClick)
+    return () => window.removeEventListener("click", handleClick)
+  }, [])
+
+  const isOrderInfoComplete =
+    customerName.trim() !== "" &&
+    productionLine !== "" &&
+    customerGroup !== "" &&
+    priority !== "" &&
+    orderDate !== null &&
+    deliveryDate !== null
+
+  const formatPrice = (value: string | number) => {
+    const num = typeof value === "string" ? parsePrice(value) : value
+    if (isNaN(num) || num === 0) return ""
+    return num.toLocaleString("en-US")
+  }
+
+  const calculate = (length: string, width: string, quantity: string, unit: string) => {
+    const l = parseFloat(length) || 0
+    const w = parseFloat(width) || 0
+    const q = parseFloat(quantity) || 1
+    let meterage = 0
+    let perimeter = 0
+    if (unit === "مترمربع") {
+      meterage = ((l * w) / 10000) * q
+      perimeter = ((2 * (l + w)) / 100) * q
+    } else if (unit === "مترطول") {
+      meterage = (l / 100) * q
+      perimeter = (l / 100) * q
+    } else {
+      meterage = q
+    }
+    return { meterage: meterage ? meterage.toFixed(4) : "", perimeter: perimeter ? perimeter.toFixed(2) : "" }
+  }
+
+  const handleEnter = (e: React.KeyboardEvent, nextRef: React.RefObject<any>) => {
+    if (e.key === "Enter") {
+      e.preventDefault()
+      nextRef.current?.focus()
+    }
+  }
+
+  const selectCustomer = (c: { name: string; group: string; code: string }) => {
+    setCustomerName(c.name)
+    setCustomerSearch(c.name)
+    setCustomerGroup(c.group as any)
+    setShowCustomerDropdown(false)
+  }
+
+  const addItem = () => {
+    if (!newProduct) {
+      alert("نام کالا را انتخاب کنید")
+      return
+    }
+    const qty = parseFloat(newQuantity) || 1
+    const price = parsePrice(newUnitPrice)
+
+    if (qty > 5) {
+      const calc = calculate(newLength, newWidth, String(qty), newUnit)
+      const meterage = parseFloat(calc.meterage) || 0
+      setItems([...items, {
+        id: Date.now(),
+        productName: newProduct,
+        partNumber: newPartNumber,
+        installCode: newInstallCode,
+        unit: newUnit,
+        length: newLength,
+        width: newWidth,
+        quantity: String(qty),
+        meterage: calc.meterage,
+        perimeter: calc.perimeter,
+        unitPrice: newUnitPrice,
+        totalPrice: price ? (price * meterage).toLocaleString("en-US") : "",
+        description: "",
+        services: [],
+      }])
+    } else {
+      const newItems: OrderItem[] = []
+      for (let i = 0; i < qty; i++) {
+        const calc = calculate(newLength, newWidth, "1", newUnit)
+        const meterage = parseFloat(calc.meterage) || 0
+        newItems.push({
+          id: Date.now() + i,
+          productName: newProduct,
+          partNumber: newPartNumber,
+          installCode: newInstallCode,
+          unit: newUnit,
+          length: newLength,
+          width: newWidth,
+          quantity: "1",
+          meterage: calc.meterage,
+          perimeter: calc.perimeter,
+          unitPrice: newUnitPrice,
+          totalPrice: price ? (price * meterage).toLocaleString("en-US") : "",
+          description: "",
+          services: [],
+        })
+      }
+      setItems([...items, ...newItems])
+    }
+    setNewPartNumber("")
+    setNewInstallCode("")
+    setNewLength("")
+    setNewWidth("")
+    setNewQuantity("1")
+    setNewUnitPrice("")
+    productRef.current?.focus()
+  }
+
+  const removeItem = (id: number) => setItems(items.filter((item) => item.id !== id))
+
+  const handleMapUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files) return
+    Array.from(files).forEach((file) => {
+      const url = URL.createObjectURL(file)
+      setMapImages((prev) => [...prev, { id: Date.now() + Math.random(), name: file.name, url }])
+    })
+    if (fileInputRef.current) fileInputRef.current.value = ""
+  }
+
+  const removeMapImage = (id: number) => {
+    setMapImages((prev) => {
+      const img = prev.find((i) => i.id === id)
+      if (img) URL.revokeObjectURL(img.url)
+      return prev.filter((i) => i.id !== id)
+    })
+  }
+
+  const openServices = (id: number) => {
+    const item = items.find((i) => i.id === id)
+    setCurrentItemId(id)
+    setTempServices(item?.services || [])
+    setSvcTitle("")
+    setSvcUnit("مترطول")
+    setSvcCount("1")
+    setSvcUnitQuantity("")
+    setSvcUnitPrice("")
+    setSvcLengthCount("1")
+    setSvcWidthCount("1")
+    setServiceSearch("")
+    setEditingServiceId(null)
+    setShowServices(true)
+    setSvcDiameter("")
+  }
+
+  const addOrUpdateService = () => {
+    if (!svcTitle) {
+      alert("خدمت را انتخاب کنید")
+      return
+    }
+    const count = parseFloat(svcCount) || 1
+   const unitQty = parseFloat(
+  svcUnit === "مترمربع" || svcUnit === "محیط" || svcUnit === "چند طول چند عرض" || svcUnit === "ابعاد دایره"
+    ? calculatedUnitQuantity
+    : svcUnitQuantity
+) || 0
+    const price = parsePrice(svcUnitPrice)
+    const total = count * unitQty * price
+    const serviceData: ServiceItem = {
+      id: editingServiceId || Date.now(),
+      title: svcTitle,
+      unit: svcUnit,
+      count: svcCount,
+      unitQuantity: svcUnit === "چند طول چند عرض" ? calculatedUnitQuantity : svcUnitQuantity,
+      unitPrice: svcUnitPrice,
+      totalPrice: total ? total.toLocaleString("en-US") : "0",
+      lengthCount: svcLengthCount,
+      widthCount: svcWidthCount,
+    }
+    if (editingServiceId) {
+      setTempServices(tempServices.map((s) => (s.id === editingServiceId ? serviceData : s)))
+    } else {
+      setTempServices([...tempServices, serviceData])
+    }
+    setEditingServiceId(null)
+    setSvcTitle("")
+    setSvcCount("1")
+    setSvcUnitQuantity("")
+    setSvcUnitPrice("")
+    setSvcLengthCount("1")
+    setSvcWidthCount("1")
+  }
+
+  const removeService = (id: number) => setTempServices(tempServices.filter((s) => s.id !== id))
+
+  const saveServices = () => {
+    if (!currentItemId) return
+    setItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== currentItemId) return item
+        const basePrice = parsePrice(item.unitPrice) * (parseFloat(item.meterage) || 0)
+        const servicesTotal = tempServices.reduce((sum, s) => sum + parsePrice(s.totalPrice), 0)
+        return { ...item, services: tempServices, totalPrice: (basePrice + servicesTotal).toLocaleString("en-US") }
+      })
+    )
+    setShowServices(false)
+  }
+
+  const copyServicesToOthers = (sourceId: number) => {
+    const source = items.find((i) => i.id === sourceId)
+    if (!source || source.services.length === 0) {
+      alert("این قلم خدمتی ندارد")
+      setContextMenu(null)
+      return
+    }
+    if (!confirm(`سختی کار این قلم به ${items.length - 1} قلم دیگر کپی شود؟`)) {
+      setContextMenu(null)
+      return
+    }
+    setItems((prev) =>
+      prev.map((item) => {
+        if (item.id === sourceId) return item
+        const copiedServices = source.services.map((s) => ({ ...s, id: Date.now() + Math.random() }))
+        const basePrice = parsePrice(item.unitPrice) * (parseFloat(item.meterage) || 0)
+        const servicesTotal = copiedServices.reduce((sum, s) => sum + parsePrice(s.totalPrice), 0)
+        return { ...item, services: copiedServices, totalPrice: (basePrice + servicesTotal).toLocaleString("en-US") }
+      })
+    )
+    setContextMenu(null)
+    alert("سختی کار با موفقیت کپی شد")
+  }
+
+  // پاپ‌آپ توضیحات
+  const openDescriptionModal = (id: number) => {
+    const item = items.find((i) => i.id === id)
+    setCurrentDescItemId(id)
+    setModalDescription(item?.description || "")
+    setModalDescriptionSearch(item?.description || "")
+    setShowModalDescDropdown(false)
+    setShowDescriptionModal(true)
+  }
+
+  const saveDescription = () => {
+    if (!currentDescItemId) return
+    setItems((prev) =>
+      prev.map((item) => (item.id === currentDescItemId ? { ...item, description: modalDescription } : item))
+    )
+    setShowDescriptionModal(false)
+  }
+
+  const handleSave = async () => {
+    if (!isOrderInfoComplete) {
+      alert("لطفاً ابتدا تمام فیلدهای اطلاعات سفارش را تکمیل کنید")
+      return
+    }
+    if (items.length === 0) {
+      alert("حداقل یک قلم به سفارش اضافه کنید")
+      return
+    }
+    try {
+      const response = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerName,
+          customerGroup,
+          productionLine,
+          priority,
+          orderDate: orderDate?.format ? orderDate.format("YYYY/MM/DD") : null,
+          deliveryDate: deliveryDate?.format ? deliveryDate.format("YYYY/MM/DD") : null,
+          hasInstallation,
+          installDate: installDate?.format ? installDate.format("YYYY/MM/DD") : null,
+          installAddress,
+          installPhone,
+          installNotes,
+          totalQuantity: manualTotalQuantity || calculatedTotalQuantity,
+          totalMeterage: manualTotalMeterage || calculatedTotalMeterage,
+          items,
+          notes: "",
+        }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        alert(result.error || "خطا در ذخیره سفارش")
+        return
+      }
+      if (result.assignedOrderNumber) setOrderNumber(String(result.assignedOrderNumber))
+      if (result.assignedCustomerOrderNumber) setCustomerOrderNumber(String(result.assignedCustomerOrderNumber))
+      alert(`سفارش با شماره ${result.assignedOrderNumber || ""} با موفقیت ذخیره شد`)
+      router.push("/order")
+    } catch (error) {
+      console.error(error)
+      alert("خطا در ارتباط با سرور")
+    }
+  }
+
+  const allFilteredServices = useMemo(() => {
+    if (!serviceSearch.trim()) return Object.values(serviceCategories).flat()
+    const search = serviceSearch.trim().toLowerCase()
+    return Object.values(serviceCategories).flat().filter((s) => s.toLowerCase().includes(search))
+  }, [serviceSearch])
+
+  const currentItem = items.find((i) => i.id === currentItemId)
+  const currentDescItem = items.find((i) => i.id === currentDescItemId)
+    return (
+    <div
+      className="min-h-screen p-3 relative overflow-hidden bg-cover bg-center bg-no-repeat bg-fixed"
+      style={{
+        backgroundImage: "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
+        fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif",
+      }}
+      dir="rtl"
+    >
+      <link href="https://cdn.jsdelivr.net/npm/vazirmatn@33.003/Vazirmatn-font-face.css" rel="stylesheet" />
+      <div className="pointer-events-none fixed inset-0 bg-black/5" />
+
+      <div className="relative z-10 w-full max-w-[1920px] mx-auto pb-28">
+        {/* هدر */}
+        <div className="mb-3 flex items-center justify-between rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
+  <div className="flex-1 text-center">
+    <h1 className="text-3xl font-bold text-blue-950">ثبت سفارش جدید</h1>
+    <p className="text-lg font-bold text-blue-900 mt-1">نرم‌افزار اخوان | شیشه و آینه</p>
+  </div>
+  <div className="flex gap-3">
+            <button
+              onClick={handleSave}
+              disabled={!isOrderInfoComplete || items.length === 0}
+              className={`rounded-xl px-8 py-3.5 text-xl font-bold text-white shadow-md transition ${
+                isOrderInfoComplete && items.length > 0 ? "bg-teal-500 hover:bg-teal-600" : "bg-gray-400 cursor-not-allowed"
+              }`}
+            >
+              ذخیره
+            </button>
+            <button
+              onClick={() => router.push("/order")}
+              className="rounded-xl border border-teal-500/30 bg-white/30 px-7 py-3.5 text-xl font-bold text-blue-900 hover:bg-white/50 transition"
+            >
+              انصراف
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+          <div className="lg:col-span-7 space-y-3">
+            {/* اطلاعات سفارش */}
+            <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
+              <h2 className="mb-4 text-xl font-bold text-blue-950">اطلاعات سفارش</h2>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+  <div className="relative md:col-span-2" onClick={(e) => e.stopPropagation()}>
+    <label className={labelClass}>نام مشتری</label>
+    <div className="flex gap-2">
+      <div className="relative flex-1">
+        <input
+          type="text"
+          value={customerSearch}
+          onChange={(e) => {
+            setCustomerSearch(e.target.value)
+            setCustomerName(e.target.value)
+            setShowCustomerDropdown(true)
+          }}
+          onFocus={() => setShowCustomerDropdown(true)}
+          placeholder="جستجوی مشتری..."
+          className={inputClass}
+        />
+        {showCustomerDropdown && filteredCustomers.length > 0 && (
+          <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-teal-200 bg-white shadow-2xl">
+            {filteredCustomers.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => selectCustomer(c)}
+                className="w-full text-right px-4 py-2.5 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50"
+              >
+                <span className="text-teal-700 font-mono text-xs ml-2">{c.code}</span>
+                {c.name}
+                <span className="text-xs text-gray-500 mr-2">({c.group})</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={() => router.push("/customers")}
+        className="rounded-xl bg-teal-500 hover:bg-teal-600 px-4 text-sm font-bold text-white whitespace-nowrap"
+      >
+        + مشتری جدید
+      </button>
+    </div>
+  </div>
+
+  <div className="grid grid-cols-2 gap-3">
+    <div>
+      <label className={labelClass}>شماره سفارش</label>
+      <input type="text" value={orderNumber} readOnly className="w-full rounded-xl border border-teal-200 bg-teal-50 px-3 py-2.5 text-base font-bold text-teal-800" />
+    </div>
+    <div>
+      <label className={labelClass}>شماره سفارش مشتری</label>
+      <input type="text" value={customerOrderNumber} readOnly className="w-full rounded-xl border border-teal-200 bg-teal-50 px-3 py-2.5 text-base font-bold text-teal-800" />
+    </div>
+  </div>
+</div>
+
+<div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+  <div>
+    <label className={labelClass}>گروه مشتری</label>
+    <select value={customerGroup} onChange={(e) => setCustomerGroup(e.target.value)} className={selectClass}>
+      <option value="همکار">همکار</option>
+      <option value="نقدی">نقدی</option>
+    </select>
+  </div>
+  <div>
+    <label className={labelClass}>خط تولید</label>
+    <select value={productionLine} onChange={(e) => setProductionLine(e.target.value)} className={selectClass}>
+      <option value="دکوراتیو">دکوراتیو</option>
+      <option value="اجرتی">اجرتی</option>
+      <option value="UPVC">UPVC</option>
+      <option value="آلومینیومی">آلومینیومی</option>
+      <option value="لمینت">لمینت</option>
+      <option value="سکوریت">سکوریت</option>
+      <option value="دوجداره">دوجداره</option>
+    </select>
+  </div>
+                <div>
+                  <label className={labelClass}>اولویت</label>
+                  <select value={priority} onChange={(e) => setPriority(e.target.value)} className={selectClass}>
+                    <option value="عادی">عادی</option>
+                    <option value="فوری">فوری</option>
+                    
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                <div>
+                  <label className={labelClass}>تاریخ سفارش</label>
+                  <DatePicker
+                    value={orderDate}
+                    onChange={setOrderDate}
+                    calendar={persian}
+                    locale={persian_fa}
+                    calendarPosition="bottom-right"
+                    inputClass={inputClass}
+                    portal
+                    zIndex={1000}
+                    placeholder="انتخاب تاریخ"
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>تاریخ تحویل</label>
+                  <DatePicker
+                    value={deliveryDate}
+                    onChange={setDeliveryDate}
+                    calendar={persian}
+                    locale={persian_fa}
+                    calendarPosition="bottom-right"
+                    inputClass={inputClass}
+                    portal
+                    zIndex={1000}
+                    placeholder="انتخاب تاریخ"
+                  />
+                </div>
+                <div className="flex items-end gap-3 pb-1">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={hasInstallation}
+                      onChange={(e) => {
+                        setHasInstallation(e.target.checked)
+                        if (e.target.checked) setShowInstallModal(true)
+                      }}
+                      className="w-5 h-5 accent-teal-600"
+                    />
+                    <span className="text-base font-bold text-blue-900">نصب</span>
+                  </label>
+                  {hasInstallation && (
+                    <button type="button" onClick={() => setShowInstallModal(true)} className="text-sm font-bold text-teal-700 hover:underline">
+                      ویرایش نصب
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div>
+                  <label className={labelClass}>تعداد کل</label>
+                  <input
+                    type="text"
+                    value={manualTotalQuantity}
+                    onChange={(e) => {
+                      setManualTotalQuantity(e.target.value)
+                      setQuantityLocked(true)
+                    }}
+                    className={`${inputClass} ${quantityMismatch ? "border-red-400 bg-red-50" : ""}`}
+                  />
+                  <p className={`text-xs mt-1 ${quantityMismatch ? "text-red-600 font-bold" : "text-blue-600"}`}>
+                    محاسبه: {calculatedTotalQuantity}{quantityMismatch && " ⚠ مغایرت"}
+                  </p>
+                </div>
+                <div>
+                  <label className={labelClass}>متراژ کل</label>
+                  <input
+                    type="text"
+                    value={manualTotalMeterage}
+                    onChange={(e) => {
+                      setManualTotalMeterage(e.target.value)
+                      setMeterageLocked(true)
+                    }}
+                    className={`${inputClass} ${meterageMismatch ? "border-red-400 bg-red-50" : ""}`}
+                  />
+                  <p className={`text-xs mt-1 ${meterageMismatch ? "text-red-600 font-bold" : "text-blue-600"}`}>
+                    محاسبه: {calculatedTotalMeterage}{meterageMismatch && " ⚠ مغایرت"}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-teal-500/20 border border-teal-500/30 px-4 py-3 flex flex-col justify-center">
+                  <span className="text-sm text-blue-700">جمع اقلام</span>
+                  <span className="text-2xl font-bold text-teal-700">{items.length} قلم</span>
+                </div>
+              </div>
+            </div>
+
+            {/* افزودن قلم */}
+            <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
+              <h2 className="mb-3 text-xl font-bold text-blue-950">افزودن قلم جدید</h2>
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-2 items-end">
+                <div className="lg:col-span-2">
+                  <label className={labelClass}>نام کالا</label>
+                  <select ref={productRef} value={newProduct} onChange={(e) => setNewProduct(e.target.value)} onKeyDown={(e) => handleEnter(e, partNumberRef)} className={selectClass}>
+                    <option value="">انتخاب کالا...</option>
+                    {productList.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelClass}>شماره قطعه</label>
+                  <input ref={partNumberRef} type="text" value={newPartNumber} onChange={(e) => setNewPartNumber(e.target.value)} onKeyDown={(e) => handleEnter(e, installCodeRef)} className={inputClass} />
+                </div>
+                <div>
+                  <label className={labelClass}>کد نصب</label>
+                  <input ref={installCodeRef} type="text" value={newInstallCode} onChange={(e) => setNewInstallCode(e.target.value)} onKeyDown={(e) => handleEnter(e, unitRef)} className={inputClass} />
+                </div>
+                <div>
+                  <label className={labelClass}>واحد</label>
+                  <select ref={unitRef} value={newUnit} onChange={(e) => setNewUnit(e.target.value)} onKeyDown={(e) => handleEnter(e, lengthRef)} className={selectClass}>
+                    <option value="مترمربع">مترمربع</option>
+                    <option value="مترطول">مترطول</option>
+                    <option value="عددی">عددی</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelClass}>طول (cm)</label>
+                  <input ref={lengthRef} type="number" value={newLength} onChange={(e) => setNewLength(e.target.value)} onKeyDown={(e) => handleEnter(e, widthRef)} className={inputClass} />
+                </div>
+                <div>
+                  <label className={labelClass}>عرض (cm)</label>
+                  <input ref={widthRef} type="number" value={newWidth} onChange={(e) => setNewWidth(e.target.value)} onKeyDown={(e) => handleEnter(e, quantityRef)} className={inputClass} />
+                </div>
+                <div>
+                  <label className={labelClass}>تعداد</label>
+                  <input ref={quantityRef} type="number" value={newQuantity} onChange={(e) => setNewQuantity(e.target.value)} onKeyDown={(e) => handleEnter(e, unitPriceRef)} className={inputClass} />
+                </div>
+                <div>
+                  <label className={labelClass}>قیمت واحد</label>
+                  <input
+                    ref={unitPriceRef}
+                    type="text"
+                    value={newUnitPrice}
+                    onChange={(e) => setNewUnitPrice(formatWithCommas(e.target.value))}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addItem() } }}
+                    className={inputClass}
+                    placeholder="3,000,000"
+                  />
+                </div>
+              </div>
+
+              <p className="mt-3 text-xs font-semibold text-blue-700">
+                توضیحات هر قلم را می‌توانید بعد از افزودن، از ستون «توضیحات» در جدول اقلام تنظیم کنید.
+              </p>
+
+              <div className="mt-3 flex justify-end">
+                <button onClick={addItem} className="rounded-xl bg-teal-500 hover:bg-teal-600 px-8 py-2.5 text-base font-bold text-white shadow transition">
+                  + افزودن
+                </button>
+              </div>
+            </div>
+
+           {/* جدول اقلام */}
+{items.length > 0 && (
+  <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/20 overflow-x-auto">
+    <table className="w-full text-sm text-blue-900 border-collapse table-fixed">
+      <thead>
+        <tr className="border-b border-teal-500/30 bg-teal-600 text-white text-right">
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-12">ردیف</th>
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-32">نام کالا</th>
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-20">شماره قطعه</th>
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-20">کد نصب</th>
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-14">طول</th>
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-14">عرض</th>
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-14">تعداد</th>
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-20">متراژ</th>
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-16">محیط</th>
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-24">قیمت واحد</th>
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-24">قیمت کل</th>
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-48">خدمات</th>
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-24">توضیحات</th>
+          <th className="p-2.5 font-bold border border-teal-500 whitespace-nowrap w-24">عملیات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((item, index) => (
+          <tr
+            key={item.id}
+            className="border-b border-teal-500/10 hover:bg-yellow-50 bg-white/40"
+            onContextMenu={(e) => {
+              e.preventDefault()
+              setContextMenu({ x: e.clientX, y: e.clientY, itemId: item.id })
+            }}
+          >
+            <td className="p-2.5 text-center border border-teal-100">{index + 1}</td>
+            <td className="p-2.5 font-bold border border-teal-100 truncate" title={item.productName}>{item.productName}</td>
+            <td className="p-2.5 text-center border border-teal-100">{item.partNumber || "—"}</td>
+            <td className="p-2.5 text-center border border-teal-100 truncate" title={item.installCode}>{item.installCode || "—"}</td>
+            <td className="p-2.5 text-center border border-teal-100">{item.length}</td>
+            <td className="p-2.5 text-center border border-teal-100">{item.width}</td>
+            <td className="p-2.5 text-center font-bold border border-teal-100">{item.quantity}</td>
+            <td className="p-2.5 text-center border border-teal-100">{item.meterage}</td>
+            <td className="p-2.5 text-center border border-teal-100">{item.perimeter || "—"}</td>
+            <td className="p-2.5 text-left border border-teal-100">{formatPrice(item.unitPrice)}</td>
+            <td className="p-2.5 font-bold text-teal-700 text-left border border-teal-100">{item.totalPrice}</td>
+            <td className="p-2.5 border border-teal-100 text-center">
+              <button
+                onClick={() => openServices(item.id)}
+                className={`rounded-lg px-2 py-1.5 text-xs font-bold w-full leading-5 whitespace-normal break-words ${
+                  item.services.length > 0 ? "bg-amber-500/25 text-amber-900" : "bg-amber-500/15 hover:bg-amber-500/30 text-amber-800"
+                }`}
+                title={item.services.length > 0 ? item.services.map((s) => s.title).join("، ") : "افزودن خدمات"}
+              >
+                {item.services.length > 0 ? item.services.map((s) => s.title).join("، ") : "افزودن"}
+              </button>
+            </td>
+            <td className="p-2.5 border border-teal-100 text-center">
+              <button
+                onClick={() => openDescriptionModal(item.id)}
+                className={`rounded-lg px-2 py-1 text-xs font-bold w-full truncate ${
+                  item.description ? "bg-teal-500/25 text-teal-900" : "bg-teal-500/15 hover:bg-teal-500/30 text-teal-800"
+                }`}
+                title={item.description || "افزودن توضیحات"}
+              >
+                {item.description ? "مشاهده" : "افزودن"}
+              </button>
+            </td>
+            <td className="p-2.5 border border-teal-100">
+              <div className="flex gap-1 justify-center">
+                <button
+                  onClick={() => removeItem(item.id)}
+                  className="rounded-lg bg-red-500/15 hover:bg-red-500/30 px-2 py-1 text-xs font-bold text-red-700"
+                >
+                  حذف
+                </button>
+              </div>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+)}
+          </div>
+
+          {/* نقشه */}
+          <div className="lg:col-span-5">
+            <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 h-full flex flex-col">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-xl font-bold text-blue-950">تصویر نقشه</h2>
+                <label className="cursor-pointer rounded-xl bg-teal-500 hover:bg-teal-600 px-4 py-2 text-sm font-bold text-white">
+                  + افزودن تصویر
+                  <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={handleMapUpload} className="hidden" />
+                </label>
+              </div>
+              <div className="flex-1 overflow-y-auto max-h-[70vh] rounded-xl border border-teal-500/20 bg-white/30">
+                {mapImages.length === 0 ? (
+                  <div className="h-full min-h-[280px] flex flex-col items-center justify-center text-center p-6">
+                    <p className="text-lg font-bold text-blue-900">آپلود تصویر نقشه اتوکد</p>
+                    <p className="text-sm text-blue-700 mt-1">چند تصویر می‌توانید اضافه کنید</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3 p-3">
+                    {mapImages.map((img) => (
+                      <div key={img.id} className="relative rounded-lg overflow-hidden border border-teal-500/20 bg-white">
+                        <img src={img.url} alt={img.name} className="w-full h-auto max-h-[380px] object-contain cursor-pointer" onClick={() => setPreviewImage(img.url)} />
+                        <div className="flex items-center justify-between p-2 bg-white/95">
+                          <span className="text-sm font-bold text-blue-900 truncate">{img.name}</span>
+                          <button onClick={() => removeMapImage(img.id)} className="rounded-lg bg-red-500/20 px-3 py-1 text-xs font-bold text-red-600">حذف</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* راست‌کلیک */}
+        {contextMenu && (
+          <div className="fixed z-[300] min-w-[220px] rounded-xl bg-white shadow-2xl border border-teal-200 py-2" style={{ top: contextMenu.y, left: contextMenu.x }} onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => copyServicesToOthers(contextMenu.itemId)} className="w-full text-right px-4 py-3 text-base font-bold text-blue-900 hover:bg-yellow-100">
+              کپی سختی کار به قطعات دیگر
+            </button>
+            <button onClick={() => setContextMenu(null)} className="w-full text-right px-4 py-2 text-sm text-gray-500 hover:bg-gray-50">بستن</button>
+          </div>
+        )}
+
+        {/* نوار پایین */}
+        {items.length > 0 && (
+          <div className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-teal-500/30 shadow-lg">
+            <div className="max-w-[1920px] mx-auto px-5 py-3 flex items-center justify-between">
+              <div className="text-base font-bold text-blue-900">
+                مجموع: <span className="text-teal-700 text-xl">{grandTotal.toLocaleString("en-US")}</span> ریال
+                <span className="mx-3 text-gray-400">|</span>
+                متراژ: <span className="text-teal-700 text-lg">{calculatedTotalMeterage}</span>
+              </div>
+              <button onClick={() => setShowInvoice(true)} className="rounded-xl bg-teal-600 hover:bg-teal-700 px-6 py-2.5 text-base font-bold text-white">
+                نمایش پیش‌فاکتور
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* پیش‌نمایش تصویر */}
+        {previewImage && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/90" onClick={() => setPreviewImage(null)}>
+            <img src={previewImage} alt="پیش‌نمایش" className="max-h-[95vh] max-w-[95vw] object-contain" onClick={(e) => e.stopPropagation()} />
+            <button onClick={() => setPreviewImage(null)} className="absolute top-5 left-5 rounded-full bg-white/20 text-white text-2xl w-12 h-12 flex items-center justify-center">✕</button>
+          </div>
+        )}
+
+        {/* مودال نصب */}
+        {showInstallModal && (
+          <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl p-6">
+              <h3 className="text-xl font-bold text-blue-950 mb-4">اطلاعات نصب</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className={labelClass}>تاریخ نصب</label>
+                  <DatePicker value={installDate} onChange={setInstallDate} calendar={persian} locale={persian_fa} inputClass={inputClass} portal zIndex={1100} placeholder="انتخاب تاریخ" />
+                </div>
+                <div>
+                  <label className={labelClass}>آدرس محل نصب</label>
+                  <textarea value={installAddress} onChange={(e) => setInstallAddress(e.target.value)} rows={2} className={inputClass + " resize-none"} />
+                </div>
+                <div>
+                  <label className={labelClass}>شماره تماس مسئول در محل</label>
+                  <input type="text" value={installPhone} onChange={(e) => setInstallPhone(e.target.value)} className={inputClass} placeholder="۰۹۱۲..." />
+                </div>
+                <div>
+                  <label className={labelClass}>توضیحات نصب</label>
+                  <textarea value={installNotes} onChange={(e) => setInstallNotes(e.target.value)} rows={2} className={inputClass + " resize-none"} placeholder="طبقه، داربست، ساعت مناسب..." />
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 mt-6">
+                <button onClick={() => { setShowInstallModal(false); if (!installDate) setHasInstallation(false) }} className="rounded-xl border border-gray-300 px-5 py-2.5 text-base font-bold text-blue-900">انصراف</button>
+                <button onClick={() => setShowInstallModal(false)} className="rounded-xl bg-teal-500 hover:bg-teal-600 px-5 py-2.5 text-base font-bold text-white">تأیید</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* پاپ‌آپ توضیحات قلم */}
+        {showDescriptionModal && (
+          <div className="fixed inset-0 z-[155] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl p-6">
+              <h3 className="text-xl font-bold text-blue-950 mb-4">توضیحات قلم</h3>
+
+              {currentDescItem && (
+                <div className="mb-4 rounded-xl bg-teal-50 border border-teal-200 px-4 py-3 text-sm">
+                  <span className="font-bold text-blue-900">قلم: </span>
+                  {currentDescItem.productName}
+                  <span className="mx-2 text-teal-600">|</span>
+                  طول: <strong>{currentDescItem.length}</strong> × عرض: <strong>{currentDescItem.width}</strong>
+                </div>
+              )}
+
+              <div className="relative" onClick={(e) => e.stopPropagation()}>
+                <label className={labelClass}>توضیحات</label>
+                <input
+                  type="text"
+                  value={modalDescriptionSearch}
+                  onChange={(e) => {
+                    setModalDescriptionSearch(e.target.value)
+                    setModalDescription(e.target.value)
+                    setShowModalDescDropdown(true)
+                  }}
+                  onFocus={() => setShowModalDescDropdown(true)}
+                  placeholder="جستجو یا وارد کردن توضیحات..."
+                  className={inputClass}
+                  autoFocus
+                />
+                {showModalDescDropdown && filteredModalDescriptions.length > 0 && (
+                  <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-teal-200 bg-white shadow-2xl">
+                    {filteredModalDescriptions.map((d) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => {
+                          setModalDescription(d)
+                          setModalDescriptionSearch(d)
+                          setShowModalDescDropdown(false)
+                        }}
+                        className="w-full text-right px-4 py-2.5 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50"
+                      >
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-3 mt-6">
+                <button onClick={() => setShowDescriptionModal(false)} className="rounded-xl border border-gray-300 px-5 py-2.5 text-base font-bold text-blue-900">انصراف</button>
+                <button onClick={saveDescription} className="rounded-xl bg-teal-500 hover:bg-teal-600 px-5 py-2.5 text-base font-bold text-white">تأیید</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* مودال خدمات کامل */}
+{showServices && (
+  <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+    <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+      <h3 className="mb-4 text-2xl font-bold text-blue-950">خدمات (سختی کار)</h3>
+
+      {currentItem && (
+        <div className="mb-4 rounded-xl bg-teal-50 border border-teal-200 px-4 py-3 text-base">
+          <span className="font-bold text-blue-900">قلم: </span>
+          {currentItem.productName}
+          <span className="mx-2 text-teal-600">|</span>
+          طول: <strong>{currentItem.length}</strong> × عرض: <strong>{currentItem.width}</strong>
+          <span className="mx-2 text-teal-600">|</span>
+          متراژ: {currentItem.meterage}
+        </div>
+      )}
+
+      {/* جستجوی خدمت */}
+      <div className="mb-4">
+        <input
+          type="text"
+          value={serviceSearch}
+          onChange={(e) => setServiceSearch(e.target.value)}
+          placeholder="جستجوی خدمت..."
+          className="w-full rounded-xl border border-teal-500/40 px-4 py-3.5 text-lg font-semibold text-blue-950 focus:border-teal-500 focus:outline-none hover:bg-yellow-100 transition-colors"
+        />
+      </div>
+
+      {serviceSearch.trim() !== "" && (
+        <div className="mb-4 max-h-52 overflow-y-auto rounded-xl border border-teal-200 bg-teal-50 p-3">
+          <div className="flex flex-col gap-1.5">
+            {allFilteredServices.length > 0 ? (
+              allFilteredServices.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => {
+                    setSvcTitle(s)
+                    setServiceSearch("")
+                  }}
+                  className="w-full text-right rounded-lg bg-white border border-teal-300 px-3 py-2.5 text-base font-bold text-blue-900 hover:bg-yellow-100 transition"
+                >
+                  {s}
+                </button>
+              ))
+            ) : (
+              <span className="text-blue-600 text-base">موردی پیدا نشد</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="mb-5 rounded-xl bg-teal-50 p-5 border border-teal-200">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className={labelClass}>عنوان خدمت</label>
+            <select
+              value={svcTitle}
+              onChange={(e) => setSvcTitle(e.target.value)}
+              className={selectClass}
+            >
+              <option value="">انتخاب خدمت...</option>
+              {Object.entries(serviceCategories).map(([cat, list]) => (
+                <optgroup key={cat} label={cat}>
+                  {list.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>واحد</label>
+            <select
+              value={svcUnit}
+              onChange={(e) => setSvcUnit(e.target.value)}
+              className={selectClass}
+            >
+              {serviceUnits.map((u) => (
+                <option key={u} value={u}>{u}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className={labelClass}>تعداد</label>
+            <input
+              type="number"
+              value={svcCount}
+              onChange={(e) => setSvcCount(e.target.value)}
+              className={inputClass}
+            />
+          </div>
+          <div>
+            <label className={labelClass}>تعداد واحد</label>
+            {svcUnit === "مترمربع" || svcUnit === "محیط" || svcUnit === "چند طول چند عرض" ? (
+  <input
+    type="text"
+    value={calculatedUnitQuantity}
+    readOnly
+    className="w-full rounded-xl border border-teal-200 bg-teal-100 px-3 py-3 text-base font-bold text-blue-800"
+  />
+) : (
+  <input
+    type="number"
+    value={svcUnitQuantity}
+    onChange={(e) => setSvcUnitQuantity(e.target.value)}
+    className={inputClass}
+  />
+)}
+{svcUnit === "ابعاد دایره" && (
+  <div className="mb-4 rounded-xl bg-white border border-teal-200 p-4">
+    <label className="mb-1 block text-sm font-bold text-blue-900">قطر دایره (سانتی‌متر)</label>
+    <input
+      type="number"
+      value={svcDiameter}
+      onChange={(e) => setSvcDiameter(e.target.value)}
+      className={inputClass}
+      placeholder="مثلاً ۱۲۰"
+    />
+    <p className="text-sm text-blue-700 mt-2">
+      محیط دایره = ۳.۱۴ × قطر = <strong>{calculatedUnitQuantity} متر</strong>
+    </p>
+  </div>
+)}
+          </div>
+        </div>
+
+        {/* حالت چند طول چند عرض */}
+        {svcUnit === "چند طول چند عرض" && currentItem && (
+          <div className="mb-4 rounded-xl bg-white border border-teal-200 p-4">
+            <p className="text-base font-bold text-blue-900 mb-3">
+              ابعاد قلم: طول <span className="text-teal-700">{currentItem.length}</span> × عرض{" "}
+              <span className="text-teal-700">{currentItem.width}</span>
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-sm font-bold text-blue-900">تعداد طول</label>
+                <input
+                  type="number"
+                  value={svcLengthCount}
+                  onChange={(e) => setSvcLengthCount(e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-bold text-blue-900">تعداد عرض</label>
+                <input
+                  type="number"
+                  value={svcWidthCount}
+                  onChange={(e) => setSvcWidthCount(e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+            </div>
+            <p className="text-sm text-blue-700 mt-2">
+              محاسبه: ({svcLengthCount} × {(parseFloat(currentItem.length) / 100).toFixed(2)}) + (
+              {svcWidthCount} × {(parseFloat(currentItem.width) / 100).toFixed(2)}) ={" "}
+              <strong>{calculatedUnitQuantity} متر</strong>
+            </p>
+          </div>
+        )}
+
+        <div className="mb-4">
+          <label className={labelClass}>قیمت واحد</label>
+          <input
+            type="text"
+            value={svcUnitPrice}
+            onChange={(e) => setSvcUnitPrice(formatWithCommas(e.target.value))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault()
+                addOrUpdateService()
+              }
+            }}
+            className={inputClass}
+            placeholder="500,000"
+          />
+        </div>
+
+        <div className="flex items-center justify-between bg-white rounded-lg p-3.5 border border-teal-200 mb-3">
+          <span className="text-base font-bold text-blue-900">قیمت کل این خدمت:</span>
+          <span className="text-xl font-bold text-teal-700">{serviceTotalPreview} ریال</span>
+        </div>
+
+        <p className="text-sm text-blue-600 mb-3">فرمول: تعداد × تعداد واحد × قیمت واحد</p>
+
+        <button
+          onClick={addOrUpdateService}
+          className={`w-full rounded-xl py-3.5 text-lg font-bold text-white transition ${
+            editingServiceId ? "bg-amber-500 hover:bg-amber-600" : "bg-teal-500 hover:bg-teal-600"
+          }`}
+        >
+          {editingServiceId ? "✓ اعمال تغییرات" : "+ افزودن خدمت"}
+        </button>
+
+        {editingServiceId && (
+          <button
+            onClick={() => {
+              setEditingServiceId(null)
+              setSvcTitle("")
+              setSvcCount("1")
+              setSvcUnitQuantity("")
+              setSvcUnitPrice("")
+              setSvcLengthCount("1")
+              setSvcWidthCount("1")
+            }}
+            className="w-full mt-2 rounded-xl border border-gray-300 py-2.5 text-base font-bold text-blue-900 hover:bg-gray-100 transition"
+          >
+            انصراف از ویرایش
+          </button>
+        )}
+      </div>
+
+      {/* لیست خدمات اضافه شده */}
+      {tempServices.length > 0 ? (
+        <div className="mb-5">
+          <h4 className="text-lg font-bold text-blue-900 mb-3">
+            خدمات اضافه شده: (برای ویرایش روی ردیف کلیک کنید)
+          </h4>
+          <table className="w-full text-base">
+            <thead>
+              <tr className="bg-teal-100 text-right">
+                <th className="p-3 font-bold">عنوان</th>
+                <th className="p-3 font-bold">واحد</th>
+                <th className="p-3 font-bold">تعداد</th>
+                <th className="p-3 font-bold">تعداد واحد</th>
+                <th className="p-3 font-bold">قیمت واحد</th>
+                <th className="p-3 font-bold">قیمت کل</th>
+                <th className="p-3 font-bold">حذف</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tempServices.map((s) => (
+                <tr
+                  key={s.id}
+                  onClick={() => {
+                    setEditingServiceId(s.id)
+                    setSvcTitle(s.title)
+                    setSvcUnit(s.unit)
+                    setSvcCount(s.count || "1")
+                    setSvcUnitQuantity(s.unitQuantity || "")
+                    setSvcUnitPrice(s.unitPrice)
+                    setSvcLengthCount(s.lengthCount || "1")
+                    setSvcWidthCount(s.widthCount || "1")
+                  }}
+                  className={`border-b border-teal-100 cursor-pointer transition-colors ${
+                    editingServiceId === s.id ? "bg-amber-100" : "hover:bg-yellow-50"
+                  }`}
+                >
+                  <td className="p-3 font-semibold">{s.title}</td>
+                  <td className="p-3">{s.unit}</td>
+                  <td className="p-3">{s.count}</td>
+                  <td className="p-3">{s.unitQuantity}</td>
+                  <td className="p-3">{formatPrice(s.unitPrice)}</td>
+                  <td className="p-3 font-bold text-teal-700">{s.totalPrice}</td>
+                  <td className="p-3">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        removeService(s.id)
+                      }}
+                      className="text-red-600 font-bold hover:underline"
+                    >
+                      حذف
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="text-center text-blue-500 py-6 text-lg font-semibold">هنوز خدمتی اضافه نشده</p>
+      )}
+
+      <div className="flex justify-end gap-3">
+        <button
+          onClick={() => setShowServices(false)}
+          className="rounded-xl border border-gray-300 px-7 py-3.5 text-lg font-bold text-blue-900 hover:bg-gray-100 transition"
+        >
+          انصراف
+        </button>
+        <button
+          onClick={saveServices}
+          className="rounded-xl bg-teal-500 px-7 py-3.5 text-lg font-bold text-white hover:bg-teal-600 transition"
+        >
+          تأیید و اعمال
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+    {/* مودال پیش‌فاکتور */}
+{showInvoice && (
+  <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/60 p-4 print:static print:bg-white print:p-0 print:block">
+    <div className="w-full max-w-5xl max-h-[94vh] overflow-y-auto rounded-2xl bg-white shadow-2xl print:max-h-none print:overflow-visible print:shadow-none print:rounded-none print:max-w-none">
+      
+      {/* هدر کنترل‌ها (فقط روی صفحه) */}
+      <div className="sticky top-0 z-10 flex items-center justify-between bg-teal-700 text-white px-5 py-3 rounded-t-2xl print:hidden">
+        <div className="flex gap-3 items-center">
+          <h3 className="text-lg font-bold">پیش فاکتور</h3>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setInvoiceMode("detailed")}
+              className={`rounded-lg px-3 py-1 text-sm font-bold ${invoiceMode === "detailed" ? "bg-white text-teal-800" : "bg-white/20"}`}
+            >
+              جزئی
+            </button>
+            <button
+              onClick={() => setInvoiceMode("summary")}
+              className={`rounded-lg px-3 py-1 text-sm font-bold ${invoiceMode === "summary" ? "bg-white text-teal-800" : "bg-white/20"}`}
+            >
+              کلی
+            </button>
+          </div>
+        </div>
+        <div className="flex gap-2 items-center">
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={isOfficialInvoice}
+              onChange={(e) => setIsOfficialInvoice(e.target.checked)}
+              className="accent-white"
+            />
+            فاکتور رسمی (+۱۰٪)
+          </label>
+          <button onClick={() => window.print()} className="rounded-lg bg-white/20 px-3 py-1.5 text-sm font-bold">
+            چاپ
+          </button>
+          <button onClick={() => setShowInvoice(false)} className="rounded-lg bg-white/20 px-3 py-1.5 text-sm font-bold">
+            بستن
+          </button>
+        </div>
+      </div>
+
+      {/* استایل مخصوص چاپ: فقط محتوای پیش‌فاکتور چاپ شود */}
+      <style jsx global>{`
+        @media print {
+          body * {
+            visibility: hidden;
+          }
+          #invoice-print-area,
+          #invoice-print-area * {
+            visibility: visible;
+          }
+          #invoice-print-area {
+            position: fixed;
+            inset: 0;
+            width: 100%;
+            margin: 0;
+            padding: 16px;
+          }
+        }
+      `}</style>
+
+      {/* محتوای قابل چاپ */}
+      <div
+        id="invoice-print-area"
+        ref={invoiceRef}
+        className="p-6 bg-white relative print:p-4"
+        dir="rtl"
+        style={{ fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif" }}
+      >
+        {/* سربرگ */}
+        <div className="flex justify-between items-start border-b-2 border-teal-700 pb-4 mb-5">
+          <div className="flex items-center gap-3">
+            <img
+              src="/logo.png"
+              alt="لوگو شیشه و آینه اخوان"
+              className="w-14 h-14 rounded-lg object-contain bg-white border border-teal-100"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+            />
+            <div>
+              <h1 className="text-2xl font-bold text-teal-800 tracking-wide">AKHAVAN</h1>
+              <p className="text-sm text-gray-600 mt-0.5">شیشه و آینه اخوان</p>
+            </div>
+          </div>
+          <div className="text-left text-xs text-gray-500 leading-5">
+            <p className="font-bold text-sm text-teal-800">پیش‌فاکتور</p>
+            <p>{orderDate?.format ? orderDate.format("YYYY/MM/DD") : "—"}</p>
+          </div>
+        </div>
+
+        <div className="text-center mb-5">
+          <h2 className="text-xl font-bold text-blue-950 border-2 border-teal-600 inline-block px-8 py-1.5 rounded-lg">
+            پیش فاکتور {isOfficialInvoice ? "رسمی" : "غیررسمی"}
+          </h2>
+        </div>
+
+        {/* اطلاعات مشتری و سفارش */}
+        <div className="flex justify-between text-sm mb-6 leading-7 bg-teal-50/50 rounded-xl p-4 border border-teal-100">
+          <div>
+            <p><strong>نام مشتری:</strong> {customerName || "—"}</p>
+            <p><strong>گروه مشتری:</strong> {customerGroup}</p>
+            <p><strong>خط تولید:</strong> {productionLine}</p>
+          </div>
+          <div className="text-left">
+            <p><strong>شماره سفارش:</strong> {orderNumber}</p>
+            <p><strong>شماره سفارش مشتری:</strong> {customerOrderNumber}</p>
+            <p><strong>تاریخ سفارش:</strong> {orderDate?.format ? orderDate.format("YYYY/MM/DD") : "—"}</p>
+            <p><strong>تاریخ تحویل:</strong> {deliveryDate?.format ? deliveryDate.format("YYYY/MM/DD") : "—"}</p>
+          </div>
+        </div>
+
+        {/* جدول جزئی */}
+        {invoiceMode === "detailed" ? (
+          <table className="w-full border-collapse text-sm mb-5">
+            <thead>
+              <tr className="bg-teal-700 text-white">
+                <th className="border border-teal-600 p-2.5 text-right font-bold">ردیف</th>
+                <th className="border border-teal-600 p-2.5 text-right font-bold">نام کالا</th>
+                <th className="border border-teal-600 p-2.5 text-center font-bold">طول</th>
+                <th className="border border-teal-600 p-2.5 text-center font-bold">عرض</th>
+                <th className="border border-teal-600 p-2.5 text-center font-bold">تعداد</th>
+                <th className="border border-teal-600 p-2.5 text-center font-bold">متراژ</th>
+                <th className="border border-teal-600 p-2.5 text-center font-bold">قیمت فی</th>
+                <th className="border border-teal-600 p-2.5 text-center font-bold">قیمت کل</th>
+                <th className="border border-teal-600 p-2.5 text-right font-bold">توضیحات</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item, i) => (
+                <Fragment key={item.id}>
+                  <tr className="hover:bg-teal-50/40">
+                    <td className="border border-gray-300 p-2 text-center font-bold">{i + 1}</td>
+                    <td className="border border-gray-300 p-2 font-semibold">{item.productName}</td>
+                    <td className="border border-gray-300 p-2 text-center">{item.length}</td>
+                    <td className="border border-gray-300 p-2 text-center">{item.width}</td>
+                    <td className="border border-gray-300 p-2 text-center">{item.quantity}</td>
+                    <td className="border border-gray-300 p-2 text-center">{item.meterage}</td>
+                    <td className="border border-gray-300 p-2 text-center">{formatPrice(item.unitPrice)}</td>
+                    <td className="border border-gray-300 p-2 text-left font-bold text-teal-800">{item.totalPrice}</td>
+                    <td className="border border-gray-300 p-2 text-xs text-gray-700">{item.description || "—"}</td>
+                  </tr>
+
+                  {/* خدمات به صورت ردیف جداگانه و تمیز */}
+                  {item.services.length > 0 && (
+                    <tr>
+                      <td colSpan={9} className="border border-gray-300 bg-amber-50/70 p-0">
+                        <div className="px-3 py-2">
+                          <p className="text-xs font-bold text-amber-800 mb-1.5">خدمات / سختی کار:</p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs border-collapse">
+                              <thead>
+                                <tr className="text-gray-600 bg-amber-100/60">
+                                  <th className="text-right font-semibold py-1.5 pr-2">خدمت</th>
+                                  <th className="text-center font-semibold py-1.5">واحد</th>
+                                  <th className="text-center font-semibold py-1.5">تعداد</th>
+                                  <th className="text-center font-semibold py-1.5">تعداد واحد</th>
+                                  <th className="text-center font-semibold py-1.5">قیمت واحد</th>
+                                  <th className="text-left font-semibold py-1.5 pl-2">قیمت کل</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {item.services.map((s) => (
+                                  <tr key={s.id} className="border-t border-amber-200/60">
+                                    <td className="pr-2 py-1.5 font-medium">{s.title}</td>
+                                    <td className="text-center py-1.5">{s.unit}</td>
+                                    <td className="text-center py-1.5">{s.count}</td>
+                                    <td className="text-center py-1.5">{s.unitQuantity}</td>
+                                    <td className="text-center py-1.5">{formatPrice(s.unitPrice)}</td>
+                                    <td className="text-left py-1.5 pl-2 font-bold text-teal-700">{s.totalPrice} ریال</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          /* حالت کلی */
+          <table className="w-full border-collapse text-sm mb-5">
+            <thead>
+              <tr className="bg-teal-700 text-white">
+                <th className="border border-teal-600 p-2.5 text-right font-bold">ردیف</th>
+                <th className="border border-teal-600 p-2.5 text-right font-bold">نام کالا</th>
+                <th className="border border-teal-600 p-2.5 text-center font-bold">تعداد</th>
+                <th className="border border-teal-600 p-2.5 text-center font-bold">متراژ</th>
+                <th className="border border-teal-600 p-2.5 text-right font-bold">خدمات</th>
+                <th className="border border-teal-600 p-2.5 text-left font-bold">قیمت کل</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item, i) => (
+                <tr key={item.id} className="hover:bg-teal-50/40">
+                  <td className="border border-gray-300 p-2 text-center font-bold">{i + 1}</td>
+                  <td className="border border-gray-300 p-2 font-semibold">{item.productName}</td>
+                  <td className="border border-gray-300 p-2 text-center">{item.quantity}</td>
+                  <td className="border border-gray-300 p-2 text-center">{item.meterage}</td>
+                  <td className="border border-gray-300 p-2 text-xs text-gray-700">
+                    {item.services.length > 0
+                      ? item.services.map((s) => `${s.title} (${s.totalPrice})`).join("، ")
+                      : "—"}
+                  </td>
+                  <td className="border border-gray-300 p-2 text-left font-bold text-teal-800">{item.totalPrice}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {/* جمع‌ها */}
+        <div className="flex justify-between items-end mt-6 pt-4 border-t-2 border-teal-200">
+          <div className="text-sm text-gray-600 space-y-1">
+            <p>تعداد کل اقلام: <strong>{items.length}</strong></p>
+            <p>متراژ کل: <strong>{calculatedTotalMeterage}</strong></p>
+            {isOfficialInvoice && (
+              <p className="text-amber-700 font-medium">
+                ارزش افزوده (۱۰٪): {vatAmount.toLocaleString("en-US")} ریال
+              </p>
+            )}
+          </div>
+          <div className="text-left bg-teal-50 border border-teal-200 rounded-xl px-6 py-3">
+            <p className="text-sm text-gray-600 mb-1">مبلغ قابل پرداخت</p>
+            <p className="text-2xl font-bold text-teal-800">
+              {finalTotal.toLocaleString("en-US")} <span className="text-base">ریال</span>
+            </p>
+          </div>
+        </div>
+
+        {/* اطلاعات حساب */}
+        <div className="mt-8 pt-4 border-t border-gray-200 text-sm text-gray-700">
+          <p className="font-bold mb-2 text-teal-800">اطلاعات واریز:</p>
+          {isOfficialInvoice ? (
+            <div className="bg-teal-50/50 rounded-lg p-3 border border-teal-100 leading-6">
+              <p>شماره کارت: ۰۲۰۱ ۰۰۰۱ ۹۳۶۰ ۰۷</p>
+              <p>به نام: صنایع اخوان شیشه خواجوی</p>
+              <p>شماره شبا: IR02540104202100001936007</p>
+              <p className="text-xs text-gray-500 mt-1">بانک پارسیان</p>
+            </div>
+          ) : (
+            <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 leading-6">
+              <p>شماره کارت: 6221061231052947</p>
+              <p>به نام: مجتبی خاجی</p>
+              <p>شماره شبا / حساب: ۱۹۰۵۴۰۱۲۵۷۲۰۱۰۰۸۸۲۳۳۷۶۰۱</p>
+              <p className="text-xs text-gray-500 mt-1">بانک پارسیان</p>
+            </div>
+          )}
+        </div>
+
+        {/* فوتر */}
+        <div className="mt-10 pt-4 border-t border-gray-300 text-center text-xs text-gray-600 leading-6">
+          <p className="font-bold text-teal-800 text-sm">شیشه و آینه اخوان</p>
+          <p>۰۹۱۲-۹۵۸-۲۶۰۰</p>
+          <p>WWW.AKHAVANGLASS.COM</p>
+          <p>تهران، اشرفی اصفهانی، خیابان قموشی، پلاک ۳</p>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
+      </div>
+    </div>
+  )
+}

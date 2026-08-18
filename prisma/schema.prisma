@@ -1,0 +1,119 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Customer {
+  id            String   @id @default(cuid())
+  customerCode  String?  @unique
+  name          String
+  customerGroup String?
+  agency        String?
+  phone         String?
+  address       String?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  orders        Order[]
+}
+
+model Order {
+  id                     String   @id @default(cuid())
+  orderNumber            String   @unique
+  customerId             String
+  customer               Customer @relation(fields: [customerId], references: [id])
+
+  customerOrderNumber    String?
+  orderDate              DateTime @default(now())
+  deliveryDate           DateTime?
+  priority               String   @default("عادی")
+  mapGroup               String?
+  mapNumber              String?
+  customerDocumentNumber String?
+
+  totalMeterage          Float    @default(0)
+  totalQuantity          Int      @default(0)
+
+  hasInstallation        Boolean  @default(false)
+  installationDate       DateTime?
+
+  isStop                 Boolean  @default(false)
+  status                 String   @default("ثبت‌شده")
+
+  mapImageUrl            String?
+  notes                  String?
+
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  items                  OrderItem[]
+}
+
+model OrderItem {
+  id               String   @id @default(cuid())
+  orderId          String
+  order            Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productName      String
+  pieceNumber      String?
+  installationCode String?
+
+  length           Float
+  width            Float
+  quantity         Int      @default(1)
+
+  meterage         Float    @default(0)
+  perimeter        Float    @default(0)
+
+  unitPrice        Float    @default(0)
+  totalPrice       Float    @default(0)
+
+  status           String?
+  notes            String?
+  sortOrder        Int      @default(0)
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  services         OrderItemService[]
+}
+
+model OrderItemService {
+  id              String    @id @default(cuid())
+  orderItemId     String
+  orderItem       OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  serviceId       String
+  service         Service   @relation(fields: [serviceId], references: [id])
+
+  calculationType String
+  value           Float     @default(0)
+  unitPrice       Float     @default(0)
+  totalPrice      Float     @default(0)
+
+  notes           String?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Service {
+  id               String   @id @default(cuid())
+  name             String
+  category         String
+  defaultCalcType  String?
+  defaultUnitPrice Float    @default(0)
+  isActive         Boolean  @default(true)
+  isFrequent       Boolean  @default(false)
+  sortOrder        Int      @default(0)
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  orderItemServices OrderItemService[]
+}
