@@ -1,4 +1,6 @@
 "use client"
+import { useSearchParams } from "next/navigation"
+import { useEffect } from "react"
 
 import { useState, useMemo, useRef } from "react"
 import Link from "next/link"
@@ -187,7 +189,13 @@ export default function CustomersPage() {
   const [excelImporting, setExcelImporting] = useState(false)
   const photoInputRef = useRef<HTMLInputElement>(null)
   const [photoPreview, setPhotoPreview] = useState("")
+const searchParams = useSearchParams()
 
+useEffect(() => {
+  if (searchParams.get("new") === "1") {
+    openAddModal()
+  }
+}, [searchParams])
   // خطاهای اعتبارسنجی
   const [nationalCodeError, setNationalCodeError] = useState("")
   const [postalCodeError, setPostalCodeError] = useState("")
