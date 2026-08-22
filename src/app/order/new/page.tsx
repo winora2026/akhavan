@@ -925,20 +925,23 @@ lengthRef.current?.focus()
     <div
       id="invoice-print-area"
       ref={invoiceRef}
-      className="p-6 relative overflow-hidden print:overflow-visible print:p-4"
+      className="relative overflow-hidden print:overflow-visible"
       dir="rtl"
       style={{
         fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif",
+        // تصویر سربرگ (بالا) به‌عنوان بک‌گراند خود کادر قرار می‌گیرد.
         backgroundImage: "url('https://i.postimg.cc/W4BMwGSr/IMG-7794-png.jpg')",
-        backgroundSize: "cover",
-        backgroundPosition: "center top",
+        backgroundSize: "100% auto",
+        backgroundPosition: "top center",
         backgroundRepeat: "no-repeat",
-        minHeight: "1100px",
+        // حداقل ارتفاع معادل یک برگه‌ی چاپی؛ اگر محتوا بلندتر شود کادر بزرگ‌تر می‌شود
+        // و نوار پایین (که absolute و چسبیده به کف همین کادر است) همراهش پایین می‌رود.
+        minHeight: "1120px",
         WebkitPrintColorAdjust: "exact",
         printColorAdjust: "exact",
       } as React.CSSProperties}
     >
-      <div className="relative z-10">
+      <div className="relative z-10 p-6 print:p-4 pb-[170px] print:pb-[170px]">
 
         {/* عنوان پیش‌فاکتور، کمی پایین‌تر از لوگوی سربرگ */}
         <div className="text-center mt-24 mb-4">
@@ -950,12 +953,10 @@ lengthRef.current?.focus()
           <div>
             <p><strong>نام مشتری:</strong> {customerName || "—"}</p>
             <p className="mt-1"><strong>کارشناس فروش:</strong> {salesRep || "—"}</p>
-            <p className="mt-1"><strong>شماره سفارش مشتری:</strong> {customerOrderNumber || "—"}</p>
           </div>
           <div className="text-left">
             <p><strong>شماره سفارش:</strong> {orderNumber}</p>
             <p><strong>تاریخ سفارش:</strong> {orderDate?.format ? orderDate.format("YYYY/MM/DD") : "—"}</p>
-            <p><strong>تاریخ تحویل:</strong> {deliveryDate?.format ? deliveryDate.format("YYYY/MM/DD") : "—"}</p>
           </div>
         </div>
 
@@ -1118,6 +1119,27 @@ lengthRef.current?.focus()
         </div>
 
       </div>
+
+      {/*
+        نوار پایین (فوتر) سربرگ: درست مثل هدر که با background-position: top
+        به بالای کادر می‌چسبد، این نوار هم با position: absolute + bottom: 0
+        به کف همین کادر می‌چسبد — نه به‌دنبال محتوا. همان تصویر سربرگ با
+        موقعیت «پایین» فقط قسمت پایینیِ تصویر (آدرس، تلفن‌ها، پترن هندسی)
+        را نشان می‌دهد؛ چون ارتفاع این نوار از خود تصویر کوچک‌تر است،
+        بقیه‌ی تصویر به‌طور خودکار برش می‌خورد و دیده نمی‌شود.
+      */}
+      <div
+        className="absolute bottom-0 left-0 right-0 z-10"
+        style={{
+          height: "170px",
+          backgroundImage: "url('https://i.postimg.cc/W4BMwGSr/IMG-7794-png.jpg')",
+          backgroundSize: "100% auto",
+          backgroundPosition: "bottom center",
+          backgroundRepeat: "no-repeat",
+          WebkitPrintColorAdjust: "exact",
+          printColorAdjust: "exact",
+        } as React.CSSProperties}
+      />
     </div>
   )
 
@@ -2382,9 +2404,6 @@ lengthRef.current?.focus()
           * {
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
-          }
-          #invoice-print-area {
-            min-height: 0 !important;
           }
           table {
             page-break-inside: auto;
