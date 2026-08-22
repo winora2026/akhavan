@@ -116,14 +116,14 @@ export async function POST(req: NextRequest) {
     })
 
     let nextOrderNumber = 500
-    const numericNumbers = allOrders
-      .map((o) => parseInt(o.orderNumber))
-      .filter((n) => !isNaN(n) && n >= 500 && n < 100000)
 
-    if (numericNumbers.length > 0) {
-      nextOrderNumber = Math.max(...numericNumbers) + 1
-    }
+const numericNumbers = allOrders
+  .map((o: any) => parseInt(String(o.orderNumber)))
+  .filter((n: number) => !isNaN(n) && n >= 500 && n < 100000)
 
+if (numericNumbers.length > 0) {
+  nextOrderNumber = Math.max(...numericNumbers) + 1
+}
     // ۳. محاسبه شماره سفارش مشتری (اتوماتیک)
     const customerOrdersCount = await prisma.order.count({
       where: { customerId: customer.id },

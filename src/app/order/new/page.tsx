@@ -925,15 +925,10 @@ lengthRef.current?.focus()
     <div
       id="invoice-print-area"
       ref={invoiceRef}
-      className="relative overflow-hidden print:overflow-visible"
+      className="relative overflow-hidden print:overflow-visible bg-white"
       dir="rtl"
       style={{
         fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif",
-        // تصویر سربرگ (بالا) به‌عنوان بک‌گراند خود کادر قرار می‌گیرد.
-        backgroundImage: "url('https://i.postimg.cc/W4BMwGSr/IMG-7794-png.jpg')",
-        backgroundSize: "100% auto",
-        backgroundPosition: "top center",
-        backgroundRepeat: "no-repeat",
         // حداقل ارتفاع معادل یک برگه‌ی چاپی؛ اگر محتوا بلندتر شود کادر بزرگ‌تر می‌شود
         // و نوار پایین (که absolute و چسبیده به کف همین کادر است) همراهش پایین می‌رود.
         minHeight: "1120px",
@@ -941,6 +936,25 @@ lengthRef.current?.focus()
         printColorAdjust: "exact",
       } as React.CSSProperties}
     >
+      {/*
+        نوار بالا (هدر) سربرگ: به‌جای این‌که کل تصویر روی کل کادر کشیده شود
+        (که باعث می‌شد الگوی هندسیِ وسط تصویر پشت محتوا هم دیده شود و
+        نامرتب به نظر برسد)، فقط یک نوار با ارتفاع مشخص بالای کادر می‌چسبد
+        و فقط قسمت بالاییِ تصویر (لوگو + پترن هدر) را نشان می‌دهد.
+      */}
+      <div
+        className="absolute top-0 left-0 right-0 z-0"
+        style={{
+          height: "230px",
+          backgroundImage: "url('https://i.postimg.cc/W4BMwGSr/IMG-7794-png.jpg')",
+          backgroundSize: "100% auto",
+          backgroundPosition: "top center",
+          backgroundRepeat: "no-repeat",
+          WebkitPrintColorAdjust: "exact",
+          printColorAdjust: "exact",
+        } as React.CSSProperties}
+      />
+
       <div className="relative z-10 p-6 print:p-4 pb-[170px] print:pb-[170px]">
 
         {/* عنوان پیش‌فاکتور، کمی پایین‌تر از لوگوی سربرگ */}

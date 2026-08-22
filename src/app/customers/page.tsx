@@ -1,13 +1,9 @@
 "use client"
-import { useSearchParams } from "next/navigation"
-import { useEffect } from "react"
 
-import { useState, useMemo, useRef } from "react"
+import { Suspense, useEffect, useState, useMemo, useRef } from "react"
+import { useSearchParams } from "next/navigation"
 import Link from "next/link"
-// برای ورودی از اکسل باید پکیج xlsx نصب باشد: npm install xlsx
 import * as XLSX from "xlsx"
-// داده واقعی مشتریان که از فایل اکسل قدیمی شما تبدیل شد (۵٬۵۸۷ مشتری)
-// این فایل را کنار همین صفحه قرار دهید: customers-seed.json
 import customersSeedRaw from "./customers-seed.json"
 
 type CustomerType = "حقیقی" | "حقوقی"
@@ -40,14 +36,11 @@ type Customer = {
   updatedAt: string
 }
 
-// خصوصیات پیش‌فرض قابل انتخاب برای مشتری - می‌توان تگ دلخواه هم اضافه کرد
 const PREDEFINED_TAGS = ["مشتری ویژه (VIP)", "عمده‌فروش", "بدحساب", "معرف مشتری جدید", "مشتری قدیمی"]
 
-// ---------- اعتبارسنجی کد ملی ----------
 function isValidNationalCode(code: string): boolean {
   if (!/^\d{10}$/.test(code)) return false
-  if (/^(\d)\1{9}$/.test(code)) return false // همه ارقام یکسان
-
+  if (/^(\d)\1{9}$/.test(code)) return false
   const check = parseInt(code[9])
   let sum = 0
   for (let i = 0; i < 9; i++) {
@@ -57,7 +50,6 @@ function isValidNationalCode(code: string): boolean {
   return (remainder < 2 && check === remainder) || (remainder >= 2 && check === 11 - remainder)
 }
 
-// ---------- اعتبارسنجی شناسه/کد اقتصادی (۱۱ یا ۱۴ رقم برای اشخاص حقوقی) ----------
 function isValidEconomicCode(code: string): boolean {
   return /^\d{11}$|^\d{14}$/.test(code)
 }
@@ -66,25 +58,13 @@ function isValidPostalCode(code: string): boolean {
   return /^\d{10}$/.test(code)
 }
 
-// ---------- اعتبارسنجی شناسه ملی اشخاص حقوقی (۱۱ رقم) ----------
 function isValidCompanyNationalId(code: string): boolean {
   return /^\d{11}$/.test(code)
 }
 
-// ==================== تقویم شمسی (بدون نیاز به کتابخانه خارجی) ====================
 const JALALI_MONTHS = [
-  "فروردین",
-  "اردیبهشت",
-  "خرداد",
-  "تیر",
-  "مرداد",
-  "شهریور",
-  "مهر",
-  "آبان",
-  "آذر",
-  "دی",
-  "بهمن",
-  "اسفند",
+  "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+  "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند",
 ]
 
 const PERSIAN_DIGITS = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"]
@@ -94,7 +74,6 @@ function toPersianDigits(value: string | number): string {
 }
 
 function isJalaliLeapYear(year: number): boolean {
-  // الگوریتم چرخه ۳۳ ساله تقویم جلالی
   const remainders = [1, 5, 9, 13, 17, 22, 26, 30]
   return remainders.includes(((year % 33) + 33) % 33)
 }
@@ -116,7 +95,6 @@ function formatJalaliDate(year: number, month: number, day: number): string {
   return `${year}/${pad(month)}/${pad(day)}`
 }
 
-// نام نمایشی مشتری بر اساس نوع مشتری (حقیقی/حقوقی)
 function getDisplayName(c: {
   customerType: CustomerType
   firstName: string
@@ -172,7 +150,10 @@ const emptyColumnFilters: ColumnFilters = {
   tags: "",
 }
 
-export default function CustomersPage() {
+// ==================== کامپوننت اصلی محتوا ====================
+function CustomersContent() {
+  const searchParams = useSearchParams()
+
   const [data, setData] = useState<Customer[]>(sampleCustomers)
   const [search, setSearch] = useState("")
   const [groupFilter, setGroupFilter] = useState<"all" | CustomerGroup>("all")
@@ -189,14 +170,7 @@ export default function CustomersPage() {
   const [excelImporting, setExcelImporting] = useState(false)
   const photoInputRef = useRef<HTMLInputElement>(null)
   const [photoPreview, setPhotoPreview] = useState("")
-const searchParams = useSearchParams()
 
-useEffect(() => {
-  if (searchParams.get("new") === "1") {
-    openAddModal()
-  }
-}, [searchParams])
-  // خطاهای اعتبارسنجی
   const [nationalCodeError, setNationalCodeError] = useState("")
   const [postalCodeError, setPostalCodeError] = useState("")
   const [economicCodeError, setEconomicCodeError] = useState("")
@@ -208,6 +182,12 @@ useEffect(() => {
 
   const [showBirthdayModal, setShowBirthdayModal] = useState(false)
   const [birthdayTarget, setBirthdayTarget] = useState<Customer | null>(null)
+
+  useEffect(() => {
+    if (searchParams.get("new") === "1") {
+      openAddModal()
+    }
+  }, [searchParams])
 
   const filtered = useMemo(() => {
     return data.filter((item) => {
@@ -239,61 +219,38 @@ useEffect(() => {
 
   const formatPrice = (n: number) => n.toLocaleString("en-US")
 
-  // ---------- اعتبارسنجی هنگام تایپ ----------
   const handleNationalCodeChange = (value: string) => {
     const cleaned = value.replace(/\D/g, "").slice(0, 10)
     setForm({ ...form, nationalCode: cleaned })
-
-    if (cleaned.length === 0) {
-      setNationalCodeError("")
-    } else if (cleaned.length < 10) {
-      setNationalCodeError("کد ملی باید ۱۰ رقم باشد")
-    } else if (!isValidNationalCode(cleaned)) {
-      setNationalCodeError("کد ملی نامعتبر است")
-    } else {
-      setNationalCodeError("")
-    }
+    if (cleaned.length === 0) setNationalCodeError("")
+    else if (cleaned.length < 10) setNationalCodeError("کد ملی باید ۱۰ رقم باشد")
+    else if (!isValidNationalCode(cleaned)) setNationalCodeError("کد ملی نامعتبر است")
+    else setNationalCodeError("")
   }
 
   const handlePostalCodeChange = (value: string) => {
     const cleaned = value.replace(/\D/g, "").slice(0, 10)
     setForm({ ...form, postalCode: cleaned })
-
-    if (cleaned.length === 0) {
-      setPostalCodeError("")
-    } else if (cleaned.length < 10) {
-      setPostalCodeError("کد پستی باید ۱۰ رقم باشد")
-    } else if (!isValidPostalCode(cleaned)) {
-      setPostalCodeError("کد پستی نامعتبر است")
-    } else {
-      setPostalCodeError("")
-    }
+    if (cleaned.length === 0) setPostalCodeError("")
+    else if (cleaned.length < 10) setPostalCodeError("کد پستی باید ۱۰ رقم باشد")
+    else if (!isValidPostalCode(cleaned)) setPostalCodeError("کد پستی نامعتبر است")
+    else setPostalCodeError("")
   }
 
   const handleEconomicCodeChange = (value: string) => {
     const cleaned = value.replace(/\D/g, "").slice(0, 14)
     setForm({ ...form, economicCode: cleaned })
-
-    if (cleaned.length === 0) {
-      setEconomicCodeError("")
-    } else if (!isValidEconomicCode(cleaned)) {
-      setEconomicCodeError("کد اقتصادی باید ۱۱ یا ۱۴ رقم باشد")
-    } else {
-      setEconomicCodeError("")
-    }
+    if (cleaned.length === 0) setEconomicCodeError("")
+    else if (!isValidEconomicCode(cleaned)) setEconomicCodeError("کد اقتصادی باید ۱۱ یا ۱۴ رقم باشد")
+    else setEconomicCodeError("")
   }
 
   const handleCompanyNationalIdChange = (value: string) => {
     const cleaned = value.replace(/\D/g, "").slice(0, 11)
     setForm({ ...form, companyNationalId: cleaned })
-
-    if (cleaned.length === 0) {
-      setCompanyNationalIdError("")
-    } else if (!isValidCompanyNationalId(cleaned)) {
-      setCompanyNationalIdError("شناسه ملی باید ۱۱ رقم باشد")
-    } else {
-      setCompanyNationalIdError("")
-    }
+    if (cleaned.length === 0) setCompanyNationalIdError("")
+    else if (!isValidCompanyNationalId(cleaned)) setCompanyNationalIdError("شناسه ملی باید ۱۱ رقم باشد")
+    else setCompanyNationalIdError("")
   }
 
   const openBirthdayCalendar = () => {
@@ -326,14 +283,11 @@ useEffect(() => {
     }
   }
 
-  // ---------- ورود مشتریان از فایل اکسل ----------
   const handleExcelImport = async (file: File) => {
     setExcelImporting(true)
     try {
       const buffer = await file.arrayBuffer()
       const bytes = new Uint8Array(buffer)
-      // برخی نرم‌افزارهای حسابداری ایرانی خروجی «.xls» می‌دهند که در واقع یک فایل متنی
-      // تب‌جدا با انکدینگ UTF-16 است، نه فایل باینری اکسل واقعی. این حالت را جدا مدیریت می‌کنیم.
       const isLegacyUtf16Export = bytes[0] === 0xff && bytes[1] === 0xfe
 
       let rows: Record<string, any>[] = []
@@ -345,9 +299,8 @@ useEffect(() => {
           const cols = line.split("\t").map((c) => c.trim())
           const name = cols[0] || ""
           const code = cols[1] || ""
-          // ردیف‌های ابتدای فایل معمولاً زباله/سرستون ناقص هستند؛ فقط ردیف‌هایی که
-          // واقعاً یک نام حاوی حرف فارسی و یک کد مشتری دارند به‌عنوان داده پذیرفته می‌شوند
-          if (/[آ-ی]/.test(name) && code) {rows.push({ "نام کامل": name.replace(/\*$/, "").trim(), "کد مشتری": code, "کد ملی": cols[2] || "" })
+          if (/[آ-ی]/.test(name) && code) {
+            rows.push({ "نام کامل": name.replace(/\*$/, "").trim(), "کد مشتری": code, "کد ملی": cols[2] || "" })
           }
         }
       } else {
@@ -356,7 +309,6 @@ useEffect(() => {
         rows = XLSX.utils.sheet_to_json(sheet, { defval: "" })
       }
 
-      // تطبیق نام ستون‌های اکسل با فیلدهای فرم (چند حالت رایج پشتیبانی می‌شود)
       const pick = (row: Record<string, any>, keys: string[]) => {
         for (const k of keys) {
           const found = Object.keys(row).find((rk) => rk.trim() === k)
@@ -380,8 +332,6 @@ useEffect(() => {
           const code = pick(row, ["کد مشتری", "کد"])
           const fullName = pick(row, ["نام کامل", "نام و نام خانوادگی"])
 
-          // اگر فقط یک ستون «نام کامل» وجود دارد (مثل فایل‌های قدیمی)، آن را با حدس
-          // بین نام/نام‌خانوادگی یا نام شرکت تفکیک می‌کنیم
           if (fullName && !companyName && !firstName && !lastName) {
             const isCompany = COMPANY_HINTS.some((h) => fullName.includes(h))
             const tokens = fullName.split(/\s+/)
@@ -487,10 +437,7 @@ useEffect(() => {
     setShowFormModal(true)
   }
 
-  const addPhoneField = () => {
-    setForm((prev) => ({ ...prev, phones: [...prev.phones, ""] }))
-  }
-
+  const addPhoneField = () => setForm((prev) => ({ ...prev, phones: [...prev.phones, ""] }))
   const updatePhone = (index: number, value: string) => {
     setForm((prev) => {
       const phones = [...prev.phones]
@@ -498,7 +445,6 @@ useEffect(() => {
       return { ...prev, phones }
     })
   }
-
   const removePhone = (index: number) => {
     setForm((prev) => {
       const phones = prev.phones.filter((_, i) => i !== index)
@@ -506,11 +452,7 @@ useEffect(() => {
     })
   }
 
-  // ---------- آدرس سایت / شبکه‌های اجتماعی (چندتایی، مشابه شماره تماس) ----------
-  const addSocialField = () => {
-    setForm((prev) => ({ ...prev, socialLinks: [...prev.socialLinks, ""] }))
-  }
-
+  const addSocialField = () => setForm((prev) => ({ ...prev, socialLinks: [...prev.socialLinks, ""] }))
   const updateSocial = (index: number, value: string) => {
     setForm((prev) => {
       const socialLinks = [...prev.socialLinks]
@@ -518,7 +460,6 @@ useEffect(() => {
       return { ...prev, socialLinks }
     })
   }
-
   const removeSocial = (index: number) => {
     setForm((prev) => {
       const socialLinks = prev.socialLinks.filter((_, i) => i !== index)
@@ -526,24 +467,19 @@ useEffect(() => {
     })
   }
 
-  // ---------- خصوصیات مشتری (تگ) ----------
   const toggleTag = (tag: string) => {
     setForm((prev) => ({
       ...prev,
       tags: prev.tags.includes(tag) ? prev.tags.filter((t) => t !== tag) : [...prev.tags, tag],
     }))
   }
-
   const addCustomTag = () => {
     const value = tagInput.trim()
     if (!value) return
     setForm((prev) => (prev.tags.includes(value) ? prev : { ...prev, tags: [...prev.tags, value] }))
     setTagInput("")
   }
-
-  const removeTag = (tag: string) => {
-    setForm((prev) => ({ ...prev, tags: prev.tags.filter((t) => t !== tag) }))
-  }
+  const removeTag = (tag: string) => setForm((prev) => ({ ...prev, tags: prev.tags.filter((t) => t !== tag) }))
 
   const saveCustomer = () => {
     if (!form.code.trim()) {
@@ -626,7 +562,6 @@ useEffect(() => {
       alert("مبلغ معتبر وارد کنید")
       return
     }
-
     setData((prev) =>
       prev.map((c) =>
         c.id === creditTarget.id
@@ -742,164 +677,67 @@ useEffect(() => {
               </button>
             </div>
           </div>
-          {(colFilters.code ||
-            colFilters.name ||
-            colFilters.nationalCode ||
-            colFilters.phone ||
-            colFilters.address ||
-            colFilters.tags) && (
-            <div className="mt-2 flex items-center justify-between">
-              <span className="text-xs font-medium text-blue-700">فیلتر ستونی فعال است</span>
-              <button
-                onClick={() => setColFilters(emptyColumnFilters)}
-                className="text-xs font-bold text-teal-700 hover:text-teal-900"
-              >
-                پاک کردن فیلترهای ستونی
-              </button>
-            </div>
-          )}
         </div>
 
-        {/* جدول */}
+        {/* جدول مشتریان */}
         <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/20 overflow-x-auto">
           <table className="w-full text-sm text-blue-900">
             <thead>
               <tr className="border-b border-teal-500/30 bg-teal-500/15 text-right">
                 <th className="p-3 font-bold whitespace-nowrap">ردیف</th>
-                <th className="p-3 font-bold whitespace-nowrap">کد مشتری</th>
-                <th className="p-3 font-bold whitespace-nowrap">نام مشتری</th>
+                <th className="p-3 font-bold whitespace-nowrap">کد</th>
+                <th className="p-3 font-bold whitespace-nowrap">نام / شرکت</th>
                 <th className="p-3 font-bold whitespace-nowrap">گروه</th>
-                <th className="p-3 font-bold whitespace-nowrap">کد ملی / شناسه ملی</th>
-                <th className="p-3 font-bold whitespace-nowrap">تلفن‌ها</th>
+                <th className="p-3 font-bold whitespace-nowrap">کد ملی / شناسه</th>
+                <th className="p-3 font-bold whitespace-nowrap">تلفن</th>
                 <th className="p-3 font-bold whitespace-nowrap">آدرس</th>
-                <th className="p-3 font-bold whitespace-nowrap">خصوصیات</th>
+                <th className="p-3 font-bold whitespace-nowrap">تگ‌ها</th>
                 <th className="p-3 font-bold whitespace-nowrap">اعتبار</th>
                 <th className="p-3 font-bold whitespace-nowrap">عملیات</th>
               </tr>
-              {/* ردیف جستجوی ستونی */}
-              <tr className="border-b border-teal-500/20 bg-white/40 text-right">
-                <th className="p-1.5" />
-                <th className="p-1.5">
-                  <input
-                    value={colFilters.code}
-                    onChange={(e) => setColFilters((p) => ({ ...p, code: e.target.value }))}
-                    placeholder="جستجو..."
-                    className="w-full rounded-lg border border-teal-500/30 bg-white/70 px-2 py-1 text-xs font-medium focus:border-teal-500 focus:outline-none"
-                  />
-                </th>
-                <th className="p-1.5">
-                  <input
-                    value={colFilters.name}
-                    onChange={(e) => setColFilters((p) => ({ ...p, name: e.target.value }))}
-                    placeholder="جستجو..."
-                    className="w-full rounded-lg border border-teal-500/30 bg-white/70 px-2 py-1 text-xs font-medium focus:border-teal-500 focus:outline-none"
-                  />
-                </th>
-                <th className="p-1.5" />
-                <th className="p-1.5">
-                  <input
-                    value={colFilters.nationalCode}
-                    onChange={(e) => setColFilters((p) => ({ ...p, nationalCode: e.target.value }))}
-                    placeholder="جستجو..."
-                    className="w-full rounded-lg border border-teal-500/30 bg-white/70 px-2 py-1 text-xs font-medium focus:border-teal-500 focus:outline-none"
-                  />
-                </th>
-                <th className="p-1.5">
-                  <input
-                    value={colFilters.phone}
-                    onChange={(e) => setColFilters((p) => ({ ...p, phone: e.target.value }))}
-                    placeholder="جستجو..."
-                    className="w-full rounded-lg border border-teal-500/30 bg-white/70 px-2 py-1 text-xs font-medium focus:border-teal-500 focus:outline-none"
-                  />
-                </th>
-                <th className="p-1.5">
-                  <input
-                    value={colFilters.address}
-                    onChange={(e) => setColFilters((p) => ({ ...p, address: e.target.value }))}
-                    placeholder="جستجو..."
-                    className="w-full rounded-lg border border-teal-500/30 bg-white/70 px-2 py-1 text-xs font-medium focus:border-teal-500 focus:outline-none"
-                  />
-                </th>
-                <th className="p-1.5" />
-                <th className="p-1.5" />
-                <th className="p-1.5" />
-              </tr>
             </thead>
             <tbody>
-              {filtered.map((item) => (
-                <tr
-                  key={item.id}
-                  className="border-b border-teal-500/10 hover:bg-teal-400/20 transition-colors bg-white/30"
-                >
-                  <td className="p-3 text-center font-bold">{item.row}</td>
-                  <td className="p-3 font-mono font-bold text-teal-800">{item.code}</td>
-                  <td className="p-3 font-bold min-w-[180px]">
-                    {getDisplayName(item)}
-                  </td>
+              {filtered.map((customer, index) => (
+                <tr key={customer.id} className="border-b border-teal-100 hover:bg-yellow-50/50 bg-white/40">
+                  <td className="p-3 text-center font-bold">{index + 1}</td>
+                  <td className="p-3 font-mono text-xs">{customer.code}</td>
+                  <td className="p-3 font-bold">{getDisplayName(customer)}</td>
                   <td className="p-3">
-                    <span
-                      className={`rounded-lg px-2 py-0.5 text-xs font-bold ${
-                        item.group === "همکار"
-                          ? "bg-blue-100 text-blue-800"
-                          : "bg-green-100 text-green-800"
-                      }`}
-                    >
-                      {item.group}
+                    <span className={`px-2 py-1 rounded-lg text-xs font-bold ${customer.group === "همکار" ? "bg-teal-100 text-teal-800" : "bg-amber-100 text-amber-800"}`}>
+                      {customer.group}
                     </span>
                   </td>
-                  <td className="p-3 font-mono">
-                    {(item.customerType === "حقوقی" ? item.companyNationalId : item.nationalCode) || "—"}
+                  <td className="p-3 text-xs">
+                    {customer.customerType === "حقیقی" ? customer.nationalCode || "—" : customer.companyNationalId || "—"}
                   </td>
-                  <td className="p-3 whitespace-nowrap">
-                    {item.phones.join(" | ") || "—"}
-                  </td>
-                  <td className="p-3 max-w-[180px] truncate" title={item.address1}>
-                    {item.address1 || "—"}
-                  </td>
-                  <td className="p-3 max-w-[200px]">
-                    {item.tags.length ? (
-                      <div className="flex flex-wrap gap-1">
-                        {item.tags.map((tag) => (
-                          <span
-                            key={tag}
-                            className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-800 whitespace-nowrap"
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td className="p-3 font-bold text-teal-700 whitespace-nowrap">
-                    {formatPrice(item.credit)}
-                  </td>
+                  <td className="p-3 text-xs">{customer.phones[0] || "—"}</td>
+                  <td className="p-3 text-xs max-w-[180px] truncate" title={customer.address1}>{customer.address1 || "—"}</td>
                   <td className="p-3">
-                    <div className="flex flex-wrap gap-1 justify-center">
+                    <div className="flex flex-wrap gap-1">
+                      {customer.tags.slice(0, 2).map((tag) => (
+                        <span key={tag} className="bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0.5 rounded font-bold">{tag}</span>
+                      ))}
+                      {customer.tags.length > 2 && <span className="text-xs text-gray-500">+{customer.tags.length - 2}</span>}
+                    </div>
+                  </td>
+                  <td className="p-3 font-bold text-teal-700 text-xs">{formatPrice(customer.credit)}</td>
+                  <td className="p-3">
+                    <div className="flex gap-1">
                       <button
-                        onClick={() => openEditModal(item)}
-                        className="rounded-lg bg-blue-500/15 hover:bg-blue-500/30 px-2 py-1 text-xs font-bold text-blue-800 transition"
+                        onClick={() => openEditModal(customer)}
+                        className="rounded-lg bg-teal-500/20 hover:bg-teal-500/40 px-2 py-1 text-xs font-bold text-teal-800"
                       >
                         ویرایش
                       </button>
                       <button
-                        onClick={() => openCreditModal(item)}
-                        className="rounded-lg bg-teal-500/15 hover:bg-teal-500/30 px-2 py-1 text-xs font-bold text-teal-800 transition"
+                        onClick={() => openCreditModal(customer)}
+                        className="rounded-lg bg-amber-500/20 hover:bg-amber-500/40 px-2 py-1 text-xs font-bold text-amber-800"
                       >
                         اعتبار
                       </button>
-                      {item.birthDate && (
-                        <button
-                          onClick={() => openBirthdayModal(item)}
-                          className="rounded-lg bg-amber-500/15 hover:bg-amber-500/30 px-2 py-1 text-xs font-bold text-amber-800 transition"
-                        >
-                          تخفیف تولد
-                        </button>
-                      )}
                       <button
-                        onClick={() => deleteCustomer(item.id)}
-                        className="rounded-lg bg-red-500/15 hover:bg-red-500/30 px-2 py-1 text-xs font-bold text-red-700 transition"
+                        onClick={() => deleteCustomer(customer.id)}
+                        className="rounded-lg bg-red-500/15 hover:bg-red-500/30 px-2 py-1 text-xs font-bold text-red-700"
                       >
                         حذف
                       </button>
@@ -911,102 +749,92 @@ useEffect(() => {
           </table>
 
           {filtered.length === 0 && (
-            <p className="text-center text-blue-700 py-12 text-lg font-bold">مشتری‌ای یافت نشد</p>
+            <div className="text-center py-12 text-blue-700 font-bold">
+              هیچ مشتری‌ای پیدا نشد
+            </div>
           )}
         </div>
       </div>
 
-      {/* مودال افزودن / ویرایش */}
+      {/* مودال فرم مشتری */}
       {showFormModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-2xl">
-            <div className="sticky top-0 bg-teal-600 text-white px-5 py-3 rounded-t-2xl flex items-center justify-between">
-              <h3 className="text-xl font-bold">
-                {editingId ? "ویرایش مشتری" : "افزودن مشتری جدید"}
-              </h3>
-              <button
-                onClick={() => setShowFormModal(false)}
-                className="text-white/80 hover:text-white text-2xl leading-none"
-              >
-                ×
-              </button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl my-8">
+            <div className="sticky top-0 bg-teal-600 text-white px-5 py-4 rounded-t-2xl flex justify-between items-center">
+              <h3 className="text-xl font-bold">{editingId ? "ویرایش مشتری" : "مشتری جدید"}</h3>
+              <button onClick={() => setShowFormModal(false)} className="text-2xl leading-none">×</button>
             </div>
 
-            <div className="p-5 space-y-4">
+            <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
               {/* نوع مشتری */}
-              <div>
-                <label className="mb-1 block text-sm font-bold text-blue-900">نوع مشتری</label>
-                <div className="flex gap-2">
-                  {(["حقیقی", "حقوقی"] as CustomerType[]).map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setForm({ ...form, customerType: t })}
-                      className={`flex-1 rounded-xl border px-3 py-2.5 text-base font-bold transition ${
-                        form.customerType === t
-                          ? "border-teal-500 bg-teal-500 text-white"
-                          : "border-teal-500/40 bg-white text-blue-900 hover:bg-teal-50"
-                      }`}
-                    >
-                      {t === "حقیقی" ? "حقیقی (شخصی)" : "حقوقی (شرکتی)"}
-                    </button>
-                  ))}
-                </div>
+              <div className="flex gap-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    checked={form.customerType === "حقیقی"}
+                    onChange={() => setForm({ ...form, customerType: "حقیقی" })}
+                    className="accent-teal-600"
+                  />
+                  <span className="font-bold text-blue-900">حقیقی</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    checked={form.customerType === "حقوقی"}
+                    onChange={() => setForm({ ...form, customerType: "حقوقی" })}
+                    className="accent-teal-600"
+                  />
+                  <span className="font-bold text-blue-900">حقوقی</span>
+                </label>
               </div>
 
-              {/* عکس مشتری */}
-              <div>
-                <label className="mb-1 block text-sm font-bold text-blue-900">عکس مشتری</label>
-                <div className="flex items-center gap-4">
-                  <div className="w-20 h-20 rounded-xl border border-teal-500/40 bg-teal-50 overflow-hidden flex items-center justify-center">
-                    {photoPreview || form.photoUrl ? (
-                      <img
-                        src={photoPreview || form.photoUrl}
-                        alt="عکس مشتری"
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <span className="text-xs text-blue-400">بدون عکس</span>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <input
-                      ref={photoInputRef}
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0]
-                        if (!file) return
-                        const url = URL.createObjectURL(file)
-                        setPhotoPreview(url)
-                        setForm((prev) => ({ ...prev, photoUrl: url }))
+              {/* عکس */}
+              <div className="flex items-center gap-4">
+                <div className="w-20 h-20 rounded-xl border border-teal-500/40 bg-teal-50 overflow-hidden flex items-center justify-center">
+                  {photoPreview || form.photoUrl ? (
+                    <img src={photoPreview || form.photoUrl} alt="عکس مشتری" className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-xs text-blue-400">بدون عکس</span>
+                  )}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (!file) return
+                      const url = URL.createObjectURL(file)
+                      setPhotoPreview(url)
+                      setForm((prev) => ({ ...prev, photoUrl: url }))
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => photoInputRef.current?.click()}
+                    className="rounded-xl bg-teal-500 hover:bg-teal-600 px-4 py-2 text-sm font-bold text-white transition"
+                  >
+                    انتخاب عکس
+                  </button>
+                  {(photoPreview || form.photoUrl) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPhotoPreview("")
+                        setForm((prev) => ({ ...prev, photoUrl: "" }))
+                        if (photoInputRef.current) photoInputRef.current.value = ""
                       }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => photoInputRef.current?.click()}
-                      className="rounded-xl bg-teal-500 hover:bg-teal-600 px-4 py-2 text-sm font-bold text-white transition"
+                      className="rounded-xl border border-red-300 px-4 py-2 text-sm font-bold text-red-600 hover:bg-red-50 transition"
                     >
-                      انتخاب عکس
+                      حذف عکس
                     </button>
-                    {(photoPreview || form.photoUrl) && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPhotoPreview("")
-                          setForm((prev) => ({ ...prev, photoUrl: "" }))
-                          if (photoInputRef.current) photoInputRef.current.value = ""
-                        }}
-                        className="rounded-xl border border-red-300 px-4 py-2 text-sm font-bold text-red-600 hover:bg-red-50 transition"
-                      >
-                        حذف عکس
-                      </button>
-                    )}
-                  </div>
+                  )}
                 </div>
               </div>
 
+              {/* کد و نام */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
                   <label className="mb-1 block text-sm font-bold text-blue-900">کد مشتری *</label>
@@ -1028,7 +856,6 @@ useEffect(() => {
                         value={form.firstName}
                         onChange={(e) => setForm({ ...form, firstName: e.target.value })}
                         className="w-full rounded-xl border border-teal-500/40 px-3 py-2.5 text-base font-medium focus:border-teal-500 focus:outline-none"
-                        placeholder="مثال: یزدان"
                       />
                     </div>
                     <div>
@@ -1038,7 +865,6 @@ useEffect(() => {
                         value={form.lastName}
                         onChange={(e) => setForm({ ...form, lastName: e.target.value })}
                         className="w-full rounded-xl border border-teal-500/40 px-3 py-2.5 text-base font-medium focus:border-teal-500 focus:outline-none"
-                        placeholder="مثال: آبدری"
                       />
                     </div>
                   </>
@@ -1050,36 +876,12 @@ useEffect(() => {
                       value={form.companyName}
                       onChange={(e) => setForm({ ...form, companyName: e.target.value })}
                       className="w-full rounded-xl border border-teal-500/40 px-3 py-2.5 text-base font-medium focus:border-teal-500 focus:outline-none"
-                      placeholder="نام کامل شرکت"
                     />
                   </div>
                 )}
               </div>
 
-              {form.customerType === "حقوقی" && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <label className="mb-1 block text-sm font-bold text-blue-900">نام و نام خانوادگی رابط (اختیاری)</label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={form.firstName}
-                        onChange={(e) => setForm({ ...form, firstName: e.target.value })}
-                        className="w-1/2 rounded-xl border border-teal-500/40 px-3 py-2.5 text-base font-medium focus:border-teal-500 focus:outline-none"
-                        placeholder="نام"
-                      />
-                      <input
-                        type="text"
-                        value={form.lastName}
-                        onChange={(e) => setForm({ ...form, lastName: e.target.value })}
-                        className="w-1/2 rounded-xl border border-teal-500/40 px-3 py-2.5 text-base font-medium focus:border-teal-500 focus:outline-none"
-                        placeholder="نام خانوادگی"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
+              {/* گروه و کد ملی */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-sm font-bold text-blue-900">گروه مشتری</label>
@@ -1100,16 +902,11 @@ useEffect(() => {
                       value={form.nationalCode}
                       onChange={(e) => handleNationalCodeChange(e.target.value)}
                       className={`w-full rounded-xl border px-3 py-2.5 text-base font-medium focus:outline-none ${
-                        nationalCodeError
-                          ? "border-red-400 focus:border-red-500"
-                          : "border-teal-500/40 focus:border-teal-500"
+                        nationalCodeError ? "border-red-400" : "border-teal-500/40"
                       }`}
-                      placeholder="۱۰ رقم"
                       maxLength={10}
                     />
-                    {nationalCodeError && (
-                      <p className="mt-1 text-xs text-red-600 font-medium">{nationalCodeError}</p>
-                    )}
+                    {nationalCodeError && <p className="mt-1 text-xs text-red-600">{nationalCodeError}</p>}
                   </div>
                 ) : (
                   <div>
@@ -1119,20 +916,16 @@ useEffect(() => {
                       value={form.companyNationalId}
                       onChange={(e) => handleCompanyNationalIdChange(e.target.value)}
                       className={`w-full rounded-xl border px-3 py-2.5 text-base font-medium focus:outline-none ${
-                        companyNationalIdError
-                          ? "border-red-400 focus:border-red-500"
-                          : "border-teal-500/40 focus:border-teal-500"
+                        companyNationalIdError ? "border-red-400" : "border-teal-500/40"
                       }`}
-                      placeholder="۱۱ رقم"
                       maxLength={11}
                     />
-                    {companyNationalIdError && (
-                      <p className="mt-1 text-xs text-red-600 font-medium">{companyNationalIdError}</p>
-                    )}
+                    {companyNationalIdError && <p className="mt-1 text-xs text-red-600">{companyNationalIdError}</p>}
                   </div>
                 )}
               </div>
 
+              {/* کد اقتصادی */}
               <div>
                 <label className="mb-1 block text-sm font-bold text-blue-900">کد اقتصادی</label>
                 <input
@@ -1140,26 +933,17 @@ useEffect(() => {
                   value={form.economicCode}
                   onChange={(e) => handleEconomicCodeChange(e.target.value)}
                   className={`w-full rounded-xl border px-3 py-2.5 text-base font-medium focus:outline-none ${
-                    economicCodeError
-                      ? "border-red-400 focus:border-red-500"
-                      : "border-teal-500/40 focus:border-teal-500"
+                    economicCodeError ? "border-red-400" : "border-teal-500/40"
                   }`}
-                  placeholder="برای مشتریان حقوقی - ۱۱ یا ۱۴ رقم"
                 />
-                {economicCodeError && (
-                  <p className="mt-1 text-xs text-red-600 font-medium">{economicCodeError}</p>
-                )}
+                {economicCodeError && <p className="mt-1 text-xs text-red-600">{economicCodeError}</p>}
               </div>
 
               {/* تلفن‌ها */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-sm font-bold text-blue-900">شماره تماس‌ها</label>
-                  <button
-                    type="button"
-                    onClick={addPhoneField}
-                    className="text-sm font-bold text-teal-600 hover:text-teal-800"
-                  >
+                  <button type="button" onClick={addPhoneField} className="text-sm font-bold text-teal-600">
                     + افزودن شماره
                   </button>
                 </div>
@@ -1174,11 +958,7 @@ useEffect(() => {
                         placeholder="۰۹۱۲..."
                       />
                       {form.phones.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removePhone(idx)}
-                          className="rounded-xl bg-red-50 text-red-600 px-3 text-sm font-bold hover:bg-red-100"
-                        >
+                        <button type="button" onClick={() => removePhone(idx)} className="rounded-xl bg-red-50 text-red-600 px-3 text-sm font-bold">
                           حذف
                         </button>
                       )}
@@ -1187,15 +967,11 @@ useEffect(() => {
                 </div>
               </div>
 
-              {/* سایت / شبکه‌های اجتماعی */}
+              {/* شبکه‌های اجتماعی */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-sm font-bold text-blue-900">وبسایت / اینستاگرام / شبکه‌های اجتماعی</label>
-                  <button
-                    type="button"
-                    onClick={addSocialField}
-                    className="text-sm font-bold text-teal-600 hover:text-teal-800"
-                  >
+                  <label className="text-sm font-bold text-blue-900">وبسایت / شبکه‌های اجتماعی</label>
+                  <button type="button" onClick={addSocialField} className="text-sm font-bold text-teal-600">
                     + افزودن لینک
                   </button>
                 </div>
@@ -1207,14 +983,10 @@ useEffect(() => {
                         value={link}
                         onChange={(e) => updateSocial(idx, e.target.value)}
                         className="flex-1 rounded-xl border border-teal-500/40 px-3 py-2.5 text-base font-medium focus:border-teal-500 focus:outline-none"
-                        placeholder="مثال: instagram.com/shop یا www.example.com"
+                        placeholder="instagram.com/..."
                       />
                       {form.socialLinks.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removeSocial(idx)}
-                          className="rounded-xl bg-red-50 text-red-600 px-3 text-sm font-bold hover:bg-red-100"
-                        >
+                        <button type="button" onClick={() => removeSocial(idx)} className="rounded-xl bg-red-50 text-red-600 px-3 text-sm font-bold">
                           حذف
                         </button>
                       )}
@@ -1223,6 +995,7 @@ useEffect(() => {
                 </div>
               </div>
 
+              {/* آدرس‌ها */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-sm font-bold text-blue-900">آدرس اصلی</label>
@@ -1244,6 +1017,7 @@ useEffect(() => {
                 </div>
               </div>
 
+              {/* کد پستی و تاریخ تولد */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-sm font-bold text-blue-900">کد پستی</label>
@@ -1252,39 +1026,26 @@ useEffect(() => {
                     value={form.postalCode}
                     onChange={(e) => handlePostalCodeChange(e.target.value)}
                     className={`w-full rounded-xl border px-3 py-2.5 text-base font-medium focus:outline-none ${
-                      postalCodeError
-                        ? "border-red-400 focus:border-red-500"
-                        : "border-teal-500/40 focus:border-teal-500"
+                      postalCodeError ? "border-red-400" : "border-teal-500/40"
                     }`}
-                    placeholder="۱۰ رقم"
                     maxLength={10}
                   />
-                  {postalCodeError && (
-                    <p className="mt-1 text-xs text-red-600 font-medium">{postalCodeError}</p>
-                  )}
+                  {postalCodeError && <p className="mt-1 text-xs text-red-600">{postalCodeError}</p>}
                 </div>
                 <div className="relative">
                   <label className="mb-1 block text-sm font-bold text-blue-900">تاریخ تولد</label>
                   <button
                     type="button"
                     onClick={openBirthdayCalendar}
-                    className="w-full rounded-xl border border-teal-500/40 px-3 py-2.5 text-base font-medium text-right focus:border-teal-500 focus:outline-none bg-white hover:bg-teal-50/50 transition"
+                    className="w-full rounded-xl border border-teal-500/40 px-3 py-2.5 text-base font-medium text-right bg-white hover:bg-teal-50/50 transition"
                   >
-                    {form.birthDate ? toPersianDigits(form.birthDate) : (
-                      <span className="text-gray-400">انتخاب تاریخ تولد</span>
-                    )}
+                    {form.birthDate ? toPersianDigits(form.birthDate) : <span className="text-gray-400">انتخاب تاریخ تولد</span>}
                   </button>
 
                   {showBirthdayCalendar && (
                     <div className="absolute z-20 mt-1 w-72 rounded-xl border border-teal-500/30 bg-white shadow-2xl p-3">
                       <div className="flex items-center justify-between mb-2">
-                        <button
-                          type="button"
-                          onClick={goToNextMonth}
-                          className="rounded-lg px-2 py-1 text-sm font-bold text-teal-700 hover:bg-teal-50"
-                        >
-                          ›
-                        </button>
+                        <button type="button" onClick={goToNextMonth} className="rounded-lg px-2 py-1 text-sm font-bold text-teal-700 hover:bg-teal-50">›</button>
                         <div className="flex items-center gap-1 text-sm font-bold text-blue-950">
                           <span>{JALALI_MONTHS[calendarMonth - 1]}</span>
                           <input
@@ -1294,36 +1055,25 @@ useEffect(() => {
                             className="w-16 rounded-lg border border-teal-500/30 px-1 py-0.5 text-center text-sm"
                           />
                         </div>
-                        <button
-                          type="button"
-                          onClick={goToPrevMonth}
-                          className="rounded-lg px-2 py-1 text-sm font-bold text-teal-700 hover:bg-teal-50"
-                        >
-                          ‹
-                        </button>
+                        <button type="button" onClick={goToPrevMonth} className="rounded-lg px-2 py-1 text-sm font-bold text-teal-700 hover:bg-teal-50">‹</button>
                       </div>
                       <div className="grid grid-cols-7 gap-1">
-                        {Array.from({ length: daysInJalaliMonth(calendarYear, calendarMonth) }, (_, i) => i + 1).map(
-                          (day) => {
-                            const parsed = parseJalaliDate(form.birthDate)
-                            const isSelected =
-                              parsed && parsed.year === calendarYear && parsed.month === calendarMonth && parsed.day === day
-                            return (
-                              <button
-                                key={day}
-                                type="button"
-                                onClick={() => selectBirthdayDay(day)}
-                                className={`rounded-lg py-1.5 text-xs font-bold transition ${
-                                  isSelected
-                                    ? "bg-teal-500 text-white"
-                                    : "text-blue-900 hover:bg-teal-100"
-                                }`}
-                              >
-                                {toPersianDigits(day)}
-                              </button>
-                            )
-                          }
-                        )}
+                        {Array.from({ length: daysInJalaliMonth(calendarYear, calendarMonth) }, (_, i) => i + 1).map((day) => {
+                          const parsed = parseJalaliDate(form.birthDate)
+                          const isSelected = parsed && parsed.year === calendarYear && parsed.month === calendarMonth && parsed.day === day
+                          return (
+                            <button
+                              key={day}
+                              type="button"
+                              onClick={() => selectBirthdayDay(day)}
+                              className={`rounded-lg py-1.5 text-xs font-bold transition ${
+                                isSelected ? "bg-teal-500 text-white" : "text-blue-900 hover:bg-teal-100"
+                              }`}
+                            >
+                              {toPersianDigits(day)}
+                            </button>
+                          )
+                        })}
                       </div>
                       <button
                         type="button"
@@ -1337,7 +1087,7 @@ useEffect(() => {
                 </div>
               </div>
 
-              {/* خصوصیات مشتری */}
+              {/* تگ‌ها */}
               <div>
                 <label className="mb-1 block text-sm font-bold text-blue-900">خصوصیات مشتری</label>
                 <div className="flex flex-wrap gap-2 mb-2">
@@ -1368,37 +1118,25 @@ useEffect(() => {
                       }
                     }}
                     className="flex-1 rounded-xl border border-teal-500/40 px-3 py-2.5 text-base font-medium focus:border-teal-500 focus:outline-none"
-                    placeholder="خصوصیت دلخواه را بنویسید و Enter بزنید"
+                    placeholder="خصوصیت دلخواه + Enter"
                   />
-                  <button
-                    type="button"
-                    onClick={addCustomTag}
-                    className="rounded-xl bg-teal-500 hover:bg-teal-600 px-4 text-sm font-bold text-white"
-                  >
+                  <button type="button" onClick={addCustomTag} className="rounded-xl bg-teal-500 hover:bg-teal-600 px-4 text-sm font-bold text-white">
                     افزودن
                   </button>
                 </div>
                 {form.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mt-2">
                     {form.tags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="flex items-center gap-1 rounded-lg bg-amber-100 px-2 py-1 text-sm font-bold text-amber-800"
-                      >
+                      <span key={tag} className="flex items-center gap-1 rounded-lg bg-amber-100 px-2 py-1 text-sm font-bold text-amber-800">
                         {tag}
-                        <button
-                          type="button"
-                          onClick={() => removeTag(tag)}
-                          className="text-amber-700 hover:text-amber-900 leading-none"
-                        >
-                          ×
-                        </button>
+                        <button type="button" onClick={() => removeTag(tag)} className="text-amber-700 hover:text-amber-900">×</button>
                       </span>
                     ))}
                   </div>
                 )}
               </div>
 
+              {/* اعتبار و یادداشت */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-sm font-bold text-blue-900">اعتبار اولیه (ریال)</label>
@@ -1450,7 +1188,6 @@ useEffect(() => {
             <p className="text-sm text-gray-600 mb-4">
               اعتبار فعلی: <strong className="text-teal-700">{formatPrice(creditTarget.credit)} ریال</strong>
             </p>
-
             <label className="mb-1 block text-sm font-bold text-blue-900">مبلغ افزایش (ریال)</label>
             <input
               type="text"
@@ -1463,7 +1200,6 @@ useEffect(() => {
               className="w-full rounded-xl border border-teal-500/40 px-3 py-2.5 text-lg font-bold focus:border-teal-500 focus:outline-none mb-5"
               placeholder="مثلاً ۵,۰۰۰,۰۰۰"
             />
-
             <div className="flex gap-2 justify-end">
               <button
                 onClick={() => setShowCreditModal(false)}
@@ -1493,11 +1229,9 @@ useEffect(() => {
             <p className="text-sm text-gray-600 mb-4">
               تاریخ تولد: <strong>{birthdayTarget.birthDate}</strong>
             </p>
-
             <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 mb-5 text-sm text-amber-900">
               این قابلیت در صفحه ثبت سفارش فعال می‌شود.
             </div>
-
             <div className="flex gap-2 justify-end">
               <button
                 onClick={() => setShowBirthdayModal(false)}
@@ -1516,5 +1250,23 @@ useEffect(() => {
         </div>
       )}
     </div>
+  )
+}
+
+// ==================== صفحه اصلی با Suspense ====================
+export default function CustomersPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+          <div className="text-center">
+            <div className="text-xl font-bold text-blue-900 mb-2">در حال بارگذاری...</div>
+            <div className="text-sm text-gray-500">لطفاً صبر کنید</div>
+          </div>
+        </div>
+      }
+    >
+      <CustomersContent />
+    </Suspense>
   )
 }
