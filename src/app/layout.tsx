@@ -19,15 +19,26 @@ export const metadata: Metadata = {
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+}: {
+  children: React.ReactNode
+}) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="fa" dir="rtl">
+      <head>
+        <link
+          href="https://cdn.jsdelivr.net/npm/vazirmatn@33.003/Vazirmatn-font-face.css"
+          rel="stylesheet"
+        />
+      </head>
+      <body
+        style={{
+          fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif",
+          margin: 0,
+          padding: 0,
+        }}
+      >
+        {children}
+      </body>
     </html>
-  );
+  )
 }

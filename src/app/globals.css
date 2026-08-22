@@ -1,3 +1,14 @@
+@import url('https://cdn.jsdelivr.net/npm/vazirmatn@33.003/Vazirmatn-font-face.css');
+
+html, body {
+  font-family: "Vazirmatn", Tahoma, Arial, sans-serif !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  font-family: inherit;
+}
 @import "tailwindcss";
 
 :root {
