@@ -4,7 +4,6 @@ import { Suspense, useEffect, useState, useMemo, useRef } from "react"
 import { useSearchParams } from "next/navigation"
 import Link from "next/link"
 import * as XLSX from "xlsx"
-import customersSeedRaw from "./customers-seed.json"
 
 type CustomerType = "حقیقی" | "حقوقی"
 type CustomerGroup = "نقدی" | "همکار"
@@ -107,8 +106,6 @@ function getDisplayName(c: {
   return `${c.lastName} ${c.firstName}`.trim() || c.companyName.trim()
 }
 
-const sampleCustomers: Customer[] = customersSeedRaw as Customer[]
-
 const emptyForm: Omit<Customer, "id" | "row" | "createdAt" | "updatedAt"> = {
   code: "",
   customerType: "حقیقی",
@@ -150,14 +147,28 @@ const emptyColumnFilters: ColumnFilters = {
   tags: "",
 }
 
+// تعداد ردیفی که در هر صفحه از جدول نمایش داده می‌شود
+const PAGE_SIZE = 50
+
 // ==================== کامپوننت اصلی محتوا ====================
 function CustomersContent() {
   const searchParams = useSearchParams()
 
-  const [data, setData] = useState<Customer[]>(sampleCustomers)
+  // دیتای مشتریان دیگر به‌صورت import مستقیم و همزمان در باندل قرار نمی‌گیرد؛
+  // به‌جای آن به‌صورت lazy (import پویا) بعد از mount شدن صفحه خوانده می‌شود،
+  // تا رندر اول صفحه (فیلترها/دکمه‌ها) معطل پردازش ۵٬۰۰۰+ رکورد نماند.
+  const [data, setData] = useState<Customer[]>([])
+  const [seedLoading, setSeedLoading] = useState(true)
+
   const [search, setSearch] = useState("")
+  // نسخه‌ی «دیبانس‌شده» سرچ که واقعاً برای فیلتر کردن استفاده می‌شود؛
+  // این‌طوری با هر ضربه کلید، فیلتر روی کل دیتا دوباره محاسبه نمی‌شود
+  const [debouncedSearch, setDebouncedSearch] = useState("")
   const [groupFilter, setGroupFilter] = useState<"all" | CustomerGroup>("all")
   const [colFilters, setColFilters] = useState<ColumnFilters>(emptyColumnFilters)
+
+  // صفحه‌بندی جدول: به‌جای رندر همه‌ی نتایج فیلترشده، فقط صفحه‌ی جاری رندر می‌شود
+  const [page, setPage] = useState(1)
 
   const [showFormModal, setShowFormModal] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -189,10 +200,31 @@ function CustomersContent() {
     }
   }, [searchParams])
 
+  // خواندن lazy فایل seed مشتریان؛ import() پویا باعث می‌شود Next.js این
+  // فایل را به‌صورت یک chunk جدا بسازد و فقط بعد از mount شدن صفحه،
+  // به‌صورت async از شبکه بگیرد - نه اینکه جزو باندل اولیه‌ی صفحه باشد.
+  useEffect(() => {
+    let cancelled = false
+    import("./customers-seed.json").then((mod) => {
+      if (cancelled) return
+      setData((mod.default as Customer[]) || [])
+      setSeedLoading(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // دیبانس سرچ: ۲۵۰ میلی‌ثانیه بعد از آخرین تایپ، مقدار واقعی فیلتر آپدیت می‌شود
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 250)
+    return () => clearTimeout(timer)
+  }, [search])
+
   const filtered = useMemo(() => {
     return data.filter((item) => {
       const displayName = getDisplayName(item)
-      const q = search.trim().toLowerCase()
+      const q = debouncedSearch.trim().toLowerCase()
       const matchSearch =
         !q ||
         displayName.toLowerCase().includes(q) ||
@@ -215,7 +247,20 @@ function CustomersContent() {
 
       return matchSearch && matchGroup && matchCol
     })
-  }, [data, search, groupFilter, colFilters])
+  }, [data, debouncedSearch, groupFilter, colFilters])
+
+  // هر بار که فیلترها تغییر کنند، برمی‌گردیم به صفحه‌ی اول
+  useEffect(() => {
+    setPage(1)
+  }, [debouncedSearch, groupFilter, colFilters])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+
+  // فقط ردیف‌های صفحه‌ی جاری رندر می‌شوند، نه کل نتایج فیلترشده
+  const paginated = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE
+    return filtered.slice(start, start + PAGE_SIZE)
+  }, [filtered, page])
 
   const formatPrice = (n: number) => n.toLocaleString("en-US")
 
@@ -681,77 +726,108 @@ function CustomersContent() {
 
         {/* جدول مشتریان */}
         <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/20 overflow-x-auto">
-          <table className="w-full text-sm text-blue-900">
-            <thead>
-              <tr className="border-b border-teal-500/30 bg-teal-500/15 text-right">
-                <th className="p-3 font-bold whitespace-nowrap">ردیف</th>
-                <th className="p-3 font-bold whitespace-nowrap">کد</th>
-                <th className="p-3 font-bold whitespace-nowrap">نام / شرکت</th>
-                <th className="p-3 font-bold whitespace-nowrap">گروه</th>
-                <th className="p-3 font-bold whitespace-nowrap">کد ملی / شناسه</th>
-                <th className="p-3 font-bold whitespace-nowrap">تلفن</th>
-                <th className="p-3 font-bold whitespace-nowrap">آدرس</th>
-                <th className="p-3 font-bold whitespace-nowrap">تگ‌ها</th>
-                <th className="p-3 font-bold whitespace-nowrap">اعتبار</th>
-                <th className="p-3 font-bold whitespace-nowrap">عملیات</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((customer, index) => (
-                <tr key={customer.id} className="border-b border-teal-100 hover:bg-yellow-50/50 bg-white/40">
-                  <td className="p-3 text-center font-bold">{index + 1}</td>
-                  <td className="p-3 font-mono text-xs">{customer.code}</td>
-                  <td className="p-3 font-bold">{getDisplayName(customer)}</td>
-                  <td className="p-3">
-                    <span className={`px-2 py-1 rounded-lg text-xs font-bold ${customer.group === "همکار" ? "bg-teal-100 text-teal-800" : "bg-amber-100 text-amber-800"}`}>
-                      {customer.group}
-                    </span>
-                  </td>
-                  <td className="p-3 text-xs">
-                    {customer.customerType === "حقیقی" ? customer.nationalCode || "—" : customer.companyNationalId || "—"}
-                  </td>
-                  <td className="p-3 text-xs">{customer.phones[0] || "—"}</td>
-                  <td className="p-3 text-xs max-w-[180px] truncate" title={customer.address1}>{customer.address1 || "—"}</td>
-                  <td className="p-3">
-                    <div className="flex flex-wrap gap-1">
-                      {customer.tags.slice(0, 2).map((tag) => (
-                        <span key={tag} className="bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0.5 rounded font-bold">{tag}</span>
-                      ))}
-                      {customer.tags.length > 2 && <span className="text-xs text-gray-500">+{customer.tags.length - 2}</span>}
-                    </div>
-                  </td>
-                  <td className="p-3 font-bold text-teal-700 text-xs">{formatPrice(customer.credit)}</td>
-                  <td className="p-3">
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => openEditModal(customer)}
-                        className="rounded-lg bg-teal-500/20 hover:bg-teal-500/40 px-2 py-1 text-xs font-bold text-teal-800"
-                      >
-                        ویرایش
-                      </button>
-                      <button
-                        onClick={() => openCreditModal(customer)}
-                        className="rounded-lg bg-amber-500/20 hover:bg-amber-500/40 px-2 py-1 text-xs font-bold text-amber-800"
-                      >
-                        اعتبار
-                      </button>
-                      <button
-                        onClick={() => deleteCustomer(customer.id)}
-                        className="rounded-lg bg-red-500/15 hover:bg-red-500/30 px-2 py-1 text-xs font-bold text-red-700"
-                      >
-                        حذف
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {filtered.length === 0 && (
-            <div className="text-center py-12 text-blue-700 font-bold">
-              هیچ مشتری‌ای پیدا نشد
+          {seedLoading ? (
+            <div className="text-center py-16 text-blue-700 font-bold">
+              در حال بارگذاری اطلاعات مشتریان...
             </div>
+          ) : (
+            <>
+              <table className="w-full text-sm text-blue-900">
+                <thead>
+                  <tr className="border-b border-teal-500/30 bg-teal-500/15 text-right">
+                    <th className="p-3 font-bold whitespace-nowrap">ردیف</th>
+                    <th className="p-3 font-bold whitespace-nowrap">کد</th>
+                    <th className="p-3 font-bold whitespace-nowrap">نام / شرکت</th>
+                    <th className="p-3 font-bold whitespace-nowrap">گروه</th>
+                    <th className="p-3 font-bold whitespace-nowrap">کد ملی / شناسه</th>
+                    <th className="p-3 font-bold whitespace-nowrap">تلفن</th>
+                    <th className="p-3 font-bold whitespace-nowrap">آدرس</th>
+                    <th className="p-3 font-bold whitespace-nowrap">تگ‌ها</th>
+                    <th className="p-3 font-bold whitespace-nowrap">اعتبار</th>
+                    <th className="p-3 font-bold whitespace-nowrap">عملیات</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginated.map((customer, index) => (
+                    <tr key={customer.id} className="border-b border-teal-100 hover:bg-yellow-50/50 bg-white/40">
+                      <td className="p-3 text-center font-bold">{(page - 1) * PAGE_SIZE + index + 1}</td>
+                      <td className="p-3 font-mono text-xs">{customer.code}</td>
+                      <td className="p-3 font-bold">{getDisplayName(customer)}</td>
+                      <td className="p-3">
+                        <span className={`px-2 py-1 rounded-lg text-xs font-bold ${customer.group === "همکار" ? "bg-teal-100 text-teal-800" : "bg-amber-100 text-amber-800"}`}>
+                          {customer.group}
+                        </span>
+                      </td>
+                      <td className="p-3 text-xs">
+                        {customer.customerType === "حقیقی" ? customer.nationalCode || "—" : customer.companyNationalId || "—"}
+                      </td>
+                      <td className="p-3 text-xs">{customer.phones[0] || "—"}</td>
+                      <td className="p-3 text-xs max-w-[180px] truncate" title={customer.address1}>{customer.address1 || "—"}</td>
+                      <td className="p-3">
+                        <div className="flex flex-wrap gap-1">
+                          {customer.tags.slice(0, 2).map((tag) => (
+                            <span key={tag} className="bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0.5 rounded font-bold">{tag}</span>
+                          ))}
+                          {customer.tags.length > 2 && <span className="text-xs text-gray-500">+{customer.tags.length - 2}</span>}
+                        </div>
+                      </td>
+                      <td className="p-3 font-bold text-teal-700 text-xs">{formatPrice(customer.credit)}</td>
+                      <td className="p-3">
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => openEditModal(customer)}
+                            className="rounded-lg bg-teal-500/20 hover:bg-teal-500/40 px-2 py-1 text-xs font-bold text-teal-800"
+                          >
+                            ویرایش
+                          </button>
+                          <button
+                            onClick={() => openCreditModal(customer)}
+                            className="rounded-lg bg-amber-500/20 hover:bg-amber-500/40 px-2 py-1 text-xs font-bold text-amber-800"
+                          >
+                            اعتبار
+                          </button>
+                          <button
+                            onClick={() => deleteCustomer(customer.id)}
+                            className="rounded-lg bg-red-500/15 hover:bg-red-500/30 px-2 py-1 text-xs font-bold text-red-700"
+                          >
+                            حذف
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {filtered.length === 0 && (
+                <div className="text-center py-12 text-blue-700 font-bold">
+                  هیچ مشتری‌ای پیدا نشد
+                </div>
+              )}
+
+              {/* صفحه‌بندی */}
+              {filtered.length > 0 && totalPages > 1 && (
+                <div className="flex items-center justify-center gap-2 mt-4 pt-3 border-t border-teal-500/20">
+                  <button
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="rounded-lg border border-teal-500/30 bg-white/50 px-3 py-1.5 text-sm font-bold text-blue-900 hover:bg-white/80 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  >
+                    قبلی
+                  </button>
+                  <span className="text-sm font-bold text-blue-900 px-2">
+                    صفحه {toPersianDigits(page)} از {toPersianDigits(totalPages)}
+                  </span>
+                  <button
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                    className="rounded-lg border border-teal-500/30 bg-white/50 px-3 py-1.5 text-sm font-bold text-blue-900 hover:bg-white/80 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  >
+                    بعدی
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

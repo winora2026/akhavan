@@ -5,7 +5,9 @@ import Link from "next/link"
 
 export default function HomePage() {
   const [showSalesMenu, setShowSalesMenu] = useState(false)
+  const [showProductionMenu, setShowProductionMenu] = useState(false)
   const salesRef = useRef<HTMLDivElement>(null)
+  const productionRef = useRef<HTMLDivElement>(null)
 
   const menuItems = [
     {
@@ -23,6 +25,7 @@ export default function HomePage() {
       title: "تولید",
       href: "#",
       icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z",
+      isProduction: true,
     },
     {
       title: "انبار",
@@ -69,10 +72,41 @@ export default function HomePage() {
     },
   ]
 
+ const productionItems = [
+  {
+    title: "مدیریت ایستگاه‌ها",
+    href: "/production/stations",
+    icon: "M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10",
+  },
+  {
+    title: "صف تولید",
+    href: "/production/queue",
+    icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01",
+  },
+  {
+    title: "کارتابل ایستگاه",
+    href: "/production/station-queue",
+    icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
+  },
+  {
+    title: "داشبورد تولید",
+    href: "/production/dashboard",
+    icon: "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z",
+  },
+  {
+    title: "برنامه‌ریزی برش",
+    href: "/production/cutting",
+    icon: "M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z",
+  },
+]
+
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (salesRef.current && !salesRef.current.contains(e.target as Node)) {
         setShowSalesMenu(false)
+      }
+      if (productionRef.current && !productionRef.current.contains(e.target as Node)) {
+        setShowProductionMenu(false)
       }
     }
     document.addEventListener("mousedown", handleClickOutside)
@@ -144,7 +178,6 @@ export default function HomePage() {
                         </span>
                       </button>
 
-                      {/* زیرمنوی فروش - عمودی */}
                       {showSalesMenu && (
                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 min-w-[200px]">
                           <div className="rounded-2xl bg-white/95 backdrop-blur-xl border border-teal-500/30 shadow-2xl p-2">
@@ -154,6 +187,75 @@ export default function HomePage() {
                                   key={sub.title}
                                   href={sub.href}
                                   onClick={() => setShowSalesMenu(false)}
+                                  className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-teal-50 transition group"
+                                >
+                                  <div className="w-9 h-9 rounded-lg bg-teal-500/15 flex items-center justify-center group-hover:bg-teal-500/25 transition border border-teal-500/20 shrink-0">
+                                    <svg
+                                      className="w-5 h-5 text-teal-700 group-hover:text-teal-500 transition-colors"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2.2}
+                                        d={sub.icon}
+                                      />
+                                    </svg>
+                                  </div>
+                                  <span className="text-sm font-bold text-gray-800 group-hover:text-teal-800 whitespace-nowrap">
+                                    {sub.title}
+                                  </span>
+                                </Link>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 w-3 h-3 bg-white/95 border-r border-b border-teal-500/30 rotate-45" />
+                        </div>
+                      )}
+                    </div>
+                  ) : item.isProduction ? (
+                    <div
+                      key={item.title}
+                      ref={productionRef}
+                      className="relative"
+                      onMouseEnter={() => setShowProductionMenu(true)}
+                      onMouseLeave={() => setShowProductionMenu(false)}
+                    >
+                      <button
+                        onClick={() => setShowProductionMenu((prev) => !prev)}
+                        className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 transition cursor-pointer group"
+                      >
+                        <div className="w-12 h-12 rounded-xl bg-teal-500/15 backdrop-blur-sm flex items-center justify-center group-hover:bg-teal-500/25 transition shadow-sm border border-teal-500/20">
+                          <svg
+                            className="w-7 h-7 text-teal-700 group-hover:text-teal-500 transition-colors duration-200"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2.2}
+                              d={item.icon}
+                            />
+                          </svg>
+                        </div>
+                        <span className="text-base font-bold text-gray-800 group-hover:text-teal-800 text-center leading-tight transition-colors">
+                          {item.title}
+                        </span>
+                      </button>
+
+                      {showProductionMenu && (
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 min-w-[200px]">
+                          <div className="rounded-2xl bg-white/95 backdrop-blur-xl border border-teal-500/30 shadow-2xl p-2">
+                            <div className="flex flex-col gap-1">
+                              {productionItems.map((sub) => (
+                                <Link
+                                  key={sub.title}
+                                  href={sub.href}
+                                  onClick={() => setShowProductionMenu(false)}
                                   className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-teal-50 transition group"
                                 >
                                   <div className="w-9 h-9 rounded-lg bg-teal-500/15 flex items-center justify-center group-hover:bg-teal-500/25 transition border border-teal-500/20 shrink-0">

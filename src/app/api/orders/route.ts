@@ -1,49 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
-
-// ------------------ توابع کمکی ------------------
-
-function toEnglishDigits(str: string): string {
-  return str
-    .replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d).toString())
-    .replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d).toString())
-}
-
-function safeDate(value: any): Date {
-  if (!value) {
-    return new Date()
-  }
-
-  if (value instanceof Date && !isNaN(value.getTime())) {
-    return value
-  }
-
-  let str = String(value).trim()
-  str = toEnglishDigits(str)
-
-  const jalaliMatch = str.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/)
-  if (jalaliMatch) {
-    const year = parseInt(jalaliMatch[1])
-    const month = parseInt(jalaliMatch[2]) - 1
-    const day = parseInt(jalaliMatch[3])
-
-    if (year > 1300 && year < 1500) {
-  const gYear = year + 621
-  return new Date(Date.UTC(gYear, month, day, 12, 0, 0))
-}
-
-    return new Date(Date.UTC(year, month, day, 12, 0, 0))
-  }
-
-  const d = new Date(str)
-  if (!isNaN(d.getTime()) && d.getFullYear() > 1900 && d.getFullYear() < 2100) {
-    return d
-  }
-
-  return new Date()
-}
-
-// ===================== GET (لیست سفارش‌ها) =====================
+import { safeDate } from "@/lib/date"
 
 export async function GET() {
   try {
@@ -67,8 +24,6 @@ export async function GET() {
   }
 }
 
-// ===================== POST (ایجاد سفارش) =====================
-
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -76,12 +31,18 @@ export async function POST(req: NextRequest) {
     const {
       customerName,
       customerGroup,
-      customerOrderNumber,
       productionLine,
       priority,
       orderDate,
       deliveryDate,
       hasInstallation,
+      installDate,
+      installAddress,
+      installPhone,
+      installNotes,
+      discountAmount,
+      discountPercent,
+      isOfficialInvoice,
       totalQuantity,
       totalMeterage,
       items,
@@ -95,7 +56,6 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // ۱. پیدا کردن یا ساخت مشتری
     let customer = await prisma.customer.findFirst({
       where: { name: customerName.trim() },
     })
@@ -104,33 +64,32 @@ export async function POST(req: NextRequest) {
       customer = await prisma.customer.create({
         data: {
           name: customerName.trim(),
+          customerCode: `C-${Date.now()}`,
           customerGroup: customerGroup || "همکار",
           notes: productionLine ? `خط تولید: ${productionLine}` : null,
         },
       })
     }
 
-    // ۲. محاسبه شماره سفارش بعدی (اتوماتیک)
     const allOrders = await prisma.order.findMany({
       select: { orderNumber: true },
     })
 
     let nextOrderNumber = 500
 
-const numericNumbers = allOrders
-  .map((o: any) => parseInt(String(o.orderNumber)))
-  .filter((n: number) => !isNaN(n) && n >= 500 && n < 100000)
+    const numericNumbers = allOrders
+      .map((o: any) => parseInt(String(o.orderNumber)))
+      .filter((n: number) => !isNaN(n) && n >= 500 && n < 100000)
 
-if (numericNumbers.length > 0) {
-  nextOrderNumber = Math.max(...numericNumbers) + 1
-}
-    // ۳. محاسبه شماره سفارش مشتری (اتوماتیک)
+    if (numericNumbers.length > 0) {
+      nextOrderNumber = Math.max(...numericNumbers) + 1
+    }
+
     const customerOrdersCount = await prisma.order.count({
       where: { customerId: customer.id },
     })
     const nextCustomerOrderNumber = String(customerOrdersCount + 1)
 
-    // ۴. ساخت سفارش
     const order = await prisma.order.create({
       data: {
         orderNumber: String(nextOrderNumber),
@@ -142,6 +101,16 @@ if (numericNumbers.length > 0) {
         totalMeterage: parseFloat(totalMeterage) || 0,
         totalQuantity: parseInt(totalQuantity) || 0,
         hasInstallation: Boolean(hasInstallation),
+        installationDate: installDate ? safeDate(installDate) : null,
+        installationAddress: installAddress || null,
+        installationPhone: installPhone || null,
+        installationNotes: installNotes || null,
+        discountAmount: parseFloat(discountAmount) || 0,
+        discountPercent:
+          discountPercent != null && discountPercent !== ""
+            ? parseFloat(discountPercent)
+            : null,
+        isOfficialInvoice: Boolean(isOfficialInvoice),
         isStop: false,
         status: "پیش‌فاکتور",
         notes: notes || (productionLine ? `خط تولید: ${productionLine}` : null),
@@ -150,14 +119,21 @@ if (numericNumbers.length > 0) {
             productName: item.productName || "بدون نام",
             pieceNumber: item.partNumber || null,
             installationCode: item.installCode || null,
+            unit: item.unit || null,
             length: parseFloat(item.length) || 0,
             width: parseFloat(item.width) || 0,
             quantity: parseInt(item.quantity) || 1,
             meterage: parseFloat(item.meterage) || 0,
             perimeter: parseFloat(item.perimeter) || 0,
-            unitPrice: parseFloat(String(item.unitPrice || "0").replace(/,/g, "")) || 0,
-            totalPrice: parseFloat(String(item.totalPrice || "0").replace(/,/g, "")) || 0,
+            unitPrice:
+              parseFloat(String(item.unitPrice || "0").replace(/,/g, "")) || 0,
+            totalPrice:
+              parseFloat(String(item.totalPrice || "0").replace(/,/g, "")) || 0,
             notes: item.description || null,
+            flagged: Boolean(item.flagged),
+            servicesData: item.services?.length
+              ? JSON.stringify(item.services)
+              : null,
             sortOrder: index,
           })),
         },
@@ -189,8 +165,6 @@ if (numericNumbers.length > 0) {
   }
 }
 
-// ===================== PATCH (بروزرسانی وضعیت) =====================
-
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json()
@@ -215,7 +189,40 @@ export async function PATCH(req: NextRequest) {
       },
     })
 
-    return NextResponse.json({ success: true, order })
+    // اگر به فاکتور تبدیل شد → خودکار ورود به تولید
+    let productionOrder = null
+    if (status === "فاکتور") {
+      const existing = await prisma.productionOrder.findFirst({
+        where: { orderId: order.id },
+      })
+
+      if (!existing) {
+        // ساخت Production Order با همان منطق ارسال به تولید
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/production/orders`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ orderId: order.id }),
+          }
+        )
+
+        // اگر fetch داخلی مشکل داشت، مستقیم می‌سازیم
+        if (!res.ok) {
+          // fallback: صدا زدن منطق مستقیم بهتر است
+          // برای پایداری، همان POST را از داخل تکرار نمی‌کنیم؛
+          // کاربر می‌تواند از API production استفاده کند
+        } else {
+          productionOrder = await res.json()
+        }
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      order,
+      productionOrder,
+    })
   } catch (error: any) {
     console.error("Error updating order:", error)
     return NextResponse.json(

@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -18,68 +18,63 @@ model Customer {
   notes         String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
-
   orders        Order[]
 }
 
 model Order {
-  id                     String   @id @default(cuid())
-  orderNumber            String   @unique
+  id                     String    @id @default(cuid())
+  orderNumber            String    @unique
   customerId             String
-  customer               Customer @relation(fields: [customerId], references: [id])
-
+  customer               Customer  @relation(fields: [customerId], references: [id])
   customerOrderNumber    String?
-  orderDate              DateTime @default(now())
+  orderDate              DateTime  @default(now())
   deliveryDate           DateTime?
-  priority               String   @default("عادی")
+  priority               String    @default("عادی")
   mapGroup               String?
   mapNumber              String?
   customerDocumentNumber String?
-
-  totalMeterage          Float    @default(0)
-  totalQuantity          Int      @default(0)
-
-  hasInstallation        Boolean  @default(false)
+  totalMeterage          Float     @default(0)
+  totalQuantity          Int       @default(0)
+  hasInstallation        Boolean   @default(false)
   installationDate       DateTime?
-
-  isStop                 Boolean  @default(false)
-  status                 String   @default("ثبت‌شده")
-
+  installationAddress    String?
+  installationPhone      String?
+  installationNotes      String?
+  discountAmount         Float     @default(0)
+  discountPercent        Float?
+  isOfficialInvoice      Boolean   @default(false)
+  isStop                 Boolean   @default(false)
+  status                 String    @default("ثبت‌شده")
   mapImageUrl            String?
   notes                  String?
-
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
-
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
   items                  OrderItem[]
+  productionOrders       ProductionOrder[]
 }
 
 model OrderItem {
   id               String   @id @default(cuid())
   orderId          String
   order            Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
   productName      String
   pieceNumber      String?
   installationCode String?
-
+  unit             String?
   length           Float
   width            Float
   quantity         Int      @default(1)
-
   meterage         Float    @default(0)
   perimeter        Float    @default(0)
-
   unitPrice        Float    @default(0)
   totalPrice       Float    @default(0)
-
+  flagged          Boolean  @default(false)
+  servicesData     String?
   status           String?
   notes            String?
   sortOrder        Int      @default(0)
-
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
-
   services         OrderItemService[]
 }
 
@@ -87,33 +82,142 @@ model OrderItemService {
   id              String    @id @default(cuid())
   orderItemId     String
   orderItem       OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
-
   serviceId       String
   service         Service   @relation(fields: [serviceId], references: [id])
-
   calculationType String
   value           Float     @default(0)
   unitPrice       Float     @default(0)
   totalPrice      Float     @default(0)
-
   notes           String?
-
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 }
 
 model Service {
-  id               String   @id @default(cuid())
-  name             String
-  category         String
-  defaultCalcType  String?
-  defaultUnitPrice Float    @default(0)
-  isActive         Boolean  @default(true)
-  isFrequent       Boolean  @default(false)
-  sortOrder        Int      @default(0)
-
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
+  id                String             @id @default(cuid())
+  name              String
+  category          String
+  defaultCalcType   String?
+  defaultUnitPrice  Float              @default(0)
+  isActive          Boolean            @default(true)
+  isFrequent        Boolean            @default(false)
+  sortOrder         Int                @default(0)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
   orderItemServices OrderItemService[]
+}
+
+model ProductionStation {
+  id           String                   @id @default(cuid())
+  name         String
+  code         String?                  @unique
+  description  String?
+  sortOrder    Int                      @default(0)
+  isActive     Boolean                  @default(true)
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+  itemStations ProductionItemStation[]
+  history      ProductionHistory[]
+}
+
+model ProductionOrder {
+  id               String           @id @default(cuid())
+  orderId          String
+  order            Order            @relation(fields: [orderId], references: [id])
+  productionNumber String           @unique
+  status           String           @default("در انتظار")
+  priority         String           @default("عادی")
+  notes            String?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  createdBy        String?
+  items            ProductionItem[]
+  history          ProductionHistory[]
+}
+
+model ProductionItem {
+  id                  String   @id @default(cuid())
+  productionOrderId   String
+  productionOrder     ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  orderItemId         String?
+
+  productName         String
+  length              Float?
+  width               Float?
+  quantity            Int      @default(1)
+  meterage            Float?
+  thickness           String?
+  notes               String?
+
+  status              String   @default("در انتظار")
+  barcode             String?  @unique
+  currentStationId    String?
+
+  // فیلدهای لیبل
+  labelStatus         String   @default("چاپ‌نشده")
+  labelPrintCount     Int      @default(0)
+  labelPrintedAt      DateTime?
+  labelReprintAllowed Boolean  @default(false)
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  stations            ProductionItemStation[]
+  history             ProductionHistory[]
+  wastes              Waste[]
+}
+
+model ProductionItemStation {
+  id              String            @id @default(cuid())
+  productionItemId String
+  productionItem  ProductionItem    @relation(fields: [productionItemId], references: [id], onDelete: Cascade)
+  stationId       String
+  station         ProductionStation @relation(fields: [stationId], references: [id])
+  sequence        Int
+  status          String            @default("در انتظار")
+  quantityIn      Int?
+  quantityOut     Int?
+  quantityWaste   Int?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  operatorId      String?
+  notes           String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  history         ProductionHistory[]
+}
+
+model ProductionHistory {
+  id                      String                 @id @default(cuid())
+  productionOrderId       String?
+  productionOrder         ProductionOrder?       @relation(fields: [productionOrderId], references: [id])
+  productionItemId        String?
+  productionItem          ProductionItem?        @relation(fields: [productionItemId], references: [id])
+  productionItemStationId String?
+  productionItemStation   ProductionItemStation? @relation(fields: [productionItemStationId], references: [id])
+  stationId               String?
+  station                 ProductionStation?     @relation(fields: [stationId], references: [id])
+  action                  String
+  description             String?
+  oldStatus               String?
+  newStatus               String?
+  quantity                Int?
+  operatorId              String?
+  operatorName            String?
+  createdAt               DateTime               @default(now())
+}
+
+model Waste {
+  id               String         @id @default(cuid())
+  productionItemId String
+  productionItem   ProductionItem @relation(fields: [productionItemId], references: [id], onDelete: Cascade)
+  stationId        String?
+  quantity         Int
+  reason           String?
+  notes            String?
+  operatorId       String?
+  isReworked       Boolean        @default(false)
+  createdAt        DateTime       @default(now())
 }
