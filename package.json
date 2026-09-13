@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@fontsource/vazirmatn": "^5.3.0",
     "@hookform/resolvers": "^5.7.1",
     "@prisma/client": "^5.22.0",
     "clsx": "^2.1.1",
