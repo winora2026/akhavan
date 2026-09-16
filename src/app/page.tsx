@@ -6,8 +6,40 @@ import Link from "next/link"
 export default function HomePage() {
   const [showSalesMenu, setShowSalesMenu] = useState(false)
   const [showProductionMenu, setShowProductionMenu] = useState(false)
+  const [currentUser, setCurrentUser] = useState<{
+    displayName: string
+    role: string
+  } | null>(null)
   const salesRef = useRef<HTMLDivElement>(null)
   const productionRef = useRef<HTMLDivElement>(null)
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" })
+    } catch (e) {
+      console.error(e)
+    } finally {
+      window.location.href = "/login"
+    }
+  }
+
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const res = await fetch("/api/auth/me")
+        if (!res.ok) return
+        const data = await res.json()
+        if (data.user) {
+          setCurrentUser({
+            displayName: data.user.displayName,
+            role: data.user.role,
+          })
+        }
+      } catch (e) {
+        console.error(e)
+      }
+    })()
+  }, [])
 
   const menuItems = [
     {
@@ -61,6 +93,11 @@ export default function HomePage() {
       icon: "M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
     },
     {
+      title: "طراحی باکس",
+      href: "/box-design",
+      icon: "M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4",
+    },
+    {
       title: "لیست پیش‌فاکتورها",
       href: "/order",
       icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
@@ -72,46 +109,64 @@ export default function HomePage() {
     },
   ]
 
- const productionItems = [
-  {
-    title: "مدیریت ایستگاه‌ها",
-    href: "/production/stations",
-    icon: "M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10",
-  },
-  {
-    title: "صف تولید",
-    href: "/production/queue",
-    icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01",
-  },
-  {
-    title: "کارتابل ایستگاه",
-    href: "/production/station-queue",
-    icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
-  },
-  {
-    title: "داشبورد تولید",
-    href: "/production/dashboard",
-    icon: "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z",
-  },
-  {
-    title: "برنامه‌ریزی برش",
-    href: "/production/cutting",
-    icon: "M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z",
-  },
-]
+  const productionItems = [
+    {
+      title: "مدیریت ایستگاه‌ها",
+      href: "/production/stations",
+      icon: "M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10",
+    },
+    {
+      title: "مشاهده روند کاری",
+      href: "/production/queue",
+      icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01",
+    },
+    {
+      title: "کارتابل ایستگاه",
+      href: "/production/station-queue",
+      icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
+    },
+    {
+      title: "داشبورد تولید",
+      href: "/production/dashboard",
+      icon: "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z",
+    },
+    {
+      title: "برنامه‌ریزی برش",
+      href: "/production/cutting",
+      icon: "M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z",
+    },
+  ]
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (salesRef.current && !salesRef.current.contains(e.target as Node)) {
         setShowSalesMenu(false)
       }
-      if (productionRef.current && !productionRef.current.contains(e.target as Node)) {
+      if (
+        productionRef.current &&
+        !productionRef.current.contains(e.target as Node)
+      ) {
         setShowProductionMenu(false)
       }
     }
     document.addEventListener("mousedown", handleClickOutside)
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [])
+
+  const roleLabel = (role: string) => {
+    switch (role) {
+      case "sales":
+        return "فروش"
+      case "finance":
+        return "مالی"
+      case "production":
+        return "تولید"
+      case "admin":
+        return "مدیریت"
+      default:
+        return role
+    }
+  }
 
   return (
     <div
@@ -125,16 +180,25 @@ export default function HomePage() {
       }}
       dir="rtl"
     >
-      <link
-        href="https://cdn.jsdelivr.net/npm/vazirmatn@33.003/Vazirmatn-font-face.css"
-        rel="stylesheet"
-      />
-
       <div className="pointer-events-none fixed inset-0 bg-black/10" />
 
       <div className="relative z-10 min-h-screen flex flex-col">
-        <header className="pt-6 px-8 flex items-center justify-end">
-          <button className="text-base font-bold text-gray-700 hover:text-teal-700 transition px-3 py-1.5 rounded-lg hover:bg-white/40">
+        <header className="pt-6 px-8 flex items-center justify-between gap-3">
+          <div className="text-sm font-bold text-gray-700">
+            {currentUser ? (
+              <span>
+                {currentUser.displayName}
+                <span className="text-gray-500 font-semibold mr-2">
+                  ({roleLabel(currentUser.role)})
+                </span>
+              </span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="text-base font-bold text-gray-700 hover:text-teal-700 transition px-3 py-1.5 rounded-lg hover:bg-white/40"
+          >
             خروج
           </button>
         </header>
@@ -321,7 +385,12 @@ export default function HomePage() {
               className="flex items-center gap-2 hover:text-teal-700 transition"
             >
               <span>www.akhavanglass.com</span>
-              <svg className="w-5 h-5 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg
+                className="w-5 h-5 text-teal-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -336,7 +405,12 @@ export default function HomePage() {
               className="flex items-center gap-2 hover:text-teal-700 transition"
             >
               <span>02191005103</span>
-              <svg className="w-5 h-5 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg
+                className="w-5 h-5 text-teal-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -351,7 +425,12 @@ export default function HomePage() {
               className="flex items-center gap-2 hover:text-teal-700 transition"
             >
               <span>09129582600</span>
-              <svg className="w-5 h-5 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg
+                className="w-5 h-5 text-teal-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
