@@ -99,6 +99,13 @@ export async function POST(req: NextRequest) {
         ? mapImages[0].url
         : null)
 
+    // آرایه‌ی کامل فایل‌های نقشه (عکس/PDF) به‌صورت JSON ذخیره می‌شود
+    // تا هنگام ویرایش سفارش، همه‌ی فایل‌ها (نه فقط اولی) قابل بازیابی باشند
+    const resolvedMapImages =
+      Array.isArray(mapImages) && mapImages.length
+        ? JSON.stringify(mapImages)
+        : null
+
     const order = await prisma.order.create({
       data: {
         orderNumber: String(nextOrderNumber),
@@ -123,6 +130,7 @@ export async function POST(req: NextRequest) {
         isStop: false,
         status: "پیش‌فاکتور",
         mapImageUrl: resolvedMapImageUrl,
+        mapImages: resolvedMapImages,
         notes: notes || (productionLine ? `خط تولید: ${productionLine}` : null),
         items: {
           create: (items || []).map((item: any, index: number) => ({

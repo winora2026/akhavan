@@ -46,6 +46,7 @@ model Order {
   isStop                 Boolean   @default(false)
   status                 String    @default("ثبت‌شده")
   mapImageUrl            String?
+  mapImages              String?
   notes                  String?
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt

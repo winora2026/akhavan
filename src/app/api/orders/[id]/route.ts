@@ -23,6 +23,15 @@ export async function GET(
 
     const orderWithParsedServices = {
       ...order,
+      mapImages: (() => {
+        if (!order.mapImages) return []
+        try {
+          return JSON.parse(order.mapImages)
+        } catch (e) {
+          console.error(`mapImages نامعتبر برای سفارش ${order.id}:`, e)
+          return []
+        }
+      })(),
       items: order.items.map((item: any) => {
         let servicesData: any[] = []
         if (item.servicesData) {
@@ -77,6 +86,8 @@ export async function PUT(
       totalMeterage,
       items,
       notes,
+      mapImageUrl,
+      mapImages,
     } = body
 
     if (!customerName) {
@@ -108,6 +119,18 @@ export async function PUT(
 
     await prisma.orderItem.deleteMany({ where: { orderId: id } })
 
+    // اولویت: mapImageUrl مستقیم، وگرنه اولین فایل از mapImages
+    const resolvedMapImageUrl =
+      mapImageUrl ||
+      (Array.isArray(mapImages) && mapImages[0]?.url
+        ? mapImages[0].url
+        : null)
+
+    const resolvedMapImages =
+      Array.isArray(mapImages) && mapImages.length
+        ? JSON.stringify(mapImages)
+        : null
+
     const order = await prisma.order.update({
       where: { id },
       data: {
@@ -128,6 +151,8 @@ export async function PUT(
             ? parseFloat(discountPercent)
             : null,
         isOfficialInvoice: Boolean(isOfficialInvoice),
+        mapImageUrl: resolvedMapImageUrl,
+        mapImages: resolvedMapImages,
         notes: notes || (productionLine ? `خط تولید: ${productionLine}` : null),
         items: {
           create: (items || []).map((item: any, index: number) => ({
