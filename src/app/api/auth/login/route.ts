@@ -54,10 +54,11 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    res.cookies.set(COOKIE_NAME, token, {
+       res.cookies.set(COOKIE_NAME, token, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      // تا وقتی HTTPS ندارید false بماند
+      secure: false,
       path: "/",
       maxAge: 60 * 60 * 24 * 7,
     })
