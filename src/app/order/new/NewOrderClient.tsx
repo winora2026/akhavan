@@ -6,6 +6,7 @@ import DatePicker, { DateObject } from "react-multi-date-picker"
 import persian from "react-date-object/calendars/persian"
 import persian_fa from "react-date-object/locales/persian_fa"
 import customersSeedRaw from "../../customers/customers-seed.json"
+import productsSeedRaw from "../../products/products-seed.json"
 
 type ServiceItem = {
   id: number
@@ -22,6 +23,7 @@ type ServiceItem = {
 type OrderItem = {
   id: number
   productName: string
+  productCode: string
   installCode: string
   unit: string
   length: string
@@ -42,13 +44,6 @@ type MapImage = {
   url: string
   type: "image" | "pdf"
 }
-
-const productList = [
-  "شیشه سفید ۶ میل", "شیشه سفید ۸ میل", "شیشه سفید ۱۰ میل",
-  "شیشه برنز ۶ میل", "شیشه دودی ۶ میل",
-  "آینه سوپرکلیر ۶ میل", "آینه برنز 5 میل", "آینه دودی 5 میل",
-  "لاکوبل مشکی ۶ میل", "لاکوبل سفید ۶ میل",
-]
 
 const serviceCategories: Record<string, string[]> = {
   "تراش‌ها": ["تراش ۰.۷", "تراش ۱", "تراش ۱.۵", "تراش ۲", "تراش ۲.۵", "دو طول تراش ۱.۵", "یک طول + دو عرض تراش ۱.۵"],
@@ -120,6 +115,8 @@ const selectClass = inputClass
 const dateInputClass = `${inputClass} !h-[42px] !min-h-[42px] !box-border !py-2 !px-3 !text-sm !leading-normal`
 // کادر/ستونی که با کشیدن گوشه، عرضش به‌صورت دستی قابل تغییر است
 const resizableBoxClass = "resize-x overflow-auto"
+// همان کادر قابل‌تغییرِ عرض، ولی مخصوص تیتر ستون‌های جدول که باید وسط‌چین باشند
+const resizableHeaderClass = "resize-x overflow-auto text-center"
 
 const customersList = (customersSeedRaw as any[]).map((c: any) => {
   let name = ""
@@ -141,6 +138,38 @@ const customersList = (customersSeedRaw as any[]).map((c: any) => {
     code: c.code || "",
     name: name,
     group: c.group || "همکار",
+  }
+})
+
+// حروف عربی (ي، ك، ة) را به معادل فارسی تبدیل می‌کند، ارقام فارسی/عربی را
+// به لاتین تبدیل می‌کند، حروف نامرئی RTL را حذف و به حروف کوچک تبدیل می‌کند.
+// چون داده‌ی اکسل با حروف عربی نوشته شده ولی کیبورد فارسی حروف فارسی تولید
+// می‌کند، بدون این تبدیل جستجوهایی مثل "شیشه" هیچ نتیجه‌ای برنمی‌گرداند.
+const normalizeText = (value: string) => {
+  if (!value) return ""
+  return value
+    .replace(/[\u200c\u200f\u200e]/g, "") // نیم‌فاصله و کاراکترهای جهت‌ساز نامرئی
+    .replace(/ي/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/ة/g, "ه")
+    .replace(/[٠١٢٣٤٥٦٧٨٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d))) // ارقام عربی
+    .replace(/[۰۱۲۳۴۵۶۷۸۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d))) // ارقام فارسی
+    .toLowerCase()
+    .trim()
+}
+
+// لیست کالاها از فایل اکسل (کد، نام، واحد). نسخه‌ی نرمال‌شده‌ی نام و کد هر
+// کالا همین‌جا و فقط یک‌بار محاسبه می‌شود (نه در هر keystroke داخل جستجو)
+// تا تایپ کردن در فیلد جستجو کند نشود.
+const productsList = (productsSeedRaw as any[]).map((p: any) => {
+  const code = p.code || ""
+  const name = p.name || ""
+  return {
+    code,
+    name,
+    unit: p.unit || "",
+    normalizedCode: normalizeText(code),
+    normalizedName: normalizeText(name),
   }
 })
 
@@ -174,6 +203,7 @@ const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
 
   // فرم افزودن/ویرایش قلم — ترتیب: نام کالا، قیمت واحد، واحد، طول، عرض، تعداد، کد نصب، (قیمت کل نمایشی)
   const [newProduct, setNewProduct] = useState("")
+  const [newProductCode, setNewProductCode] = useState("")
   const [showProductDropdown, setShowProductDropdown] = useState(false)
   const [newInstallCode, setNewInstallCode] = useState("")
   const [newUnit, setNewUnit] = useState("مترمربع")
@@ -287,6 +317,7 @@ const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
           order.items.map((it: any) => ({
             id: Date.now() + Math.random(),
             productName: it.productName,
+            productCode: it.productCode || "",
             installCode: it.installationCode || "",
             unit: it.unit || "مترمربع",
             length: String(it.length ?? ""),
@@ -347,6 +378,7 @@ const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
           data.items.map((it: any, idx: number) => ({
             id: Date.now() + idx,
             productName: it.productName || "",
+            productCode: it.productCode || "",
             installCode: it.installCode || "",
             unit: it.unit || "مترمربع",
             length: it.length || "",
@@ -415,11 +447,44 @@ const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
     return customersList.filter((c) => c.name.toLowerCase().includes(q) || c.code.includes(q)).slice(0, 12)
   }, [customerSearch])
 
-  const filteredProducts = useMemo(() => {
-    const q = newProduct.trim().toLowerCase()
-    if (!q) return productList
-    return productList.filter((p) => p.toLowerCase().includes(q))
+  // جستجوی کالا با تأخیر کوتاه (debounce) اجرا می‌شود تا حین تایپ سریع،
+  // فیلترکردن ۷۵۰۰+ ردیف روی هر keystroke اجرا نشود و صفحه کند نشود
+  const [debouncedProductQuery, setDebouncedProductQuery] = useState("")
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedProductQuery(newProduct), 120)
+    return () => clearTimeout(t)
   }, [newProduct])
+
+  // جستجوی کالا از فایل اکسل: نام و کوئری هر دو نرمال می‌شوند (حروف عربی/فارسی
+  // و ارقام یکسان‌سازی می‌شوند)، سپس کوئری به کلمات تقسیم می‌شود و هر کالایی
+  // که همه‌ی کلمات را در نام یا کدش داشته باشد match می‌شود — مستقل از ترتیب
+  // کلمات، پس "6 میل" هم مثل "میل 6" کار می‌کند و همه‌ی شیشه/آینه‌های 6 میل را می‌آورد.
+  // اگر کل کوئری فقط رقم باشد، به‌عنوان جستجوی کد در نظر گرفته می‌شود و کدهایی
+  // که با همان رقم شروع می‌شوند اول لیست می‌آیند (برای رفع قاطی‌شدن کد و نام).
+  const filteredProducts = useMemo(() => {
+    const raw = debouncedProductQuery.trim()
+    if (!raw) return productsList.slice(0, 8)
+
+    const normalizedQuery = normalizeText(raw)
+    const tokens = normalizedQuery.split(/\s+/).filter(Boolean)
+    const isNumericQuery = /^[0-9]+$/.test(normalizedQuery)
+
+    const results = productsList.filter((p) =>
+      tokens.every(
+        (t) => p.normalizedName.includes(t) || p.normalizedCode.includes(t)
+      )
+    )
+
+    if (isNumericQuery) {
+      results.sort((a, b) => {
+        const aStarts = a.normalizedCode.startsWith(normalizedQuery) ? 0 : 1
+        const bStarts = b.normalizedCode.startsWith(normalizedQuery) ? 0 : 1
+        return aStarts - bStarts
+      })
+    }
+
+    return results.slice(0, 20)
+  }, [debouncedProductQuery])
 
   const filteredModalDescriptions = useMemo(() => {
     const q = modalDescriptionSearch.trim().toLowerCase()
@@ -602,6 +667,7 @@ const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
   const startEditItem = (item: OrderItem) => {
     setEditingItemId(item.id)
     setNewProduct(item.productName)
+    setNewProductCode(item.productCode || "")
     setNewInstallCode(item.installCode)
     setNewUnit(item.unit)
     setNewLength(item.length)
@@ -614,6 +680,7 @@ const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
   const cancelEditItem = () => {
     setEditingItemId(null)
     setNewProduct("")
+    setNewProductCode("")
     setNewInstallCode("")
     setNewLength("")
     setNewWidth("")
@@ -711,6 +778,7 @@ const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
           return {
             ...item,
             productName: newProduct,
+            productCode: newProductCode,
             installCode: newInstallCode,
             unit: newUnit,
             length: newLength,
@@ -730,6 +798,7 @@ const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
       setItems([...items, {
         id: Date.now(),
         productName: newProduct,
+        productCode: newProductCode,
         installCode: newInstallCode,
         unit: newUnit,
         length: newLength,
@@ -751,6 +820,7 @@ const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
         newItems.push({
           id: Date.now() + i,
           productName: newProduct,
+          productCode: newProductCode,
           installCode: newInstallCode,
           unit: newUnit,
           length: newLength,
@@ -1109,6 +1179,7 @@ const copyDescriptionToOthers = (sourceId: number) => {
     // ========== گروه‌بندی کالاهای یکسان برای حالت کلی ==========
     type GroupedItem = {
       productName: string
+      productCode: string
       length: string
       width: string
       quantity: number
@@ -1145,6 +1216,7 @@ const copyDescriptionToOthers = (sourceId: number) => {
       } else {
         groupMap.set(key, {
           productName: item.productName,
+          productCode: item.productCode,
           length: item.length,
           width: item.width,
           quantity: parseFloat(item.quantity) || 0,
@@ -1212,15 +1284,15 @@ const copyDescriptionToOthers = (sourceId: number) => {
             <table className="w-full border-collapse text-sm mb-5">
               <thead>
                 <tr className="bg-teal-700 text-white">
-                  <th className="border border-teal-600 p-2.5 text-right font-bold">ردیف</th>
-                  <th className="border border-teal-600 p-2.5 text-right font-bold">نام کالا</th>
+                  <th className="border border-teal-600 p-2.5 text-center font-bold">ردیف</th>
+                  <th className="border border-teal-600 p-2.5 text-center font-bold">نام کالا</th>
                   <th className="border border-teal-600 p-2.5 text-center font-bold">طول</th>
                   <th className="border border-teal-600 p-2.5 text-center font-bold">عرض</th>
                   <th className="border border-teal-600 p-2.5 text-center font-bold">تعداد</th>
                   <th className="border border-teal-600 p-2.5 text-center font-bold">متراژ</th>
                  <th className="border border-teal-600 p-2.5 text-center font-bold">قیمت واحد</th>
-                  <th className="border border-teal-600 p-2.5 text-left font-bold">قیمت کل</th>
-                  <th className="border border-teal-600 p-2.5 text-right font-bold">توضیحات</th>
+                  <th className="border border-teal-600 p-2.5 text-center font-bold">قیمت کل</th>
+                  <th className="border border-teal-600 p-2.5 text-center font-bold">توضیحات</th>
                 </tr>
               </thead>
               <tbody>
@@ -1234,7 +1306,12 @@ const copyDescriptionToOthers = (sourceId: number) => {
                       {/* سطر کالا */}
                       <tr className="hover:bg-teal-50/40">
                         <td className="border border-gray-300 p-2 text-center font-bold">{i + 1}</td>
-                        <td className="border border-gray-300 p-2 font-semibold">{item.productName}</td>
+                        <td className="border border-gray-300 p-2 font-semibold">
+                          {item.productCode && (
+                            <bdi className="text-xs text-teal-700 font-mono ml-1.5">{item.productCode}</bdi>
+                          )}
+                          <bdi>{item.productName}</bdi>
+                        </td>
                         <td className="border border-gray-300 p-2 text-center">{item.length}</td>
                         <td className="border border-gray-300 p-2 text-center">{item.width}</td>
                         <td className="border border-gray-300 p-2 text-center">{item.quantity}</td>
@@ -1334,11 +1411,11 @@ const copyDescriptionToOthers = (sourceId: number) => {
             <table className="w-full border-collapse text-sm mb-5">
               <thead>
                 <tr className="bg-teal-700 text-white">
-                  <th className="border border-teal-600 p-2.5 text-right font-bold">ردیف</th>
-                  <th className="border border-teal-600 p-2.5 text-right font-bold">شرح</th>
+                  <th className="border border-teal-600 p-2.5 text-center font-bold">ردیف</th>
+                  <th className="border border-teal-600 p-2.5 text-center font-bold">شرح</th>
                   <th className="border border-teal-600 p-2.5 text-center font-bold">تعداد</th>
                   <th className="border border-teal-600 p-2.5 text-center font-bold">متراژ</th>
-                  <th className="border border-teal-600 p-2.5 text-left font-bold">قیمت کل</th>
+                  <th className="border border-teal-600 p-2.5 text-center font-bold">قیمت کل</th>
                 </tr>
               </thead>
               <tbody>
@@ -1352,7 +1429,10 @@ const copyDescriptionToOthers = (sourceId: number) => {
                       <tr className="hover:bg-teal-50/40">
                         <td className="border border-gray-300 p-2 text-center font-bold">{i + 1}</td>
                         <td className="border border-gray-300 p-2 font-semibold">
-                          {g.productName}
+                          {g.productCode && (
+                            <bdi className="text-xs text-teal-700 font-mono ml-1.5">{g.productCode}</bdi>
+                          )}
+                          <bdi>{g.productName}</bdi>
                           {(g.length || g.width) && (
                             <span className="text-xs text-gray-500 mr-2">
                               ({g.length} × {g.width})
@@ -1524,8 +1604,8 @@ const copyDescriptionToOthers = (sourceId: number) => {
               className="w-full space-y-3 min-w-0"
               style={isLgScreen ? { flex: `0 0 ${formPanelWidth}%`, maxWidth: `${formPanelWidth}%` } : undefined}
             >
-             {/* اطلاعات سفارش */}
-<div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
+             {/* اطلاعات سفارش — relative z-50 تا دراپ‌داون مشتری روی کارت‌های بعدی بیفتد */}
+<div className="relative z-50 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
   <h2 className="mb-3 text-lg font-bold text-blue-950">اطلاعات سفارش</h2>
 
   {/* ردیف ۱: نام مشتری + شماره سفارش + شماره سفارش مشتری + گروه مشتری */}
@@ -1557,8 +1637,8 @@ const copyDescriptionToOthers = (sourceId: number) => {
                   onClick={() => selectCustomer(c)}
                   className="w-full text-right px-3 py-2 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50"
                 >
-                  <span className="text-teal-700 font-mono text-xs ml-2">{c.code}</span>
-                  {c.name}
+                  <bdi className="text-teal-700 font-mono text-xs ml-2">{c.code}</bdi>
+                  <bdi>{c.name}</bdi>
                   <span className="text-xs text-gray-500 mr-2">({c.group})</span>
                 </button>
               ))}
@@ -1774,8 +1854,8 @@ const copyDescriptionToOthers = (sourceId: number) => {
 </div>
 </div>
 
-              {/* افزودن / ویرایش قلم */}
-              <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
+              {/* افزودن / ویرایش قلم — relative z-40 تا دراپ‌داون کالا روی جدول اقلام بیفتد */}
+              <div className="relative z-40 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
                 <h2 className="mb-3 text-xl font-bold text-blue-950">
                   {editingItemId ? "ویرایش کالا" : "افزودن کالا جدید"}
                 </h2>
@@ -1788,6 +1868,7 @@ const copyDescriptionToOthers = (sourceId: number) => {
                       value={newProduct}
                       onChange={(e) => {
                         setNewProduct(e.target.value)
+                        setNewProductCode("")
                         setNewUnitPrice("")
                         setShowProductDropdown(true)
                       }}
@@ -1798,21 +1879,31 @@ const copyDescriptionToOthers = (sourceId: number) => {
                       autoComplete="off"
                     />
                     {showProductDropdown && filteredProducts.length > 0 && (
-                      <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-teal-200 bg-white shadow-2xl">
+                      <div className="absolute z-50 mt-1 w-full max-h-72 overflow-y-auto rounded-xl border border-teal-200 bg-white shadow-2xl">
                         {filteredProducts.map((p) => (
                           <button
-                            key={p}
+                            key={p.code || p.name}
                             type="button"
                             onClick={() => {
-                              setNewProduct(p)
+                              setNewProduct(p.name)
+                              setNewProductCode(p.code)
+                              setDebouncedProductQuery(p.name)
                               setNewUnitPrice("")
                               setShowProductDropdown(false)
                             }}
-                            className="w-full text-right px-4 py-2.5 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50"
+                            className="flex w-full items-center gap-2 text-right px-4 py-2 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50"
                           >
-                            {p}
+                            <bdi className="shrink-0 rounded-md bg-teal-50 px-1.5 py-0.5 text-teal-700 font-mono text-xs">
+                              {p.code}
+                            </bdi>
+                            <bdi className="truncate">{p.name}</bdi>
                           </button>
                         ))}
+                        {filteredProducts.length === 20 && (
+                          <p className="px-4 py-1.5 text-xs text-gray-400 border-t border-teal-50">
+                            فقط ۲۰ نتیجه اول نمایش داده می‌شود — برای دقیق‌تر شدن نتایج، کلمه‌ی بیشتری تایپ کنید
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1894,51 +1985,51 @@ const copyDescriptionToOthers = (sourceId: number) => {
                 </div>
               </div>
 
-              {/* جدول اقلام */}
+              {/* جدول اقلام — relative z-0 تا زیر دراپ‌داون‌های بالایی قرار بگیرد */}
               {items.length > 0 && (
-                <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/20 overflow-x-auto">
+                <div className="relative z-0 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/20 overflow-x-auto">
                   <p className="text-xs text-blue-700 mb-2">برای ویرایش روی هر ردیف کلیک کنید. عرض هر ستون از گوشه‌ی آن قابل تغییر دستی است.</p>
                   <table className="w-full text-sm text-blue-900 border-collapse">
                     <thead>
-                      <tr className="border-b border-teal-500/30 bg-teal-600 text-white text-right">
+                      <tr className="border-b border-teal-500/30 bg-teal-600 text-white text-center">
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableBoxClass} px-2.5 py-2.5`} style={{ minWidth: "3rem", maxWidth: "10rem" }}>ردیف</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "3rem", maxWidth: "10rem" }}>ردیف</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableBoxClass} px-2.5 py-2.5`} style={{ minWidth: "8rem", maxWidth: "20rem" }}>نام کالا</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "8rem", maxWidth: "20rem" }}>نام کالا</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableBoxClass} px-2.5 py-2.5`} style={{ minWidth: "5rem", maxWidth: "16rem" }}>کد نصب</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "5rem", maxWidth: "16rem" }}>کد نصب</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableBoxClass} px-2.5 py-2.5`} style={{ minWidth: "3.5rem", maxWidth: "10rem" }}>طول</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "3.5rem", maxWidth: "10rem" }}>طول</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableBoxClass} px-2.5 py-2.5`} style={{ minWidth: "3.5rem", maxWidth: "10rem" }}>عرض</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "3.5rem", maxWidth: "10rem" }}>عرض</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableBoxClass} px-2.5 py-2.5`} style={{ minWidth: "3.5rem", maxWidth: "10rem" }}>تعداد</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "3.5rem", maxWidth: "10rem" }}>تعداد</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableBoxClass} px-2.5 py-2.5`} style={{ minWidth: "5rem", maxWidth: "12rem" }}>متراژ</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "5rem", maxWidth: "12rem" }}>متراژ</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableBoxClass} px-2.5 py-2.5`} style={{ minWidth: "4rem", maxWidth: "12rem" }}>محیط</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "4rem", maxWidth: "12rem" }}>محیط</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableBoxClass} px-2.5 py-2.5`} style={{ minWidth: "6rem", maxWidth: "14rem" }}>قیمت واحد</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "6rem", maxWidth: "14rem" }}>قیمت واحد</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableBoxClass} px-2.5 py-2.5`} style={{ minWidth: "6rem", maxWidth: "14rem" }}>قیمت کل</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "6rem", maxWidth: "14rem" }}>قیمت کل</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableBoxClass} px-2.5 py-2.5`} style={{ minWidth: "12rem", maxWidth: "26rem" }}>خدمات</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "12rem", maxWidth: "26rem" }}>خدمات</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableBoxClass} px-2.5 py-2.5`} style={{ minWidth: "6rem", maxWidth: "20rem" }}>توضیحات</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "6rem", maxWidth: "20rem" }}>توضیحات</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableBoxClass} px-2.5 py-2.5`} style={{ minWidth: "7rem", maxWidth: "14rem" }}>عملیات</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "7rem", maxWidth: "14rem" }}>عملیات</div>
                         </th>
                       </tr>
                     </thead>
@@ -1956,7 +2047,14 @@ const copyDescriptionToOthers = (sourceId: number) => {
                           }}
                         >
                           <td className="p-2.5 text-center border border-teal-100">{index + 1}</td>
-                          <td className="p-2.5 font-bold border border-teal-100 truncate" title={item.productName}>{item.productName}</td>
+                          <td className="p-2.5 font-bold border border-teal-100 truncate" title={item.productName}>
+                            {item.productCode && (
+                              <bdi className="ml-1.5 inline-block rounded-md bg-teal-50 px-1.5 py-0.5 text-teal-700 font-mono text-xs font-bold">
+                                {item.productCode}
+                              </bdi>
+                            )}
+                            <bdi>{item.productName}</bdi>
+                          </td>
                           <td className="p-2.5 text-center border border-teal-100 truncate" title={item.installCode}>{item.installCode || "—"}</td>
                           <td className="p-2.5 text-center border border-teal-100">{item.length}</td>
                           <td className="p-2.5 text-center border border-teal-100">{item.width}</td>
@@ -2539,14 +2637,14 @@ const copyDescriptionToOthers = (sourceId: number) => {
                       </h4>
                       <table className="w-full text-base">
                         <thead>
-                          <tr className="bg-teal-100 text-right">
-                            <th className="p-3 font-bold">عنوان</th>
-                            <th className="p-3 font-bold">واحد</th>
-                            <th className="p-3 font-bold">تعداد</th>
-                            <th className="p-3 font-bold">تعداد واحد</th>
-                            <th className="p-3 font-bold">قیمت واحد</th>
-                            <th className="p-3 font-bold">قیمت کل</th>
-                            <th className="p-3 font-bold">حذف</th>
+                          <tr className="bg-teal-100 text-center">
+                            <th className="p-3 font-bold text-center">عنوان</th>
+                            <th className="p-3 font-bold text-center">واحد</th>
+                            <th className="p-3 font-bold text-center">تعداد</th>
+                            <th className="p-3 font-bold text-center">تعداد واحد</th>
+                            <th className="p-3 font-bold text-center">قیمت واحد</th>
+                            <th className="p-3 font-bold text-center">قیمت کل</th>
+                            <th className="p-3 font-bold text-center">حذف</th>
                           </tr>
                         </thead>
                         <tbody>
