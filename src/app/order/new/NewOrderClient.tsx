@@ -301,6 +301,25 @@ const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
             flagged: it.flagged || false,
           }))
         )
+
+        // بازیابی عکس‌ها/فایل‌های PDF نقشه‌ی ذخیره‌شده‌ی این سفارش (که در handleSave
+        // به صورت mapImages: [{url, name, type}] فرستاده شدند) تا در فرم ویرایش نمایش داده شوند
+        const savedMapImages: any[] =
+          Array.isArray(order.mapImages) && order.mapImages.length
+            ? order.mapImages
+            : order.mapImageUrl
+              ? [{ url: order.mapImageUrl, name: "نقشه", type: "image" }]
+              : []
+
+        setMapImages(
+          savedMapImages.map((img: any, idx: number) => ({
+            id: Date.now() + idx + Math.random(),
+            name: img.name || `فایل ${idx + 1}`,
+            url: img.url,
+            type: img.type === "pdf" || String(img.url || "").toLowerCase().endsWith(".pdf") ? "pdf" : "image",
+          }))
+        )
+
         setQuantityLocked(true)
         setMeterageLocked(true)
       } catch (err) {
@@ -763,31 +782,50 @@ lengthRef.current?.focus()
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, flagged: !item.flagged } : item)))
   }
 
-  const handleMapUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+   const handleMapUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
-    if (!files) return
-    Array.from(files).forEach((file) => {
-      const url = URL.createObjectURL(file)
-      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")
-      setMapImages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + Math.random(),
-          name: file.name,
-          url,
-          type: isPdf ? "pdf" : "image",
-        },
-      ])
-    })
-    e.target.value = ""
+    if (!files?.length) return
+
+    try {
+      for (const file of Array.from(files)) {
+        const form = new FormData()
+        form.append("file", file)
+
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          body: form,
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          alert(data.error || `خطا در آپلود ${file.name}`)
+          continue
+        }
+
+        const isPdf =
+          file.type === "application/pdf" ||
+          file.name.toLowerCase().endsWith(".pdf") ||
+          String(data.type || "").includes("pdf")
+
+        setMapImages((prev) => [
+          ...prev,
+          {
+            id: Date.now() + Math.random(),
+            name: data.name || file.name,
+            url: data.url, // آدرس دائمی روی سرور
+            type: isPdf ? "pdf" : "image",
+          },
+        ])
+      }
+    } catch (err) {
+      console.error(err)
+      alert("خطا در آپلود فایل")
+    } finally {
+      e.target.value = ""
+    }
   }
 
-  const removeMapImage = (id: number) => {
-    setMapImages((prev) => {
-      const img = prev.find((i) => i.id === id)
-      if (img) URL.revokeObjectURL(img.url)
-      return prev.filter((i) => i.id !== id)
-    })
+   const removeMapImage = (id: number) => {
+    setMapImages((prev) => prev.filter((i) => i.id !== id))
   }
 
   const openServices = (id: number) => {
@@ -993,7 +1031,7 @@ const copyDescriptionToOthers = (sourceId: number) => {
       return
     }
     try {
-      const payload = {
+            const payload = {
         customerName,
         customerGroup,
         productionLine,
@@ -1012,6 +1050,13 @@ const copyDescriptionToOthers = (sourceId: number) => {
         totalMeterage: manualTotalMeterage || calculatedTotalMeterage,
         items,
         notes: "",
+        // نقشه / فایل‌ها
+        mapImageUrl: mapImages[0]?.url || null,
+        mapImages: mapImages.map((m) => ({
+          url: m.url,
+          name: m.name,
+          type: m.type,
+        })),
       }
 
       const response = await fetch(
@@ -1121,7 +1166,7 @@ const copyDescriptionToOthers = (sourceId: number) => {
       <div
         id="invoice-print-area"
         ref={invoiceRef}
-        className="relative overflow-hidden print:overflow-visible bg-white"
+        className="relative overflow-hidden print:overflow-visible print:min-h-0 bg-white"
         dir="rtl"
         style={{
           fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif",
@@ -1130,9 +1175,9 @@ const copyDescriptionToOthers = (sourceId: number) => {
           printColorAdjust: "exact",
         } as React.CSSProperties}
       >
-        {/* هدر تصویری */}
+        {/* هدر تصویری — موقع چاپ روی هر صفحه تکرار می‌شود (position: fixed) */}
         <div
-          className="absolute top-0 left-0 right-0 z-0"
+          className="invoice-header absolute top-0 left-0 right-0 z-0"
           style={{
             height: "230px",
             backgroundImage: "url('https://i.ibb.co/nqFvCvnR/DBBFE0-A3-2036-4200-B276-0-B652-BA49849.png')",
@@ -1419,9 +1464,9 @@ const copyDescriptionToOthers = (sourceId: number) => {
           </div>
         </div>
 
-        {/* فوتر تصویری */}
+        {/* فوتر تصویری — موقع چاپ روی هر صفحه تکرار می‌شود (position: fixed) */}
         <div
-          className="absolute bottom-0 left-0 right-0 z-10"
+          className="invoice-footer absolute bottom-0 left-0 right-0 z-10"
           style={{
             height: "210px",
             backgroundImage: "url('https://i.ibb.co/nqFvCvnR/DBBFE0-A3-2036-4200-B276-0-B652-BA49849.png')",
@@ -2692,6 +2737,7 @@ const copyDescriptionToOthers = (sourceId: number) => {
       <style jsx global>{`
         @media print {
           @page {
+            size: A4;
             margin: 0;
           }
           html, body {
@@ -2706,6 +2752,18 @@ const copyDescriptionToOthers = (sourceId: number) => {
           }
           tr {
             page-break-inside: avoid;
+          }
+          .invoice-header {
+            position: fixed !important;
+            top: 0;
+            left: 0;
+            right: 0;
+          }
+          .invoice-footer {
+            position: fixed !important;
+            bottom: 0;
+            left: 0;
+            right: 0;
           }
         }
       `}</style>

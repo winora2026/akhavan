@@ -9,7 +9,7 @@ import {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const username = String(body.username || "").trim().toLowerCase()
+        const username = String(body.username || "").trim()
     const password = String(body.password || "")
 
     if (!username || !password) {

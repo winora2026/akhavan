@@ -47,6 +47,8 @@ export async function POST(req: NextRequest) {
       totalMeterage,
       items,
       notes,
+      mapImageUrl,
+      mapImages,
     } = body
 
     if (!customerName) {
@@ -90,6 +92,13 @@ export async function POST(req: NextRequest) {
     })
     const nextCustomerOrderNumber = String(customerOrdersCount + 1)
 
+    // اولویت: mapImageUrl مستقیم، وگرنه اولین فایل از mapImages
+    const resolvedMapImageUrl =
+      mapImageUrl ||
+      (Array.isArray(mapImages) && mapImages[0]?.url
+        ? mapImages[0].url
+        : null)
+
     const order = await prisma.order.create({
       data: {
         orderNumber: String(nextOrderNumber),
@@ -113,6 +122,7 @@ export async function POST(req: NextRequest) {
         isOfficialInvoice: Boolean(isOfficialInvoice),
         isStop: false,
         status: "پیش‌فاکتور",
+        mapImageUrl: resolvedMapImageUrl,
         notes: notes || (productionLine ? `خط تولید: ${productionLine}` : null),
         items: {
           create: (items || []).map((item: any, index: number) => ({
@@ -189,7 +199,6 @@ export async function PATCH(req: NextRequest) {
       },
     })
 
-    // اگر به فاکتور تبدیل شد → خودکار ورود به تولید
     let productionOrder = null
     if (status === "فاکتور") {
       const existing = await prisma.productionOrder.findFirst({
@@ -197,7 +206,6 @@ export async function PATCH(req: NextRequest) {
       })
 
       if (!existing) {
-        // ساخت Production Order با همان منطق ارسال به تولید
         const res = await fetch(
           `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/production/orders`,
           {
@@ -207,12 +215,7 @@ export async function PATCH(req: NextRequest) {
           }
         )
 
-        // اگر fetch داخلی مشکل داشت، مستقیم می‌سازیم
-        if (!res.ok) {
-          // fallback: صدا زدن منطق مستقیم بهتر است
-          // برای پایداری، همان POST را از داخل تکرار نمی‌کنیم؛
-          // کاربر می‌تواند از API production استفاده کند
-        } else {
+        if (res.ok) {
           productionOrder = await res.json()
         }
       }
