@@ -41,6 +41,7 @@ type ProductionOrderDetail = {
   createdAt: string
   startedAt: string | null
   completedAt: string | null
+  totalMeterage?: number | null
   order: {
     id: string
     orderNumber: string
@@ -66,14 +67,6 @@ export default function ProductionOrderDetailPage() {
 
   const [data, setData] = useState<ProductionOrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
-  const [actionLoading, setActionLoading] = useState<string | null>(null)
-
-  const [showCompleteModal, setShowCompleteModal] = useState(false)
-  const [selectedStation, setSelectedStation] = useState<ItemStation | null>(null)
-  const [quantityOut, setQuantityOut] = useState(1)
-  const [quantityWaste, setQuantityWaste] = useState(0)
-  const [completeNotes, setCompleteNotes] = useState("")
-  const [operatorName, setOperatorName] = useState("")
 
   useEffect(() => {
     if (id) fetchDetail()
@@ -91,72 +84,6 @@ export default function ProductionOrderDetailPage() {
       alert("خطا در بارگذاری جزئیات")
     } finally {
       setLoading(false)
-    }
-  }
-
-  const startStation = async (stationRow: ItemStation) => {
-    if (!confirm(`شروع کار در ایستگاه «${stationRow.station.name}»؟`)) return
-
-    try {
-      setActionLoading(stationRow.id)
-      const res = await fetch(`/api/production/item-stations/${stationRow.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "start",
-          operatorName: operatorName || undefined,
-        }),
-      })
-      const json = await res.json()
-      if (!res.ok) {
-        alert(json.error || "خطا در شروع")
-        return
-      }
-      await fetchDetail()
-    } catch (error) {
-      console.error(error)
-      alert("خطا در ارتباط با سرور")
-    } finally {
-      setActionLoading(null)
-    }
-  }
-
-  const openCompleteModal = (stationRow: ItemStation) => {
-    setSelectedStation(stationRow)
-    setQuantityOut(stationRow.quantityIn || 1)
-    setQuantityWaste(0)
-    setCompleteNotes("")
-    setShowCompleteModal(true)
-  }
-
-  const completeStation = async () => {
-    if (!selectedStation) return
-
-    try {
-      setActionLoading(selectedStation.id)
-      const res = await fetch(`/api/production/item-stations/${selectedStation.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "complete",
-          quantityOut,
-          quantityWaste,
-          notes: completeNotes || undefined,
-          operatorName: operatorName || undefined,
-        }),
-      })
-      const json = await res.json()
-      if (!res.ok) {
-        alert(json.error || "خطا در تکمیل")
-        return
-      }
-      setShowCompleteModal(false)
-      await fetchDetail()
-    } catch (error) {
-      console.error(error)
-      alert("خطا در ارتباط با سرور")
-    } finally {
-      setActionLoading(null)
     }
   }
 
@@ -186,6 +113,102 @@ export default function ProductionOrderDetailPage() {
     }
   }
 
+  // پیدا کردن آخرین ایستگاه یک قلم
+  const getLastStation = (stations: ItemStation[]) => {
+    if (!stations || stations.length === 0) {
+      return { name: "—", status: "—", sequence: 0 }
+    }
+    const sorted = [...stations].sort((a, b) => a.sequence - b.sequence)
+    const activeOrDone = sorted.filter((s) => s.status !== "در انتظار")
+    if (activeOrDone.length > 0) {
+      const last = activeOrDone[activeOrDone.length - 1]
+      return {
+        name: last.station.name,
+        status: last.status,
+        sequence: last.sequence,
+      }
+    }
+    return {
+      name: sorted[0].station.name,
+      status: sorted[0].status,
+      sequence: sorted[0].sequence,
+    }
+  }
+
+  // ساخت مسیر خلاصه ایستگاه‌ها
+  const getStationPath = (stations: ItemStation[]) => {
+    if (!stations || stations.length === 0) return "—"
+    const sorted = [...stations].sort((a, b) => a.sequence - b.sequence)
+
+    return sorted.map((s, idx) => {
+      let icon = ""
+      let className = "text-gray-500"
+
+      if (s.status === "تکمیل شده" || s.status === "تکمیل‌شده") {
+        icon = "✓"
+        className = "text-green-700 font-bold"
+      } else if (s.status === "در حال انجام" || s.status === "در حال تولید") {
+        icon = "●"
+        className = "text-blue-700 font-bold"
+      } else {
+        icon = "○"
+        className = "text-gray-400"
+      }
+
+      const isLast = idx === sorted.length - 1
+      return (
+        <span key={s.id} className={className}>
+          {s.station.name} {icon}
+          {!isLast && <span className="text-gray-400 mx-1">→</span>}
+        </span>
+      )
+    })
+  }
+
+  // تشخیص وضعیت خروج (چون فیلد نداریم)
+  const getExitStatus = (stations: ItemStation[]) => {
+    if (!stations || stations.length === 0) return { text: "خارج نشده", color: "bg-gray-100 text-gray-700" }
+
+    const last = getLastStation(stations)
+    const isWarehouse =
+      last.name.includes("انبار") ||
+      last.name.includes("محصول") ||
+      last.name.toLowerCase().includes("warehouse")
+
+    const isCompleted =
+      last.status === "تکمیل شده" || last.status === "تکمیل‌شده"
+
+    if (isWarehouse && isCompleted) {
+      return { text: "آماده بارگیری", color: "bg-emerald-100 text-emerald-800" }
+    }
+
+    return { text: "خارج نشده", color: "bg-gray-100 text-gray-700" }
+  }
+
+  // آخرین ایستگاه کلی سفارش (بیشترین پیشرفت)
+  const getOverallLastStation = () => {
+    if (!data?.items?.length) return { name: "—", status: "—" }
+
+    let best = { name: "—", status: "—", sequence: -1 }
+
+    data.items.forEach((item) => {
+      const last = getLastStation(item.stations || [])
+      if (last.sequence > best.sequence) {
+        best = last
+      }
+    })
+
+    return best
+  }
+
+  // متراژ کل
+  const getTotalMeterage = () => {
+    if (data?.totalMeterage != null) return data.totalMeterage
+    if (!data?.items?.length) return null
+    const sum = data.items.reduce((acc, item) => acc + (item.meterage || 0), 0)
+    return sum > 0 ? sum : null
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center" dir="rtl">
@@ -201,6 +224,15 @@ export default function ProductionOrderDetailPage() {
       </div>
     )
   }
+
+  const overallLast = getOverallLastStation()
+  const totalMeterage = getTotalMeterage()
+  const itemsCount = data.items?.length || 0
+
+  // وضعیت خروج کلی (اگر همه قلم‌ها آماده بارگیری باشن)
+  const allReadyForLoading =
+    data.items.length > 0 &&
+    data.items.every((item) => getExitStatus(item.stations || []).text === "آماده بارگیری")
 
   return (
     <div
@@ -218,215 +250,168 @@ export default function ProductionOrderDetailPage() {
       />
       <div className="pointer-events-none fixed inset-0 bg-black/5" />
 
-      <div className="relative z-10 max-w-6xl mx-auto">
+      <div className="relative z-10 max-w-7xl mx-auto">
         {/* هدر */}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
           <div>
             <h1 className="text-2xl font-bold text-blue-950">جزئیات سفارش تولید</h1>
             <p className="text-lg font-bold text-teal-700 mt-1">
-              سفارش {data.order?.orderNumber}
+              سفارش {data.order?.orderNumber} — {data.order?.customer?.name}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <input
-              type="text"
-              value={operatorName}
-              onChange={(e) => setOperatorName(e.target.value)}
-              placeholder="نام اپراتور (اختیاری)"
-              className="rounded-xl border border-teal-500/30 bg-white/60 px-3 py-2 text-sm font-semibold text-blue-950"
-            />
+            <Link
+              href="/production/workflow"
+              className="rounded-xl border border-teal-500/40 bg-white/40 hover:bg-white/60 px-5 py-2.5 text-blue-900 font-bold transition"
+            >
+              مشاهده روند کاری
+            </Link>
             <Link
               href="/production/queue"
               className="rounded-xl border border-teal-500/40 bg-white/40 hover:bg-white/60 px-5 py-2.5 text-blue-900 font-bold transition"
             >
-              بازگشت به صف
+              بازگشت
             </Link>
           </div>
         </div>
 
-        {/* اطلاعات کلی */}
-        <div className="mb-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
-            <h2 className="text-lg font-bold text-blue-950 mb-4">اطلاعات سفارش</h2>
-            <div className="space-y-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-blue-700">شماره سفارش:</span>
-                <span className="font-bold">{data.order?.orderNumber}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-blue-700">مشتری:</span>
-                <span className="font-bold">{data.order?.customer?.name}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-blue-700">اولویت:</span>
-                <span className="font-bold">{data.priority}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-blue-700">وضعیت:</span>
-                <span
-                  className={`rounded-full px-3 py-1 text-xs font-bold ${getStatusColor(
-                    data.status
-                  )}`}
-                >
-                  {data.status}
-                </span>
-              </div>
-            </div>
+        {/* کارت‌های خلاصه */}
+        <div className="mb-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="rounded-xl bg-teal-500/10 backdrop-blur-2xl p-4 border border-teal-500/20 text-center">
+            <p className="text-xs text-blue-700 mb-1">شماره سفارش</p>
+            <p className="font-bold text-blue-950 text-lg">{data.order?.orderNumber}</p>
           </div>
 
-          <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
-            <h2 className="text-lg font-bold text-blue-950 mb-4">تاریخ‌ها</h2>
-            <div className="space-y-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-blue-700">ورود به تولید:</span>
-                <span className="font-bold">{formatDate(data.createdAt)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-blue-700">تاریخ سفارش فروش:</span>
-                <span className="font-bold">{formatDate(data.order?.orderDate)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-blue-700">تاریخ تحویل:</span>
-                <span className="font-bold">{formatDate(data.order?.deliveryDate)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-blue-700">شروع تولید:</span>
-                <span className="font-bold">{formatDate(data.startedAt)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-blue-700">پایان تولید:</span>
-                <span className="font-bold">{formatDate(data.completedAt)}</span>
-              </div>
-            </div>
+          <div className="rounded-xl bg-teal-500/10 backdrop-blur-2xl p-4 border border-teal-500/20 text-center">
+            <p className="text-xs text-blue-700 mb-1">تعداد اقلام</p>
+            <p className="font-bold text-blue-950 text-lg">{itemsCount}</p>
+          </div>
+
+          <div className="rounded-xl bg-teal-500/10 backdrop-blur-2xl p-4 border border-teal-500/20 text-center">
+            <p className="text-xs text-blue-700 mb-1">متراژ کل</p>
+            <p className="font-bold text-blue-950 text-lg">
+              {totalMeterage != null ? totalMeterage.toLocaleString("fa-IR") : "—"}
+            </p>
+          </div>
+
+          <div className="rounded-xl bg-teal-500/10 backdrop-blur-2xl p-4 border border-teal-500/20 text-center">
+            <p className="text-xs text-blue-700 mb-1">وضعیت سفارش</p>
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-bold ${getStatusColor(
+                data.status
+              )}`}
+            >
+              {data.status}
+            </span>
+          </div>
+
+          <div className="rounded-xl bg-teal-500/10 backdrop-blur-2xl p-4 border border-teal-500/20 text-center">
+            <p className="text-xs text-blue-700 mb-1">آخرین ایستگاه</p>
+            <p className="font-bold text-blue-950 text-sm">{overallLast.name}</p>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-bold mt-1 inline-block ${getStatusColor(
+                overallLast.status
+              )}`}
+            >
+              {overallLast.status}
+            </span>
+          </div>
+
+          <div className="rounded-xl bg-teal-500/10 backdrop-blur-2xl p-4 border border-teal-500/20 text-center">
+            <p className="text-xs text-blue-700 mb-1">وضعیت خروج</p>
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-bold ${
+                allReadyForLoading
+                  ? "bg-emerald-100 text-emerald-800"
+                  : "bg-gray-100 text-gray-700"
+              }`}
+            >
+              {allReadyForLoading ? "آماده بارگیری" : "خارج نشده"}
+            </span>
           </div>
         </div>
 
-        {/* اقلام + عملیات ایستگاه */}
-        <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
-          <h2 className="text-lg font-bold text-blue-950 mb-4">اقلام و مسیر تولید</h2>
+        {/* جدول اقلام */}
+        <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-x-auto">
+          <h2 className="text-lg font-bold text-blue-950 mb-4 px-1">اقلام و مسیر تولید</h2>
 
           {data.items.length === 0 ? (
-            <p className="text-center text-blue-700 py-8">اقلامی وجود ندارد</p>
+            <p className="text-center text-blue-700 py-10">اقلامی وجود ندارد</p>
           ) : (
-            <div className="space-y-5">
-              {data.items.map((item, index) => (
-                <div
-                  key={item.id}
-                  className="rounded-xl bg-white/40 border border-teal-500/20 p-4"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-                    <div className="flex items-center gap-3">
-                      <span className="w-8 h-8 rounded-full bg-teal-500 text-white flex items-center justify-center font-bold text-sm">
-                        {index + 1}
-                      </span>
-                      <div>
-                        <p className="font-bold text-blue-950">{item.productName}</p>
-                        <p className="text-xs text-blue-700">
-                          {item.length && item.width
-                            ? `${item.length} × ${item.width} mm`
-                            : "—"}
-                          {item.meterage ? ` | متراژ: ${item.meterage}` : ""}
-                          {` | تعداد: ${item.quantity}`}
-                        </p>
-                        {item.barcode && (
-                          <p className="text-xs text-teal-800 font-bold mt-1">
-                            بارکد: {item.barcode}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <span
-                      className={`rounded-full px-3 py-1 text-xs font-bold ${getStatusColor(
-                        item.status
-                      )}`}
-                    >
-                      {item.status}
-                    </span>
-                  </div>
+            <table className="w-full text-sm text-blue-900 border-collapse">
+              <thead>
+                <tr className="border-b border-teal-500/30 bg-teal-500/15 text-right">
+                  <th className="p-3 font-bold text-center">ردیف</th>
+                  <th className="p-3 font-bold">نام کالا</th>
+                  <th className="p-3 font-bold text-center">تعداد</th>
+                  <th className="p-3 font-bold text-center">طول</th>
+                  <th className="p-3 font-bold text-center">عرض</th>
+                  <th className="p-3 font-bold text-center">متراژ</th>
+                  <th className="p-3 font-bold text-center">بارکد</th>
+                  <th className="p-3 font-bold">مسیر ایستگاه‌ها</th>
+                  <th className="p-3 font-bold text-center">آخرین ایستگاه</th>
+                  <th className="p-3 font-bold text-center">وضعیت خروج</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.items.map((item, index) => {
+                  const last = getLastStation(item.stations || [])
+                  const exit = getExitStatus(item.stations || [])
 
-                  {item.stations && item.stations.length > 0 ? (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b border-teal-500/20 text-right text-blue-800">
-                            <th className="p-2 font-bold text-center">ترتیب</th>
-                            <th className="p-2 font-bold">ایستگاه</th>
-                            <th className="p-2 font-bold text-center">وضعیت</th>
-                            <th className="p-2 font-bold text-center">ورودی</th>
-                            <th className="p-2 font-bold text-center">خروجی</th>
-                            <th className="p-2 font-bold text-center">ضایعات</th>
-                            <th className="p-2 font-bold text-center">عملیات</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {item.stations
-                            .sort((a, b) => a.sequence - b.sequence)
-                            .map((s) => (
-                              <tr key={s.id} className="border-b border-teal-500/10">
-                                <td className="p-2 text-center font-bold">{s.sequence}</td>
-                                <td className="p-2 font-bold">{s.station.name}</td>
-                                <td className="p-2 text-center">
-                                  <span
-                                    className={`rounded-full px-2 py-1 text-xs font-bold ${getStatusColor(
-                                      s.status
-                                    )}`}
-                                  >
-                                    {s.status}
-                                  </span>
-                                </td>
-                                <td className="p-2 text-center">{s.quantityIn ?? "—"}</td>
-                                <td className="p-2 text-center">{s.quantityOut ?? "—"}</td>
-                                <td className="p-2 text-center">{s.quantityWaste ?? "—"}</td>
-                                <td className="p-2 text-center">
-                                  <div className="flex justify-center gap-2">
-                                    {s.status === "در انتظار" && (
-                                      <button
-                                        onClick={() => startStation(s)}
-                                        disabled={actionLoading === s.id}
-                                        className="rounded-lg bg-blue-500 hover:bg-blue-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50"
-                                      >
-                                        {actionLoading === s.id ? "..." : "شروع"}
-                                      </button>
-                                    )}
-                                    {(s.status === "در انتظار" ||
-                                      s.status === "در حال انجام") && (
-                                      <button
-                                        onClick={() => openCompleteModal(s)}
-                                        disabled={actionLoading === s.id}
-                                        className="rounded-lg bg-teal-500 hover:bg-teal-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50"
-                                      >
-                                        پایان
-                                      </button>
-                                    )}
-                                    {s.status === "تکمیل شده" && (
-                                      <span className="text-xs text-green-700 font-bold">
-                                        انجام شد
-                                      </span>
-                                    )}
-                                  </div>
-                                </td>
-                              </tr>
-                            ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p className="text-xs text-orange-600 font-semibold">
-                      مسیر ایستگاه تعریف نشده
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
+                  return (
+                    <tr
+                      key={item.id}
+                      className="border-b border-teal-500/10 bg-white/30 hover:bg-teal-400/20 transition"
+                    >
+                      <td className="p-3 text-center font-bold">{index + 1}</td>
+                      <td className="p-3 font-bold">{item.productName}</td>
+                      <td className="p-3 text-center font-semibold">{item.quantity}</td>
+                      <td className="p-3 text-center">
+                        {item.length != null ? item.length : "—"}
+                      </td>
+                      <td className="p-3 text-center">
+                        {item.width != null ? item.width : "—"}
+                      </td>
+                      <td className="p-3 text-center">
+                        {item.meterage != null ? item.meterage : "—"}
+                      </td>
+                      <td className="p-3 text-center text-teal-800 font-mono text-xs">
+                        {item.barcode || "—"}
+                      </td>
+                      <td className="p-3 text-xs leading-relaxed max-w-xs">
+                        <div className="flex flex-wrap items-center gap-y-1">
+                          {getStationPath(item.stations || [])}
+                        </div>
+                      </td>
+                      <td className="p-3 text-center">
+                        <div className="font-semibold">{last.name}</div>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-bold mt-1 inline-block ${getStatusColor(
+                            last.status
+                          )}`}
+                        >
+                          {last.status}
+                        </span>
+                      </td>
+                      <td className="p-3 text-center">
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-bold ${exit.color}`}
+                        >
+                          {exit.text}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           )}
         </div>
 
         {/* تاریخچه */}
-        <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
-          <h2 className="text-lg font-bold text-blue-950 mb-4">تاریخچه عملیات</h2>
-          {data.history.length === 0 ? (
-            <p className="text-center text-blue-700 py-6">تاریخچه‌ای ثبت نشده</p>
-          ) : (
+        {data.history && data.history.length > 0 && (
+          <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
+            <h2 className="text-lg font-bold text-blue-950 mb-4">تاریخچه عملیات</h2>
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {data.history.map((h) => (
                 <div
@@ -445,77 +430,9 @@ export default function ProductionOrderDetailPage() {
                 </div>
               ))}
             </div>
-          )}
-        </div>
-      </div>
-
-      {/* مودال پایان کار */}
-      {showCompleteModal && selectedStation && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl" dir="rtl">
-            <h2 className="text-xl font-bold text-blue-950 mb-2">پایان کار ایستگاه</h2>
-            <p className="text-sm text-blue-700 mb-4 font-bold">
-              {selectedStation.station.name}
-            </p>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-bold text-blue-900 mb-1">
-                  تعداد سالم خروجی
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  value={quantityOut}
-                  onChange={(e) => setQuantityOut(Number(e.target.value))}
-                  className="w-full rounded-xl border border-teal-500/30 px-4 py-2.5 focus:border-teal-500 focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-bold text-blue-900 mb-1">
-                  تعداد ضایعات
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  value={quantityWaste}
-                  onChange={(e) => setQuantityWaste(Number(e.target.value))}
-                  className="w-full rounded-xl border border-teal-500/30 px-4 py-2.5 focus:border-teal-500 focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-bold text-blue-900 mb-1">
-                  توضیحات / علت ضایعات
-                </label>
-                <textarea
-                  value={completeNotes}
-                  onChange={(e) => setCompleteNotes(e.target.value)}
-                  rows={2}
-                  className="w-full rounded-xl border border-teal-500/30 px-4 py-2.5 focus:border-teal-500 focus:outline-none"
-                />
-              </div>
-            </div>
-
-            <div className="mt-6 flex gap-3 justify-end">
-              <button
-                onClick={() => setShowCompleteModal(false)}
-                className="rounded-xl border border-gray-300 px-5 py-2.5 font-bold text-gray-700 hover:bg-gray-50"
-              >
-                انصراف
-              </button>
-              <button
-                onClick={completeStation}
-                disabled={actionLoading === selectedStation.id}
-                className="rounded-xl bg-teal-500 hover:bg-teal-600 px-5 py-2.5 font-bold text-white disabled:opacity-50"
-              >
-                {actionLoading === selectedStation.id
-                  ? "در حال ثبت..."
-                  : "ثبت پایان کار"}
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
