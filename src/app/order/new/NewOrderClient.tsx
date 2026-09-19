@@ -1655,7 +1655,7 @@ const copyDescriptionToOthers = (sourceId: number) => {
 
   {/* ردیف ۱: نام مشتری + شماره سفارش + شماره سفارش مشتری + گروه مشتری */}
   <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-2.5">
-    <div className="relative" onClick={(e) => e.stopPropagation()}>
+    <div className="relative min-w-[180px]" onClick={(e) => e.stopPropagation()}>
       <label className={labelClass}>نام مشتری</label>
       <div className="flex gap-1.5">
         <div className="relative flex-1">
@@ -1905,7 +1905,7 @@ const copyDescriptionToOthers = (sourceId: number) => {
                   {editingItemId ? "ویرایش کالا" : "افزودن کالا جدید"}
                 </h2>
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-2 items-end">
-                  <div className="lg:col-span-2 relative" onClick={(e) => e.stopPropagation()}>
+                  <div className="lg:col-span-2 relative min-w-[220px]" onClick={(e) => e.stopPropagation()}>
                     <label className={labelClass}>نام کالا</label>
                     <input
                       ref={productRef}
