@@ -7,6 +7,7 @@ import persian from "react-date-object/calendars/persian"
 import persian_fa from "react-date-object/locales/persian_fa"
 import customersSeedRaw from "../../customers/customers-seed.json"
 import productsSeedRaw from "../../products/products-seed.json"
+import servicesSeedRaw from "../../services/services-seed.json"
 
 type ServiceItem = {
   id: number
@@ -43,14 +44,6 @@ type MapImage = {
   name: string
   url: string
   type: "image" | "pdf"
-}
-
-const serviceCategories: Record<string, string[]> = {
-  "تراش‌ها": ["تراش ۰.۷", "تراش ۱", "تراش ۱.۵", "تراش ۲", "تراش ۲.۵", "دو طول تراش ۱.۵", "یک طول + دو عرض تراش ۱.۵"],
-  "اینگروینگ": ["اینگروینگ ۱", "اینگروینگ ۲"],
-  "ماشین‌کاری": ["CNC", "UV", "سندبلاست", "دیاموند", "MDF"],
-  "اجرت‌ها": ["کرایه ","اجرت اندازه‌گیری", "چسب", "اجرت برش", "اجرت نصب", "هزینه بسته‌بندی"],
-  "قاب و یراق": ["قاب چوبی", "قاب فلزی", "لول معمولی", "فیتینگ"],
 }
 
 const serviceUnits = ["مترمربع", "مترطول", "عددی", "درصد", "محیط", "ابعاد دایره", "چند طول چند عرض"]
@@ -172,6 +165,55 @@ const productsList = (productsSeedRaw as any[]).map((p: any) => {
     normalizedName: normalizeText(name),
   }
 })
+
+// لیست خدمات از فایل seed (کد، نام، واحد) — نسخه‌ی نرمال‌شده‌ی نام و کد هم
+// همین‌جا محاسبه می‌شود تا جستجوی داخل مودال خدمات کند نشود.
+const servicesList = (servicesSeedRaw as any[]).map((s: any) => {
+  const code = s.code || ""
+  const name = s.name || ""
+  return {
+    code,
+    name,
+    unit: s.unit || "",
+    normalizedCode: normalizeText(code),
+    normalizedName: normalizeText(name),
+  }
+})
+
+// دسته‌بندی خودکار هر خدمت بر اساس کلیدواژه‌های موجود در نامش — همان پنج
+// دسته‌ای که قبلاً به‌صورت دستی نگه‌داری می‌شدند، بعلاوه‌ی دسته‌ی «سایر»
+// برای خدماتی که در هیچ‌کدام جا نمی‌گیرند.
+const categorizeService = (name: string): string => {
+  const n = name.toLowerCase()
+  if (n.includes("تراش")) return "تراش‌ها"
+  if (n.includes("اینگروینگ")) return "اینگروینگ"
+  if (n.includes("cnc") || n.includes("uv") || n.includes("سندبلاست") || n.includes("دیاموند") || n.includes("mdf")) return "ماشین‌کاری"
+  if (n.includes("اجرت") || n.includes("هزینه") || n.includes("کرایه")) return "اجرت‌ها"
+  if (
+    n.includes("قاب") || n.includes("یراق") || n.includes("لول") || n.includes("فیتینگ") ||
+    n.includes("بست") || n.includes("دستگیره") || n.includes("قفل") || n.includes("پروفیل") ||
+    n.includes("ریل") || n.includes("پایه") || n.includes("فریم")
+  ) return "قاب و یراق"
+  return "سایر"
+}
+
+// دسته‌بندی نهایی خدمات — جایگزین لیست دستی قبلی، ولی با همان ساختار
+// Record<دسته, لیست خدمات> تا بخش‌های JSX که از آن استفاده می‌کنند بدون تغییرِ ساختاری کار کنند
+const serviceCategories: Record<string, typeof servicesList> = (() => {
+  const order = ["تراش‌ها", "اینگروینگ", "ماشین‌کاری", "اجرت‌ها", "قاب و یراق", "سایر"]
+  const groups: Record<string, typeof servicesList> = {}
+  order.forEach((o) => (groups[o] = []))
+  servicesList.forEach((s) => {
+    const cat = categorizeService(s.name)
+    if (!groups[cat]) groups[cat] = []
+    groups[cat].push(s)
+  })
+  const result: Record<string, typeof servicesList> = {}
+  order.forEach((o) => {
+    if (groups[o].length) result[o] = groups[o]
+  })
+  return result
+})()
 
 export default function NewOrderClient() {
   const router = useRouter()
@@ -1153,9 +1195,12 @@ const copyDescriptionToOthers = (sourceId: number) => {
   }
 
   const allFilteredServices = useMemo(() => {
-    if (!serviceSearch.trim()) return Object.values(serviceCategories).flat()
-    const search = serviceSearch.trim().toLowerCase()
-    return Object.values(serviceCategories).flat().filter((s) => s.toLowerCase().includes(search))
+    const all = Object.values(serviceCategories).flat()
+    const raw = serviceSearch.trim()
+    if (!raw) return all
+    const normalizedQuery = normalizeText(raw)
+    const tokens = normalizedQuery.split(/\s+/).filter(Boolean)
+    return all.filter((s) => tokens.every((t) => s.normalizedName.includes(t) || s.normalizedCode.includes(t)))
   }, [serviceSearch])
 
   const currentItem = items.find((i) => i.id === currentItemId)
@@ -2427,15 +2472,18 @@ const copyDescriptionToOthers = (sourceId: number) => {
                         {allFilteredServices.length > 0 ? (
                           allFilteredServices.map((s) => (
                             <button
-                              key={s}
+                              key={s.code + s.name}
                               type="button"
                               onClick={() => {
-                                setSvcTitle(s)
+                                setSvcTitle(s.name)
                                 setServiceSearch("")
                               }}
-                              className="w-full text-right rounded-lg bg-white border border-teal-300 px-3 py-2.5 text-base font-bold text-blue-900 hover:bg-yellow-100 transition"
+                              className="flex w-full items-center gap-2 text-right rounded-lg bg-white border border-teal-300 px-3 py-2.5 text-base font-bold text-blue-900 hover:bg-yellow-100 transition"
                             >
-                              {s}
+                              {s.code && (
+                                <bdi className="shrink-0 rounded-md bg-teal-50 px-1.5 py-0.5 text-teal-700 font-mono text-xs">{s.code}</bdi>
+                              )}
+                              <bdi className="truncate">{s.name}</bdi>
                             </button>
                           ))
                         ) : (
@@ -2460,7 +2508,9 @@ const copyDescriptionToOthers = (sourceId: number) => {
                           {Object.entries(serviceCategories).map(([cat, list]) => (
                             <optgroup key={cat} label={cat}>
                               {list.map((s) => (
-                                <option key={s} value={s}>{s}</option>
+                                <option key={s.code + s.name} value={s.name}>
+                                  {s.code ? `${s.code} — ${s.name}` : s.name}
+                                </option>
                               ))}
                             </optgroup>
                           ))}

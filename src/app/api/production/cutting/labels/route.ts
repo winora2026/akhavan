@@ -4,13 +4,45 @@ import { prisma } from "@/lib/prisma"
 export async function POST(req: Request) {
   try {
     const body = await req.json()
-    const { productionItemIds, action } = body
+    const {
+      productionItemIds,
+      action,
+      reason,
+      department,
+      responsiblePerson,
+      operatorName,
+    } = body
+    // action: "print" | "allow-reprint"
 
     if (!Array.isArray(productionItemIds) || productionItemIds.length === 0) {
-      return NextResponse.json({ error: "هیچ قلمی انتخاب نشده" }, { status: 400 })
+      return NextResponse.json(
+        { error: "هیچ قلمی انتخاب نشده" },
+        { status: 400 }
+      )
     }
 
     if (action === "allow-reprint") {
+      if (!reason || !String(reason).trim()) {
+        return NextResponse.json(
+          { error: "علت ضایعات الزامی است" },
+          { status: 400 }
+        )
+      }
+      if (!department || !["تولید", "اداری"].includes(department)) {
+        return NextResponse.json(
+          { error: "بخش مسبب باید تولید یا اداری باشد" },
+          { status: 400 }
+        )
+      }
+      if (!responsiblePerson || !String(responsiblePerson).trim()) {
+        return NextResponse.json(
+          { error: "شخص مسبب الزامی است" },
+          { status: 400 }
+        )
+      }
+
+      const wasteNote = `بخش: ${department} | شخص: ${String(responsiblePerson).trim()}`
+
       await prisma.productionItem.updateMany({
         where: { id: { in: productionItemIds } },
         data: {
@@ -20,19 +52,35 @@ export async function POST(req: Request) {
       })
 
       for (const id of productionItemIds) {
-        const item = await prisma.productionItem.findUnique({ where: { id } })
+        const item = await prisma.productionItem.findUnique({
+          where: { id },
+        })
         if (!item) continue
+
+        await prisma.waste.create({
+          data: {
+            productionItemId: id,
+            quantity: item.quantity || 1,
+            reason: String(reason).trim(),
+            notes: wasteNote,
+            operatorId: operatorName ? String(operatorName) : null,
+          },
+        })
+
         await prisma.productionHistory.create({
           data: {
             productionOrderId: item.productionOrderId,
             productionItemId: id,
             action: "اجازه چاپ مجدد لیبل",
-            description: "اجازه چاپ مجدد لیبل صادر شد",
+            description: `ضایعات/چاپ مجدد | علت: ${String(reason).trim()} | ${wasteNote}`,
+            operatorName: operatorName ? String(operatorName) : null,
           },
         })
       }
 
-      return NextResponse.json({ message: "اجازه چاپ مجدد ثبت شد" })
+      return NextResponse.json({
+        message: "اجازه چاپ مجدد و ثبت ضایعات انجام شد",
+      })
     }
 
     if (action === "print") {
@@ -61,7 +109,10 @@ export async function POST(req: Request) {
 
       if (printable.length === 0) {
         return NextResponse.json(
-          { error: "هیچ قلم قابل چاپی انتخاب نشده (نیاز به اجازه چاپ مجدد)" },
+          {
+            error:
+              "هیچ قلم قابل چاپی انتخاب نشده (نیاز به اجازه چاپ مجدد)",
+          },
           { status: 400 }
         )
       }
@@ -93,7 +144,6 @@ export async function POST(req: Request) {
         const qty = item.quantity || 1
         const order = item.productionOrder.order
 
-        // خدمات از قلم فروش
         let servicesText = ""
         const salesItem = order?.items?.find((si) => si.id === item.orderItemId)
         if ((salesItem as any)?.servicesData) {
@@ -110,9 +160,7 @@ export async function POST(req: Request) {
 
         for (let i = 1; i <= qty; i++) {
           const pieceBarcode =
-            qty === 1
-              ? item.barcode || ""
-              : `${item.barcode || "0"}-${i}`
+            qty === 1 ? item.barcode || "" : `${item.barcode || "0"}-${i}`
 
           labels.push({
             productionItemId: item.id,
@@ -120,7 +168,7 @@ export async function POST(req: Request) {
             barcode: pieceBarcode,
             length: item.length,
             width: item.width,
-            quantity: 1, // هر لیبل = یک قطعه
+            quantity: 1,
             totalQuantity: qty,
             pieceIndex: i,
             meterage: item.meterage,
@@ -142,7 +190,10 @@ export async function POST(req: Request) {
   } catch (error: any) {
     console.error(error)
     return NextResponse.json(
-      { error: "خطا در عملیات لیبل", details: String(error?.message || error) },
+      {
+        error: "خطا در عملیات لیبل",
+        details: String(error?.message || error),
+      },
       { status: 500 }
     )
   }
