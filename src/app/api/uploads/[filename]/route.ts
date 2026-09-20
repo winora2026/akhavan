@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server"
 import { readFile } from "fs/promises"
 import path from "path"
 
+const UPLOADS_DIR =
+  process.env.UPLOADS_DIR || path.join(process.cwd(), "..", "akhavan-uploads")
+
 export async function GET(
   _req: NextRequest,
   context: { params: Promise<{ filename: string }> }
@@ -9,11 +12,16 @@ export async function GET(
   try {
     const { filename } = await context.params
 
-    if (!filename || filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
+    if (
+      !filename ||
+      filename.includes("..") ||
+      filename.includes("/") ||
+      filename.includes("\\")
+    ) {
       return NextResponse.json({ error: "نام فایل نامعتبر است" }, { status: 400 })
     }
 
-    const filePath = path.join(process.cwd(), "public", "uploads", filename)
+    const filePath = path.join(UPLOADS_DIR, filename)
     const data = await readFile(filePath)
 
     const ext = path.extname(filename).toLowerCase()
@@ -22,7 +30,7 @@ export async function GET(
         ? "application/pdf"
         : ext === ".png"
           ? "image/png"
-          : ext === ".jpg" || ext === ".jpeg"
+          : ext === ".jpg" || ext === ".jpeg" || ext === ".jfif"
             ? "image/jpeg"
             : ext === ".webp"
               ? "image/webp"
