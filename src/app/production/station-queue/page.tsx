@@ -24,22 +24,36 @@ type QueueItem = {
     meterage: number | null
     status: string
     barcode?: string | null
+    notes?: string | null
+    servicesText?: string
+    installationCode?: string | null
+    mapImageUrl?: string | null
+    orderDate?: string | null
+    deliveryDate?: string | null
     productionOrder: {
       id: string
-      productionNumber: string
+      productionNumber?: string
       priority: string
       order: {
-        orderNumber: string
+        orderNumber?: string
         customer: { name: string }
       }
     }
   }
 }
 
+type Summary = {
+  stationName: string
+  count: number
+  totalQuantity: number
+  totalMeterage: number
+}
+
 export default function StationQueuePage() {
   const [stations, setStations] = useState<Station[]>([])
   const [selectedStationId, setSelectedStationId] = useState("")
   const [queue, setQueue] = useState<QueueItem[]>([])
+  const [summary, setSummary] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(false)
   const [operatorName, setOperatorName] = useState("")
   const [productFilter, setProductFilter] = useState("")
@@ -53,6 +67,8 @@ export default function StationQueuePage() {
   } | null>(null)
 
   const [confirmData, setConfirmData] = useState<any | null>(null)
+  const [detail, setDetail] = useState<any | null>(null)
+
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -61,12 +77,15 @@ export default function StationQueuePage() {
 
   useEffect(() => {
     if (selectedStationId) fetchQueue()
-    else setQueue([])
+    else {
+      setQueue([])
+      setSummary(null)
+    }
   }, [selectedStationId])
 
   useEffect(() => {
     inputRef.current?.focus()
-  }, [selectedStationId, scanLoading, confirmData])
+  }, [selectedStationId, scanLoading, confirmData, detail])
 
   const fetchStations = async () => {
     try {
@@ -92,7 +111,14 @@ export default function StationQueuePage() {
       )
       if (!res.ok) throw new Error("خطا")
       const data = await res.json()
-      setQueue(Array.isArray(data) ? data : [])
+      setQueue(
+        Array.isArray(data.items)
+          ? data.items
+          : Array.isArray(data)
+            ? data
+            : []
+      )
+      setSummary(data.summary || null)
     } catch (e) {
       console.error(e)
       alert("خطا در بارگذاری کارتابل")
@@ -131,6 +157,15 @@ export default function StationQueuePage() {
     }
     return result
   }, [queue, productFilter, search])
+
+  const formatFaDate = (dateStr?: string | null) => {
+    if (!dateStr) return "—"
+    try {
+      return new Date(dateStr).toLocaleDateString("fa-IR")
+    } catch {
+      return "—"
+    }
+  }
 
   const doScan = async (confirmed = false) => {
     const code = barcode.trim()
@@ -172,6 +207,7 @@ export default function StationQueuePage() {
         type: "ok",
         text: data.message || "با موفقیت رد شد",
       })
+      setDetail(data)
       setBarcode("")
       setConfirmData(null)
       await fetchQueue()
@@ -204,14 +240,9 @@ export default function StationQueuePage() {
       }}
       dir="rtl"
     >
-      <link
-        href="https://cdn.jsdelivr.net/npm/vazirmatn@33.003/Vazirmatn-font-face.css"
-        rel="stylesheet"
-      />
       <div className="pointer-events-none fixed inset-0 bg-black/5" />
 
-      <div className="relative z-10 max-w-6xl mx-auto">
-        {/* هدر */}
+      <div className="relative z-10 max-w-[1600px] mx-auto">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
           <div>
             <h1 className="text-2xl font-bold text-blue-950">کارتابل ایستگاه</h1>
@@ -219,7 +250,7 @@ export default function StationQueuePage() {
               ایستگاه:{" "}
               <span className="font-bold text-teal-700">{selectedStationName}</span>
               {" — "}
-              اسکن بارکد = رد کار
+              اسکن بارکد = رد کار (بعد از برش، بقیه ایستگاه‌ها هم‌زمان)
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -233,7 +264,7 @@ export default function StationQueuePage() {
               href="/production/queue"
               className="rounded-xl border border-teal-500/40 bg-white/40 hover:bg-white/60 px-4 py-2.5 text-blue-900 font-bold"
             >
-              صف تولید
+              مشاهده روند کاری
             </Link>
             <Link
               href="/"
@@ -244,7 +275,7 @@ export default function StationQueuePage() {
           </div>
         </div>
 
-        {/* باکس اسکن */}
+        {/* اسکن */}
         <div className="mb-4 rounded-2xl bg-teal-500/15 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/30">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
             <div className="md:col-span-3">
@@ -253,7 +284,11 @@ export default function StationQueuePage() {
               </label>
               <select
                 value={selectedStationId}
-                onChange={(e) => setSelectedStationId(e.target.value)}
+                onChange={(e) => {
+                  setSelectedStationId(e.target.value)
+                  setDetail(null)
+                  setLastResult(null)
+                }}
                 className="w-full rounded-xl border border-teal-500/30 bg-white/70 px-4 py-3 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
               >
                 {stations.map((s) => (
@@ -318,7 +353,33 @@ export default function StationQueuePage() {
           )}
         </div>
 
-        {/* فیلتر لیست */}
+        {/* خلاصه متراژ / تعداد */}
+        {summary && (
+          <div className="mb-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="rounded-2xl bg-white/50 border border-teal-500/20 p-4 text-center">
+              <p className="text-sm text-blue-700 mb-1">ایستگاه</p>
+              <p className="text-lg font-bold text-teal-800">{summary.stationName}</p>
+            </div>
+            <div className="rounded-2xl bg-white/50 border border-teal-500/20 p-4 text-center">
+              <p className="text-sm text-blue-700 mb-1">تعداد ردیف</p>
+              <p className="text-2xl font-bold text-teal-700">{summary.count}</p>
+            </div>
+            <div className="rounded-2xl bg-white/50 border border-teal-500/20 p-4 text-center">
+              <p className="text-sm text-blue-700 mb-1">جمع تعداد</p>
+              <p className="text-2xl font-bold text-teal-700">
+                {summary.totalQuantity}
+              </p>
+            </div>
+            <div className="rounded-2xl bg-white/50 border border-teal-500/20 p-4 text-center">
+              <p className="text-sm text-blue-700 mb-1">جمع متراژ</p>
+              <p className="text-2xl font-bold text-teal-700">
+                {Number(summary.totalMeterage).toFixed(4)}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* فیلتر */}
         <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
             <div className="md:col-span-4">
@@ -360,13 +421,13 @@ export default function StationQueuePage() {
             </div>
             <div className="md:col-span-2">
               <div className="rounded-xl bg-teal-500/20 border border-teal-500/30 px-4 py-2.5 text-center font-bold text-blue-900">
-                تعداد: {filtered.length}
+                نمایش: {filtered.length}
               </div>
             </div>
           </div>
         </div>
 
-        {/* جدول فقط نمایشی */}
+        {/* جدول */}
         <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-x-auto">
           {loading ? (
             <p className="text-center text-blue-700 py-16 text-xl font-bold">
@@ -387,6 +448,9 @@ export default function StationQueuePage() {
                   <th className="p-3 font-bold text-center">بارکد</th>
                   <th className="p-3 font-bold text-center">ابعاد</th>
                   <th className="p-3 font-bold text-center">تعداد</th>
+                  <th className="p-3 font-bold text-center">متراژ</th>
+                  <th className="p-3 font-bold text-center">تاریخ سفارش</th>
+                  <th className="p-3 font-bold text-center">تاریخ تحویل</th>
                   <th className="p-3 font-bold text-center">اولویت</th>
                   <th className="p-3 font-bold text-center">وضعیت</th>
                 </tr>
@@ -421,6 +485,17 @@ export default function StationQueuePage() {
                       {row.quantityIn ?? row.productionItem.quantity}
                     </td>
                     <td className="p-3 text-center">
+                      {row.productionItem.meterage != null
+                        ? Number(row.productionItem.meterage).toFixed(3)
+                        : "—"}
+                    </td>
+                    <td className="p-3 text-center">
+                      {formatFaDate(row.productionItem.orderDate)}
+                    </td>
+                    <td className="p-3 text-center">
+                      {formatFaDate(row.productionItem.deliveryDate)}
+                    </td>
+                    <td className="p-3 text-center">
                       {row.productionItem.productionOrder.priority || "عادی"}
                     </td>
                     <td className="p-3 text-center">
@@ -436,7 +511,123 @@ export default function StationQueuePage() {
         </div>
       </div>
 
-      {/* پاپ‌آپ تأیید تعداد بالای ۵ */}
+      {/* جزئیات بعد از اسکن */}
+      {detail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div
+            className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto"
+            dir="rtl"
+          >
+            <div className="flex justify-between items-start mb-4">
+              <h2 className="text-xl font-bold text-blue-950">جزئیات قطعه</h2>
+              <button
+                onClick={() => {
+                  setDetail(null)
+                  setTimeout(() => inputRef.current?.focus(), 50)
+                }}
+                className="rounded-lg border border-gray-300 px-3 py-1 font-bold text-gray-700 hover:bg-gray-50"
+              >
+                بستن
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-blue-900">
+              <p>
+                کالا: <strong>{detail.productName}</strong>
+              </p>
+              <p>
+                سفارش: <strong>{detail.orderNumber || "—"}</strong>
+              </p>
+              <p>
+                مشتری: <strong>{detail.customerName || "—"}</strong>
+              </p>
+              <p>
+                ایستگاه: <strong>{detail.stationName || "—"}</strong>
+              </p>
+              <p>
+                بارکد: <strong className="font-mono">{detail.barcode}</strong>
+              </p>
+              <p>
+                تعداد: <strong>{detail.quantity}</strong>
+              </p>
+              <p>
+                ابعاد:{" "}
+                <strong>
+                  {detail.length ?? "—"} × {detail.width ?? "—"}
+                </strong>
+              </p>
+              <p>
+                متراژ:{" "}
+                <strong>
+                  {detail.meterage != null
+                    ? Number(detail.meterage).toFixed(4)
+                    : "—"}
+                </strong>
+              </p>
+              <p>
+                تاریخ سفارش:{" "}
+                <strong>{formatFaDate(detail.orderDate)}</strong>
+              </p>
+              <p>
+                تاریخ تحویل:{" "}
+                <strong>{formatFaDate(detail.deliveryDate)}</strong>
+              </p>
+              <p>
+                کد نصب: <strong>{detail.installationCode || "—"}</strong>
+              </p>
+              <p>
+                اولویت: <strong>{detail.priority || "عادی"}</strong>
+              </p>
+              {detail.servicesText ? (
+                <p className="md:col-span-2">
+                  خدمات: <strong>{detail.servicesText}</strong>
+                </p>
+              ) : null}
+              {detail.notes ? (
+                <p className="md:col-span-2">
+                  توضیحات: <strong>{detail.notes}</strong>
+                </p>
+              ) : null}
+            </div>
+
+            {detail.mapImageUrl ? (
+              <div className="mt-4">
+                <p className="text-sm font-bold text-blue-900 mb-2">نقشه / فایل</p>
+                {String(detail.mapImageUrl).toLowerCase().endsWith(".pdf") ? (
+                  <a
+                    href={detail.mapImageUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-teal-700 font-bold underline"
+                  >
+                    باز کردن PDF
+                  </a>
+                ) : (
+                  <img
+                    src={detail.mapImageUrl}
+                    alt="نقشه"
+                    className="max-h-64 rounded-xl border border-teal-200 object-contain"
+                  />
+                )}
+              </div>
+            ) : null}
+
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => {
+                  setDetail(null)
+                  setTimeout(() => inputRef.current?.focus(), 50)
+                }}
+                className="rounded-xl bg-teal-500 hover:bg-teal-600 px-6 py-2.5 font-bold text-white"
+              >
+                ادامه اسکن بعدی
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* تأیید تعداد بالای ۵ */}
       {confirmData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div

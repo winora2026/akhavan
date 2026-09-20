@@ -111,6 +111,23 @@ const resizableBoxClass = "resize-x overflow-auto"
 // همان کادر قابل‌تغییرِ عرض، ولی مخصوص تیتر ستون‌های جدول که باید وسط‌چین باشند
 const resizableHeaderClass = "resize-x overflow-auto text-center"
 
+// حروف عربی (ي، ك، ة) را به معادل فارسی تبدیل می‌کند، ارقام فارسی/عربی را
+// به لاتین تبدیل می‌کند، حروف نامرئی RTL را حذف و به حروف کوچک تبدیل می‌کند.
+// چون داده‌ی اکسل با حروف عربی نوشته شده ولی کیبورد فارسی حروف فارسی تولید
+// می‌کند، بدون این تبدیل جستجوهایی مثل "شیشه" هیچ نتیجه‌ای برنمی‌گرداند.
+const normalizeText = (value: string) => {
+  if (!value) return ""
+  return value
+    .replace(/[\u200c\u200f\u200e]/g, "") // نیم‌فاصله و کاراکترهای جهت‌ساز نامرئی
+    .replace(/ي/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/ة/g, "ه")
+    .replace(/[٠١٢٣٤٥٦٧٨٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d))) // ارقام عربی
+    .replace(/[۰۱۲۳۴۵۶۷۸۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d))) // ارقام فارسی
+    .toLowerCase()
+    .trim()
+}
+
 const customersList = (customersSeedRaw as any[]).map((c: any) => {
   let name = ""
 
@@ -131,25 +148,10 @@ const customersList = (customersSeedRaw as any[]).map((c: any) => {
     code: c.code || "",
     name: name,
     group: c.group || "همکار",
+    normalizedName: normalizeText(name),
+    normalizedCode: normalizeText(c.code || ""),
   }
 })
-
-// حروف عربی (ي، ك، ة) را به معادل فارسی تبدیل می‌کند، ارقام فارسی/عربی را
-// به لاتین تبدیل می‌کند، حروف نامرئی RTL را حذف و به حروف کوچک تبدیل می‌کند.
-// چون داده‌ی اکسل با حروف عربی نوشته شده ولی کیبورد فارسی حروف فارسی تولید
-// می‌کند، بدون این تبدیل جستجوهایی مثل "شیشه" هیچ نتیجه‌ای برنمی‌گرداند.
-const normalizeText = (value: string) => {
-  if (!value) return ""
-  return value
-    .replace(/[\u200c\u200f\u200e]/g, "") // نیم‌فاصله و کاراکترهای جهت‌ساز نامرئی
-    .replace(/ي/g, "ی")
-    .replace(/ك/g, "ک")
-    .replace(/ة/g, "ه")
-    .replace(/[٠١٢٣٤٥٦٧٨٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d))) // ارقام عربی
-    .replace(/[۰۱۲۳۴۵۶۷۸۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d))) // ارقام فارسی
-    .toLowerCase()
-    .trim()
-}
 
 // لیست کالاها از فایل اکسل (کد، نام، واحد). نسخه‌ی نرمال‌شده‌ی نام و کد هر
 // کالا همین‌جا و فقط یک‌بار محاسبه می‌شود (نه در هر keystroke داخل جستجو)
@@ -484,9 +486,9 @@ const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
   const meterageMismatch = manualTotalMeterage !== "" && Number(manualTotalMeterage) !== Number(calculatedTotalMeterage)
 
   const filteredCustomers = useMemo(() => {
-    const q = customerSearch.trim().toLowerCase()
+    const q = normalizeText(customerSearch.trim())
     if (!q) return customersList.slice(0, 8)
-    return customersList.filter((c) => c.name.toLowerCase().includes(q) || c.code.includes(q)).slice(0, 12)
+    return customersList.filter((c) => c.normalizedName.includes(q) || c.normalizedCode.includes(q)).slice(0, 12)
   }, [customerSearch])
 
   // جستجوی کالا با تأخیر کوتاه (debounce) اجرا می‌شود تا حین تایپ سریع،
