@@ -30,20 +30,30 @@ async function main() {
   for (let i = 0; i < stations.length; i++) {
     const name = stations[i]
     const code = `ST-${i + 1}`
-    await prisma.productionStation.upsert({
+
+    const existing = await prisma.productionStation.findFirst({
       where: { name },
-      update: {
-        sortOrder: i + 1,
-        isActive: true,
-        code,
-      },
-      create: {
-        name,
-        code,
-        sortOrder: i + 1,
-        isActive: true,
-      },
     })
+
+    if (existing) {
+      await prisma.productionStation.update({
+        where: { id: existing.id },
+        data: {
+          sortOrder: i + 1,
+          isActive: true,
+          code,
+        },
+      })
+    } else {
+      await prisma.productionStation.create({
+        data: {
+          name,
+          code,
+          sortOrder: i + 1,
+          isActive: true,
+        },
+      })
+    }
   }
   console.log("Stations seeded:", stations.length)
 }
