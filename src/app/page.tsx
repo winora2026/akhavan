@@ -3,15 +3,33 @@
 import { useState, useRef, useEffect } from "react"
 import Link from "next/link"
 
+const FISCAL_KEY = "akhavan_fiscal_year"
+
 export default function HomePage() {
   const [showSalesMenu, setShowSalesMenu] = useState(false)
   const [showProductionMenu, setShowProductionMenu] = useState(false)
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const [fiscalYear, setFiscalYear] = useState("1405")
+  const [editingFiscal, setEditingFiscal] = useState(false)
   const [currentUser, setCurrentUser] = useState<{
     displayName: string
     role: string
   } | null>(null)
+
   const salesRef = useRef<HTMLDivElement>(null)
   const productionRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const saved = localStorage.getItem(FISCAL_KEY)
+    if (saved) setFiscalYear(saved)
+  }, [])
+
+  const saveFiscalYear = (value: string) => {
+    const v = value.trim() || "1405"
+    setFiscalYear(v)
+    localStorage.setItem(FISCAL_KEY, v)
+    setEditingFiscal(false)
+  }
 
   const handleLogout = async () => {
     try {
@@ -39,6 +57,35 @@ export default function HomePage() {
         console.error(e)
       }
     })()
+  }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setShowSalesMenu(false)
+        setShowProductionMenu(false)
+        setMobileOpen(false)
+        setEditingFiscal(false)
+      }
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [])
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (salesRef.current && !salesRef.current.contains(e.target as Node)) {
+        setShowSalesMenu(false)
+      }
+      if (
+        productionRef.current &&
+        !productionRef.current.contains(e.target as Node)
+      ) {
+        setShowProductionMenu(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [])
 
   const menuItems = [
@@ -137,22 +184,6 @@ export default function HomePage() {
     },
   ]
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (salesRef.current && !salesRef.current.contains(e.target as Node)) {
-        setShowSalesMenu(false)
-      }
-      if (
-        productionRef.current &&
-        !productionRef.current.contains(e.target as Node)
-      ) {
-        setShowProductionMenu(false)
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside)
-    return () => document.removeEventListener("mousedown", handleClickOutside)
-  }, [])
-
   const roleLabel = (role: string) => {
     switch (role) {
       case "sales":
@@ -168,6 +199,51 @@ export default function HomePage() {
     }
   }
 
+  const renderSubMenu = (
+    open: boolean,
+    items: { title: string; href: string; icon: string }[],
+    onClose: () => void
+  ) =>
+    open ? (
+      <div
+        className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 min-w-[220px]"
+        role="menu"
+      >
+        <div className="rounded-2xl bg-white/95 backdrop-blur-xl border border-teal-500/30 shadow-2xl p-2">
+          <div className="flex flex-col gap-1">
+            {items.map((sub) => (
+              <Link
+                key={sub.title}
+                href={sub.href}
+                role="menuitem"
+                onClick={onClose}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-teal-50 focus:bg-teal-50 focus:outline-none focus:ring-2 focus:ring-teal-500 transition group"
+              >
+                <div className="w-9 h-9 rounded-lg bg-teal-500/15 flex items-center justify-center border border-teal-500/20 shrink-0">
+                  <svg
+                    className="w-5 h-5 text-teal-700"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2.2}
+                      d={sub.icon}
+                    />
+                  </svg>
+                </div>
+                <span className="text-sm font-bold text-gray-800 group-hover:text-teal-800">
+                  {sub.title}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </div>
+    ) : null
+
   return (
     <div
       className="min-h-screen relative overflow-hidden bg-cover bg-center bg-no-repeat"
@@ -180,51 +256,115 @@ export default function HomePage() {
       }}
       dir="rtl"
     >
+      <a
+        href="#main-menu"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:right-2 focus:z-50 focus:bg-white focus:px-4 focus:py-2 focus:rounded-lg focus:font-bold focus:text-teal-800"
+      >
+        رفتن به منوی اصلی
+      </a>
+
       <div className="pointer-events-none fixed inset-0 bg-black/10" />
 
       <div className="relative z-10 min-h-screen flex flex-col">
-        <header className="pt-6 px-8 flex items-center justify-between gap-3">
-          <div className="text-sm font-bold text-gray-700">
+        <header className="pt-4 px-4 sm:px-8 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
             {currentUser ? (
-              <span>
-                {currentUser.displayName}
-                <span className="text-gray-500 font-semibold mr-2">
-                  ({roleLabel(currentUser.role)})
-                </span>
-              </span>
-            ) : null}
+              <div className="rounded-2xl bg-white/50 border border-teal-500/30 px-4 py-2 shadow">
+                <p className="text-xl sm:text-2xl font-black text-blue-950 leading-tight">
+                  {currentUser.displayName}
+                </p>
+                <p className="text-sm font-bold text-teal-700">
+                  {roleLabel(currentUser.role)}
+                </p>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-600 font-bold">در حال دریافت کاربر...</div>
+            )}
+
+            <div className="rounded-2xl bg-white/50 border border-teal-500/30 px-4 py-2 shadow">
+              <p className="text-xs font-bold text-blue-800 mb-0.5">سال مالی</p>
+              {editingFiscal ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    autoFocus
+                    defaultValue={fiscalYear}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        saveFiscalYear((e.target as HTMLInputElement).value)
+                      }
+                      if (e.key === "Escape") setEditingFiscal(false)
+                    }}
+                    className="w-24 rounded-lg border border-teal-500 px-2 py-1 text-lg font-black text-blue-950 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const el = document.activeElement as HTMLInputElement
+                      saveFiscalYear(el?.value || fiscalYear)
+                    }}
+                    className="text-sm font-bold text-teal-700"
+                  >
+                    ذخیره
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setEditingFiscal(true)}
+                  className="text-xl font-black text-blue-950 hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded"
+                  title="برای تغییر کلیک کنید"
+                >
+                  {fiscalYear}
+                </button>
+              )}
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="text-base font-bold text-gray-700 hover:text-teal-700 transition px-3 py-1.5 rounded-lg hover:bg-white/40"
-          >
-            خروج
-          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="sm:hidden rounded-xl bg-white/60 border border-teal-500/30 px-3 py-2 font-bold text-blue-900 focus:ring-2 focus:ring-teal-500"
+              aria-expanded={mobileOpen}
+              onClick={() => setMobileOpen((v) => !v)}
+            >
+              منو
+            </button>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="text-base font-bold text-gray-700 hover:text-teal-700 transition px-3 py-1.5 rounded-lg hover:bg-white/40 focus:outline-none focus:ring-2 focus:ring-teal-500"
+            >
+              خروج
+            </button>
+          </div>
         </header>
 
         <div className="flex-1" />
 
-        <div className="pb-10 px-6">
+        <div className="pb-10 px-4 sm:px-6" id="main-menu">
           <div className="max-w-4xl mx-auto">
-            <div className="bg-white/20 backdrop-blur-xl border border-white/30 rounded-2xl shadow-2xl px-4 py-5">
-              <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+            <div
+              className={`bg-white/20 backdrop-blur-xl border border-white/30 rounded-2xl shadow-2xl px-3 sm:px-4 py-5 ${
+                mobileOpen ? "block" : "hidden sm:block"
+              }`}
+            >
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 gap-2">
                 {menuItems.map((item) =>
                   item.isSales ? (
-                    <div
-                      key={item.title}
-                      ref={salesRef}
-                      className="relative"
-                      onMouseEnter={() => setShowSalesMenu(true)}
-                      onMouseLeave={() => setShowSalesMenu(false)}
-                    >
+                    <div key={item.title} ref={salesRef} className="relative">
                       <button
-                        onClick={() => setShowSalesMenu((prev) => !prev)}
-                        className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 transition cursor-pointer group"
+                        type="button"
+                        aria-haspopup="menu"
+                        aria-expanded={showSalesMenu}
+                        onClick={() => {
+                          setShowProductionMenu(false)
+                          setShowSalesMenu((prev) => !prev)
+                        }}
+                        className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition group"
                       >
-                        <div className="w-12 h-12 rounded-xl bg-teal-500/15 backdrop-blur-sm flex items-center justify-center group-hover:bg-teal-500/25 transition shadow-sm border border-teal-500/20">
+                        <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
                           <svg
-                            className="w-7 h-7 text-teal-700 group-hover:text-teal-500 transition-colors duration-200"
+                            className="w-7 h-7 text-teal-700"
                             fill="none"
                             stroke="currentColor"
                             viewBox="0 0 24 24"
@@ -237,63 +377,29 @@ export default function HomePage() {
                             />
                           </svg>
                         </div>
-                        <span className="text-base font-bold text-gray-800 group-hover:text-teal-800 text-center leading-tight transition-colors">
+                        <span className="text-sm sm:text-base font-bold text-gray-800 text-center">
                           {item.title}
                         </span>
                       </button>
-
-                      {showSalesMenu && (
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 min-w-[200px]">
-                          <div className="rounded-2xl bg-white/95 backdrop-blur-xl border border-teal-500/30 shadow-2xl p-2">
-                            <div className="flex flex-col gap-1">
-                              {salesItems.map((sub) => (
-                                <Link
-                                  key={sub.title}
-                                  href={sub.href}
-                                  onClick={() => setShowSalesMenu(false)}
-                                  className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-teal-50 transition group"
-                                >
-                                  <div className="w-9 h-9 rounded-lg bg-teal-500/15 flex items-center justify-center group-hover:bg-teal-500/25 transition border border-teal-500/20 shrink-0">
-                                    <svg
-                                      className="w-5 h-5 text-teal-700 group-hover:text-teal-500 transition-colors"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      viewBox="0 0 24 24"
-                                    >
-                                      <path
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth={2.2}
-                                        d={sub.icon}
-                                      />
-                                    </svg>
-                                  </div>
-                                  <span className="text-sm font-bold text-gray-800 group-hover:text-teal-800 whitespace-nowrap">
-                                    {sub.title}
-                                  </span>
-                                </Link>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 w-3 h-3 bg-white/95 border-r border-b border-teal-500/30 rotate-45" />
-                        </div>
+                      {renderSubMenu(showSalesMenu, salesItems, () =>
+                        setShowSalesMenu(false)
                       )}
                     </div>
                   ) : item.isProduction ? (
-                    <div
-                      key={item.title}
-                      ref={productionRef}
-                      className="relative"
-                      onMouseEnter={() => setShowProductionMenu(true)}
-                      onMouseLeave={() => setShowProductionMenu(false)}
-                    >
+                    <div key={item.title} ref={productionRef} className="relative">
                       <button
-                        onClick={() => setShowProductionMenu((prev) => !prev)}
-                        className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 transition cursor-pointer group"
+                        type="button"
+                        aria-haspopup="menu"
+                        aria-expanded={showProductionMenu}
+                        onClick={() => {
+                          setShowSalesMenu(false)
+                          setShowProductionMenu((prev) => !prev)
+                        }}
+                        className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition group"
                       >
-                        <div className="w-12 h-12 rounded-xl bg-teal-500/15 backdrop-blur-sm flex items-center justify-center group-hover:bg-teal-500/25 transition shadow-sm border border-teal-500/20">
+                        <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
                           <svg
-                            className="w-7 h-7 text-teal-700 group-hover:text-teal-500 transition-colors duration-200"
+                            className="w-7 h-7 text-teal-700"
                             fill="none"
                             stroke="currentColor"
                             viewBox="0 0 24 24"
@@ -306,70 +412,38 @@ export default function HomePage() {
                             />
                           </svg>
                         </div>
-                        <span className="text-base font-bold text-gray-800 group-hover:text-teal-800 text-center leading-tight transition-colors">
+                        <span className="text-sm sm:text-base font-bold text-gray-800 text-center">
                           {item.title}
                         </span>
                       </button>
-
-                      {showProductionMenu && (
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 min-w-[200px]">
-                          <div className="rounded-2xl bg-white/95 backdrop-blur-xl border border-teal-500/30 shadow-2xl p-2">
-                            <div className="flex flex-col gap-1">
-                              {productionItems.map((sub) => (
-                                <Link
-                                  key={sub.title}
-                                  href={sub.href}
-                                  onClick={() => setShowProductionMenu(false)}
-                                  className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-teal-50 transition group"
-                                >
-                                  <div className="w-9 h-9 rounded-lg bg-teal-500/15 flex items-center justify-center group-hover:bg-teal-500/25 transition border border-teal-500/20 shrink-0">
-                                    <svg
-                                      className="w-5 h-5 text-teal-700 group-hover:text-teal-500 transition-colors"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      viewBox="0 0 24 24"
-                                    >
-                                      <path
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth={2.2}
-                                        d={sub.icon}
-                                      />
-                                    </svg>
-                                  </div>
-                                  <span className="text-sm font-bold text-gray-800 group-hover:text-teal-800 whitespace-nowrap">
-                                    {sub.title}
-                                  </span>
-                                </Link>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 w-3 h-3 bg-white/95 border-r border-b border-teal-500/30 rotate-45" />
-                        </div>
+                      {renderSubMenu(showProductionMenu, productionItems, () =>
+                        setShowProductionMenu(false)
                       )}
                     </div>
                   ) : (
-                    <Link key={item.title} href={item.href}>
-                      <div className="flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 transition cursor-pointer group">
-                        <div className="w-12 h-12 rounded-xl bg-teal-500/15 backdrop-blur-sm flex items-center justify-center group-hover:bg-teal-500/25 transition shadow-sm border border-teal-500/20">
-                          <svg
-                            className="w-7 h-7 text-teal-700 group-hover:text-teal-500 transition-colors duration-200"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2.2}
-                              d={item.icon}
-                            />
-                          </svg>
-                        </div>
-                        <span className="text-base font-bold text-gray-800 group-hover:text-teal-800 text-center leading-tight transition-colors">
-                          {item.title}
-                        </span>
+                    <Link
+                      key={item.title}
+                      href={item.href}
+                      className="flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
+                    >
+                      <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
+                        <svg
+                          className="w-7 h-7 text-teal-700"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2.2}
+                            d={item.icon}
+                          />
+                        </svg>
                       </div>
+                      <span className="text-sm sm:text-base font-bold text-gray-800 text-center">
+                        {item.title}
+                      </span>
                     </Link>
                   )
                 )}
@@ -377,67 +451,26 @@ export default function HomePage() {
             </div>
           </div>
 
-          <div className="mt-7 flex justify-center items-center gap-8 flex-wrap text-base font-bold text-gray-700">
+          <div className="mt-7 flex justify-center items-center gap-6 sm:gap-8 flex-wrap text-sm sm:text-base font-bold text-gray-700">
             <a
               href="https://www.akhavanglass.com"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-2 hover:text-teal-700 transition"
+              className="hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded px-1"
             >
-              <span>www.akhavanglass.com</span>
-              <svg
-                className="w-5 h-5 text-teal-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
-                />
-              </svg>
+              www.akhavanglass.com
             </a>
-
             <a
               href="tel:02191005103"
-              className="flex items-center gap-2 hover:text-teal-700 transition"
+              className="hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded px-1"
             >
-              <span>02191005103</span>
-              <svg
-                className="w-5 h-5 text-teal-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"
-                />
-              </svg>
+              02191005103
             </a>
-
             <a
               href="tel:09129582600"
-              className="flex items-center gap-2 hover:text-teal-700 transition"
+              className="hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded px-1"
             >
-              <span>09129582600</span>
-              <svg
-                className="w-5 h-5 text-teal-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
-                />
-              </svg>
+              09129582600
             </a>
           </div>
         </div>

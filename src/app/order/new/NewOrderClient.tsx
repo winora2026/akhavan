@@ -8,6 +8,7 @@ import persian_fa from "react-date-object/locales/persian_fa"
 import customersSeedRaw from "../../customers/customers-seed.json"
 import productsSeedRaw from "../../products/products-seed.json"
 import servicesSeedRaw from "../../services/services-seed.json"
+import descriptionsSeedRaw from "../../descriptions/descriptions-seed.json"
 
 type ServiceItem = {
   id: number
@@ -49,48 +50,9 @@ type MapImage = {
 const serviceUnits = ["مترمربع", "مترطول", "عددی", "درصد", "محیط", "ابعاد دایره", "چند طول چند عرض"]
 const discountOptions = [3, 5, 7, 10, 12, 15]
 
-const descriptionsList = [
-  "رو میزی",
-  "گوشه ها ۱*۱",
-  "تیزی خیلی کم گرفته شود",
-  "گوشه ها ۱.۵*۱.۵",
-  "طبق فایل شبکه",
-  "تیزی گرفته",
-  "گوشه ها طبق الگو",
-  "بیضی",
-  "گوشه ها ۰.۵*۰.۵",
-  "طبق الگو",
-  "گرد",
-  "گوشه ها ۲.۵*۲.۵ شود",
-  "گوشه ها تیز",
-  "دالبری",
-  "قواره",
-  "گوشه ها ۶*۶",
-  "تراش ۱.۵",
-  "گوشه ها فارسی بری",
-  "گوشه ها الگویی",
-  "گوشه ها طبق الگو زده شود",
-  "گوشه ها الگویی با هماهنگی",
-  "لوزی",
-  "آبشاری، تراش دار ۱.۵",
-  "گوشه ها ۳*۳",
-  "گوشه متری",
-  "دوسر گرد",
-  "۱۲ضلعی",
-  "الماسی",
-  "کچی دارد",
-  "مدل بری",
-  "الگویی",
-  "فارسی بری دارد",
-  "خیلی دقیق باشد همه ی ابعاد",
-  "گوش ها ۲.۵*۲.۵",
-  "شش ضلعی تراش ۱.۵",
-  "منسی بیرنگ",
-  "۸ضلعی",
-  "کاپریس تراش ۱",
-  "لاکوبل سفید ۱۱۰",
-  "یک گوشه ۲*۲ زده شود",
-]
+// لیست اولیه‌ی توضیحات (از فایل seed — همان لیست نرم‌افزار قبلی). توضیحات جدیدی که
+// کارشناس‌ها اضافه می‌کنند روی سرور ذخیره می‌شود (/api/descriptions) و با این لیست ادغام می‌شود.
+const seedDescriptions: string[] = descriptionsSeedRaw as string[]
 
 const formatWithCommas = (value: string) => {
   const raw = value.replace(/[^\d]/g, "")
@@ -100,13 +62,15 @@ const formatWithCommas = (value: string) => {
 
 const parsePrice = (value: string) => parseFloat(value.replace(/,/g, "")) || 0
 
-// عدد را تا سه رقم اعشار «بدون گرد کردن» (برش) به رشته تبدیل می‌کند
+// عدد را تا پنج رقم اعشار «بدون گرد کردن» (برش) به رشته تبدیل می‌کند
 // (اگر خواستید گرد شود، Math.floor را به Math.round تغییر دهید)
+// توجه: نام تابع (fmt3) برای سازگاری با بقیه‌ی کد همان‌طور باقی مانده،
+// ولی خروجی آن اکنون ۵ رقم اعشار است.
 const fmt3 = (n: number) => {
-  if (!isFinite(n) || n === 0) return "0.000"
+  if (!isFinite(n) || n === 0) return "0.00000"
   const sign = n < 0 ? -1 : 1
-  const t = Math.floor(Math.abs(n) * 1000 + 1e-6) / 1000
-  return (sign * t).toFixed(3)
+  const t = Math.floor(Math.abs(n) * 100000 + 1e-6) / 100000
+  return (sign * t).toFixed(5)
 }
 
 // واحدهایی که «تعداد واحد»شان در مودال خدمات خودکار محاسبه می‌شود
@@ -120,12 +84,13 @@ const resolveUnitQty = (unit: string, calculated: string, manual: string) => {
 }
 
 // محاسبه‌ی تعداد واحد یک خدمت برای یک قلم مشخص (برای کپی خدمات به قطعات دیگر)
+// نکته: «تعداد واحد» همیشه برای «یک قطعه» حساب می‌شود؛ ضرب در تعداد قطعات
+// از طریق فیلد «تعداد» خدمت انجام می‌شود (تعداد × تعداد واحد × قیمت واحد)
 const calcServiceUnitQty = (item: OrderItem, s: ServiceItem): string => {
   const l = parseFloat(item.length) || 0
   const w = parseFloat(item.width) || 0
-  const q = parseFloat(item.quantity) || 1
-  if (s.unit === "مترمربع") return item.meterage || fmt3(((l * w) / 10000) * q)
-  if (s.unit === "محیط") return fmt3(((2 * (l + w)) / 100) * q)
+  if (s.unit === "مترمربع") return fmt3((l * w) / 10000)
+  if (s.unit === "محیط") return fmt3((2 * (l + w)) / 100)
   if (s.unit === "چند طول چند عرض") {
     const lc = parseFloat(s.lengthCount || "1") || 0
     const wc = parseFloat(s.widthCount || "1") || 0
@@ -253,6 +218,11 @@ const serviceCategories: Record<string, typeof servicesList> = (() => {
   return result
 })()
 
+// نام خدمت → کد خدمت (برای نمایش ستون «کد» در ردیف خدمات پیش‌فاکتور جزئی)
+const serviceCodeByName = new Map<string, string>(
+  servicesList.map((s) => [s.name, s.code] as [string, string])
+)
+
 export default function NewOrderClient() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -262,9 +232,11 @@ export default function NewOrderClient() {
   const [deliveryDate, setDeliveryDate] = useState<any>(null)
   const [customerName, setCustomerName] = useState("")
   // TODO: پس از افزودن سیستم لاگین کارشناسان، این مقدار باید به‌صورت خودکار از کاربر واردشده پر شود
-  const [salesRep, setSalesRep] = useState("")
+  const [salesRep, setSalesRep] = useState("data.user.displayName")
   const [customerSearch, setCustomerSearch] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
+  // ایندکس مشتریِ هایلایت‌شده در لیست (برای انتخاب با کیبورد)
+  const [customerActiveIndex, setCustomerActiveIndex] = useState(0)
   const [productionLine, setProductionLine] = useState("دکوراتیو")
   const [customerGroup, setCustomerGroup] = useState("همکار")
   const [priority, setPriority] = useState("عادی")
@@ -289,11 +261,16 @@ export default function NewOrderClient() {
   const [newUnit, setNewUnit] = useState("مترمربع")
   const [newLength, setNewLength] = useState("")
   const [newWidth, setNewWidth] = useState("")
-  const [newQuantity, setNewQuantity] = useState("1")
+  const [newQuantity, setNewQuantity] = useState("")
   const [newUnitPrice, setNewUnitPrice] = useState("")
   const [editingItemId, setEditingItemId] = useState<number | null>(null)
+  // وقتی روی فیلد خالیِ طول اینتر زده شود true می‌شود تا کادر قرمز شود
+  const [lengthError, setLengthError] = useState(false)
 
   const [items, setItems] = useState<OrderItem[]>([])
+  // ردیف انتخاب‌شده در جدول اقلام — با کلیک روی ردیف انتخاب می‌شود و کلیدهای
+  // F3 (خدمات) و F4 (توضیحات) پنجره‌ی مربوطه را برای همین ردیف باز می‌کنند
+  const [selectedItemId, setSelectedItemId] = useState<number | null>(null)
   const [mapImages, setMapImages] = useState<MapImage[]>([])
   const [previewFile, setPreviewFile] = useState<{ url: string; type: "image" | "pdf" } | null>(null)
   const [showServices, setShowServices] = useState(false)
@@ -309,7 +286,7 @@ export default function NewOrderClient() {
   const [serviceSearch, setServiceSearch] = useState("")
   const [editingServiceId, setEditingServiceId] = useState<number | null>(null)
   const [showInvoice, setShowInvoice] = useState(false)
-  const [invoiceMode, setInvoiceMode] = useState<"detailed" | "summary">("detailed")
+  const [invoiceMode, setInvoiceMode] = useState<"detailed" | "summary" | "breakdown">("detailed")
   const [isOfficialInvoice, setIsOfficialInvoice] = useState(false)
   const [hasDiscount, setHasDiscount] = useState(false)
   const [discountPercent, setDiscountPercent] = useState(5)
@@ -324,6 +301,9 @@ export default function NewOrderClient() {
   const [modalDescription, setModalDescription] = useState("")
   const [modalDescriptionSearch, setModalDescriptionSearch] = useState("")
   const [showModalDescDropdown, setShowModalDescDropdown] = useState(false)
+  // توضیحات اضافه‌شده توسط کارشناس‌ها (از سرور) + وضعیت در حال ذخیره
+  const [customDescriptions, setCustomDescriptions] = useState<string[]>([])
+  const [addingDescription, setAddingDescription] = useState(false)
 
   // مودال «کپی انتخابی» خدمات/توضیحات به قطعات دیگر
   const [copyModal, setCopyModal] = useState<{ type: "services" | "description"; sourceId: number } | null>(null)
@@ -354,6 +334,24 @@ export default function NewOrderClient() {
     update()
     mq.addEventListener("change", update)
     return () => mq.removeEventListener("change", update)
+  }, [])
+
+  // بارگذاری توضیحاتی که کارشناس‌ها قبلاً به لیست اضافه کرده‌اند
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch("/api/descriptions")
+        if (!res.ok) return
+        const data = await res.json()
+        if (!cancelled && Array.isArray(data.custom)) setCustomDescriptions(data.custom)
+      } catch (err) {
+        console.error(err)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
@@ -506,6 +504,7 @@ export default function NewOrderClient() {
   const svcLengthCountRef = useRef<HTMLInputElement>(null)
   const svcWidthCountRef = useRef<HTMLInputElement>(null)
   const svcUnitPriceRef = useRef<HTMLInputElement>(null)
+  const serviceSearchRef = useRef<HTMLInputElement>(null)
 
   const calculatedTotalQuantity = useMemo(() => items.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0), [items])
   // متراژ و محیط کل: تا سه رقم اعشار و بدون گرد کردن
@@ -571,28 +570,57 @@ export default function NewOrderClient() {
     return results.slice(0, 20)
   }, [debouncedProductQuery])
 
-  const filteredModalDescriptions = useMemo(() => {
-    const q = modalDescriptionSearch.trim().toLowerCase()
-    if (!q) return descriptionsList.slice(0, 8)
-    return descriptionsList.filter((d) => d.toLowerCase().includes(q)).slice(0, 12)
-  }, [modalDescriptionSearch])
+  // فهرست کامل توضیحات = توضیحات اضافه‌شده توسط کارشناس‌ها (اول) + لیست اولیه.
+  // نسخه‌ی نرمال‌شده فقط وقتی لیست عوض شود دوباره محاسبه می‌شود (نه در هر keystroke).
+  const descriptionsIndex = useMemo(() => {
+    const seen = new Set<string>()
+    const out: { text: string; norm: string; key: string }[] = []
+    for (const text of [...customDescriptions, ...seedDescriptions]) {
+      const norm = normalizeText(text)
+      const key = norm.replace(/\s+/g, "")
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      out.push({ text, norm, key })
+    }
+    return out
+  }, [customDescriptions])
 
-  // تعداد واحدِ خودکار خدمت (همه تا سه رقم اعشار و بدون گرد کردن)
+  // جستجو مثل کالاها: نرمال‌سازی حروف (ي/ی، ك/ک، ارقام) و تطبیق همه‌ی کلمات، مستقل از ترتیب
+  const filteredModalDescriptions = useMemo(() => {
+    const q = normalizeText(modalDescriptionSearch)
+    if (!q) return descriptionsIndex.slice(0, 8).map((x) => x.text)
+    const tokens = q.split(/\s+/).filter(Boolean)
+    return descriptionsIndex
+      .filter((x) => tokens.every((t) => x.norm.includes(t)))
+      .slice(0, 30)
+      .map((x) => x.text)
+  }, [modalDescriptionSearch, descriptionsIndex])
+
+  // اگر متن تایپ‌شده دقیقاً در لیست نیست، می‌شود آن را به لیست اضافه کرد
+  const canAddDescription = useMemo(() => {
+    const key = normalizeText(modalDescriptionSearch).replace(/\s+/g, "")
+    return key.length >= 2 && !descriptionsIndex.some((x) => x.key === key)
+  }, [modalDescriptionSearch, descriptionsIndex])
+
+  // تعداد واحدِ خودکار خدمت (همه تا پنج رقم اعشار و بدون گرد کردن)
+  // نکته‌ی مهم: مقدار «برای یک قطعه» حساب می‌شود و در تعداد قلم ضرب نمی‌شود.
+  // ضرب در تعداد قطعات از طریق فیلد «تعداد» خدمت انجام می‌شود:
+  // قیمت کل = تعداد × تعداد واحد × قیمت واحد
   const calculatedUnitQuantity = useMemo(() => {
     const item = items.find((i) => i.id === currentItemId)
     if (!item && svcUnit !== "ابعاد دایره") return ""
 
     const l = parseFloat(item?.length || "0") || 0
     const w = parseFloat(item?.width || "0") || 0
-    const q = parseFloat(item?.quantity || "1") || 1
 
     if (svcUnit === "مترمربع") {
-      // مقدار متراژ همان قلم را استفاده می‌کنیم
-      return item?.meterage || fmt3(((l * w) / 10000) * q)
+      // مساحت یک قطعه
+      return fmt3((l * w) / 10000)
     }
 
     if (svcUnit === "محیط") {
-      return fmt3(((2 * (l + w)) / 100) * q)
+      // محیط یک قطعه
+      return fmt3((2 * (l + w)) / 100)
     }
 
     if (svcUnit === "چند طول چند عرض") {
@@ -630,7 +658,7 @@ export default function NewOrderClient() {
   }, [calculatedTotalQuantity, quantityLocked])
 
   useEffect(() => {
-    if (!meterageLocked) setManualTotalMeterage(calculatedTotalMeterage === "0.000" ? "" : calculatedTotalMeterage)
+    if (!meterageLocked) setManualTotalMeterage(calculatedTotalMeterage === "0.00000" ? "" : calculatedTotalMeterage)
   }, [calculatedTotalMeterage, meterageLocked])
 
   useEffect(() => {
@@ -643,6 +671,36 @@ export default function NewOrderClient() {
     window.addEventListener("click", handleClick)
     return () => window.removeEventListener("click", handleClick)
   }, [])
+
+  // با باز شدن مودال خدمات، فوکوس مستقیم روی کادر جستجو می‌رود تا بدون نیاز
+  // به موس بشود سریع تایپ کرد (تاخیر کوتاه چون مودال تازه mount شده)
+  useEffect(() => {
+    if (showServices) {
+      const t = setTimeout(() => serviceSearchRef.current?.focus(), 50)
+      return () => clearTimeout(t)
+    }
+  }, [showServices])
+
+  // میانبرهای کیبوردی روی ردیف انتخاب‌شده‌ی جدول اقلام: F3 = خدمات، F4 = توضیحات
+  // نکته: با کلیک روی ردیف، فوکوس به فیلد «نام کالا» می‌رود (برای ویرایش)، پس این میانبرها
+  // باید حتی وقتی فوکوس داخل اینپوت است کار کنند (کلیدهای F چیزی تایپ نمی‌کنند).
+  // وابستگی‌ها شامل items و وضعیت مودال‌ها هم هست تا هندلر همیشه آخرین state را ببیند.
+  useEffect(() => {
+    const handleFKeys = (e: KeyboardEvent) => {
+      if (e.key !== "F3" && e.key !== "F4") return
+      // جلوی رفتار پیش‌فرض مرورگر (F3 = جستجو در صفحه) همیشه گرفته شود
+      e.preventDefault()
+      // وقتی یکی از پنجره‌ها باز است، پنجره‌ی دیگری باز نشود
+      if (showServices || showDescriptionModal || showInstallModal || showInvoice || copyModal) return
+      // ردیف انتخاب‌شده؛ اگر انتخابی نیست (یا حذف شده) آخرین قلم لیست
+      const target = items.find((i) => i.id === selectedItemId) ?? items[items.length - 1]
+      if (!target) return
+      if (e.key === "F3") openServices(target.id)
+      else openDescriptionModal(target.id)
+    }
+    window.addEventListener("keydown", handleFKeys)
+    return () => window.removeEventListener("keydown", handleFKeys)
+  }, [selectedItemId, items, showServices, showDescriptionModal, showInstallModal, showInvoice, copyModal])
 
   const isOrderInfoComplete =
     customerName.trim() !== "" &&
@@ -768,8 +826,15 @@ export default function NewOrderClient() {
     setNewInstallCode("")
     setNewLength("")
     setNewWidth("")
-    setNewQuantity("1")
+    setNewQuantity("")
     setNewUnitPrice("")
+  }
+
+  // مقدار پیش‌فرض فیلد «تعداد» در مودال خدمات = تعداد قطعات همان قلم
+  // (تا فرمول «تعداد × تعداد واحد × قیمت واحد» برای مشتری قابل فهم باشد)
+  const defaultSvcCount = () => {
+    const it = items.find((i) => i.id === currentItemId)
+    return String(parseFloat(it?.quantity || "1") || 1)
   }
 
   // اسکیپ = انصراف، بدون نیاز به موس؛ به‌ترتیب اولویت: منوها/دراپ‌داون‌های باز، سپس مودال‌ها،
@@ -816,7 +881,7 @@ export default function NewOrderClient() {
         if (editingServiceId) {
           setEditingServiceId(null)
           setSvcTitle("")
-          setSvcCount("1")
+          setSvcCount(defaultSvcCount())
           setSvcUnitQuantity("")
           setSvcUnitPrice("")
           setSvcLengthCount("1")
@@ -846,6 +911,8 @@ export default function NewOrderClient() {
     showServices,
     editingServiceId,
     editingItemId,
+    items,
+    currentItemId,
   ])
 
   const saveItem = () => {
@@ -882,11 +949,13 @@ export default function NewOrderClient() {
         })
       )
       setEditingItemId(null)
-    } else if (qty > 5) {
+    } else if (qty > 4) {
       const calc = calculate(newLength, newWidth, String(qty), newUnit)
       const meterage = parseFloat(calc.meterage) || 0
+      const newId = Date.now()
+      setSelectedItemId(newId)
       setItems([...items, {
-        id: Date.now(),
+        id: newId,
         productName: newProduct,
         productCode: newProductCode,
         installCode: newInstallCode,
@@ -904,11 +973,12 @@ export default function NewOrderClient() {
       }])
     } else {
       const newItems: OrderItem[] = []
+      const baseId = Date.now()
       for (let i = 0; i < qty; i++) {
         const calc = calculate(newLength, newWidth, "1", newUnit)
         const meterage = parseFloat(calc.meterage) || 0
         newItems.push({
-          id: Date.now() + i,
+          id: baseId + i,
           productName: newProduct,
           productCode: newProductCode,
           installCode: newInstallCode,
@@ -925,6 +995,7 @@ export default function NewOrderClient() {
           flagged: false,
         })
       }
+      if (newItems.length) setSelectedItemId(newItems[newItems.length - 1].id)
       setItems([...items, ...newItems])
     }
 
@@ -932,7 +1003,8 @@ export default function NewOrderClient() {
     setNewInstallCode("")
     setNewLength("")
     setNewWidth("")
-    setNewQuantity("1")
+    setNewQuantity("")
+    setLengthError(false)
     lengthRef.current?.focus()
   }
 
@@ -940,6 +1012,22 @@ export default function NewOrderClient() {
 
   const toggleItemFlag = (id: number) => {
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, flagged: !item.flagged } : item)))
+  }
+
+  // حذف سریع همه‌ی خدمات یک قلم از داخل جدول (بدون باز کردن مودال خدمات)
+  const clearItemServices = (id: number) => {
+    setItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item
+        const basePrice = parsePrice(item.unitPrice) * (parseFloat(item.meterage) || 0)
+        return { ...item, services: [], totalPrice: basePrice ? basePrice.toLocaleString("en-US") : "" }
+      })
+    )
+  }
+
+  // حذف سریع توضیحات یک قلم از داخل جدول
+  const clearItemDescription = (id: number) => {
+    setItems((prev) => prev.map((item) => (item.id === id ? { ...item, description: "" } : item)))
   }
 
   const handleMapUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -994,7 +1082,8 @@ export default function NewOrderClient() {
     setTempServices(item?.services || [])
     setSvcTitle("")
     setSvcUnit("محیط")
-    setSvcCount("1")
+    // «تعداد» پیش‌فرض = تعداد قطعات این قلم (چون currentItemId هنوز set نشده، مستقیم از item می‌خوانیم)
+    setSvcCount(String(parseFloat(item?.quantity || "1") || 1))
     setSvcUnitQuantity("")
     setSvcUnitPrice("")
     setSvcLengthCount("1")
@@ -1037,7 +1126,7 @@ export default function NewOrderClient() {
     }
     setEditingServiceId(null)
     setSvcTitle("")
-    setSvcCount("1")
+    setSvcCount(defaultSvcCount())
     setSvcUnitQuantity("")
     setSvcUnitPrice("")
     setSvcLengthCount("1")
@@ -1107,10 +1196,14 @@ export default function NewOrderClient() {
           if (!copyTargetIds.includes(item.id)) return item
           const copiedServices = source.services.map((s) => {
             const unitQuantity = calcServiceUnitQty(item, s)
-            const total = (parseFloat(s.count) || 1) * (parseFloat(unitQuantity) || 0) * parsePrice(s.unitPrice)
+            // برای واحدهای خودکار، «تعداد» برابر تعداد قطعات قلم مقصد می‌شود؛
+            // برای واحدهای دستی همان تعداد خود خدمت حفظ می‌شود
+            const count = autoUnits.includes(s.unit) ? String(parseFloat(item.quantity) || 1) : s.count
+            const total = (parseFloat(count) || 1) * (parseFloat(unitQuantity) || 0) * parsePrice(s.unitPrice)
             return {
               ...s,
               id: Date.now() + Math.random(),
+              count,
               unitQuantity,
               totalPrice: total ? total.toLocaleString("en-US") : "0",
             }
@@ -1135,12 +1228,45 @@ export default function NewOrderClient() {
     setShowDescriptionModal(true)
   }
 
-  const saveDescription = () => {
+  const saveDescriptionText = (text: string) => {
     if (!currentDescItemId) return
     setItems((prev) =>
-      prev.map((item) => (item.id === currentDescItemId ? { ...item, description: modalDescription } : item))
+      prev.map((item) => (item.id === currentDescItemId ? { ...item, description: text } : item))
     )
     setShowDescriptionModal(false)
+  }
+
+  const saveDescription = () => saveDescriptionText(modalDescription)
+
+  // افزودن متن تایپ‌شده به لیست مشترک توضیحات (روی سرور ذخیره می‌شود).
+  // متن نهایی (بعد از یکسان‌سازی حروف، یا همان مورد تکراریِ موجود) برگردانده می‌شود.
+  const addDescriptionToList = async (): Promise<string | null> => {
+    const text = modalDescriptionSearch.trim()
+    if (!text || addingDescription) return null
+    setAddingDescription(true)
+    try {
+      const res = await fetch("/api/descriptions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        alert(data.error || "خطا در ذخیره توضیحات")
+        return null
+      }
+      if (Array.isArray(data.custom)) setCustomDescriptions(data.custom)
+      setModalDescription(data.text)
+      setModalDescriptionSearch(data.text)
+      setShowModalDescDropdown(false)
+      return data.text as string
+    } catch (err) {
+      console.error(err)
+      alert("خطا در ارتباط با سرور")
+      return null
+    } finally {
+      setAddingDescription(false)
+    }
   }
 
   const handleSave = async () => {
@@ -1235,63 +1361,228 @@ export default function NewOrderClient() {
     const getServicesTotal = (item: OrderItem) =>
       item.services.reduce((sum, s) => sum + parsePrice(s.totalPrice), 0)
 
-    // ========== گروه‌بندی کالاهای یکسان برای حالت کلی ==========
-    type GroupedItem = {
-      productName: string
-      productCode: string
-      length: string
-      width: string
+    // ========== گروه‌بندی برای حالت کلی ==========
+    // کالاها: هم‌نام + هم‌واحد + هم‌قیمت در یک سطر جمع می‌شوند.
+    // خدمات: در کل پیش‌فاکتور بر اساس «عنوان + واحد + قیمت واحد» جمع می‌شوند
+    // و هر خدمت یک سطر جدا دارد (تعداد = جمع تعداد، متراژ = جمع تعداد × تعداد واحد).
+    type SummaryRow = {
+      kind: "product" | "service"
+      title: string
+      code: string
       quantity: number
-      meterage: number
-      unitPrice: string
-      productTotal: number
-      services: { title: string; total: number }[]
-      description: string
+      amount: number
+      unit: string
+      unitPrice: number
+      total: number
+      descriptions: string[]
     }
 
-    const groupedItems: GroupedItem[] = []
-    const groupMap = new Map<string, GroupedItem>()
+    // عدد را بدون صفرهای اضافی نشان می‌دهد (۷.۵۹۶ و ۱ به‌جای ۷.۵۹۶۰۰ و ۱.۰۰۰۰۰)
+    const fmtAmount = (n: number) =>
+      Number.isInteger(n) ? String(n) : fmt3(n).replace(/0+$/, "").replace(/\.$/, "")
+
+    const productRows: SummaryRow[] = []
+    const serviceRows: SummaryRow[] = []
+    const productMap = new Map<string, SummaryRow>()
+    const serviceMap = new Map<string, SummaryRow>()
 
     items.forEach((item) => {
-      // کلید یکسان‌بودن: نام کالا
-      const key = item.productName
-      const productOnly = getProductOnlyPrice(item)
+      const qty = parseFloat(item.quantity) || 0
+      const meterage = parseFloat(item.meterage) || 0
+      const desc = (item.description || "").trim()
+      const pKey = `${item.productName}|${item.unit}|${item.unitPrice}`
 
-      const existing = groupMap.get(key)
-      if (existing) {
-        existing.quantity += parseFloat(item.quantity) || 0
-        existing.meterage += parseFloat(item.meterage) || 0
-        existing.productTotal += productOnly
-
-        // ادغام خدمات
-        item.services.forEach((s) => {
-          const found = existing.services.find((x) => x.title === s.title)
-          if (found) {
-            found.total += parsePrice(s.totalPrice)
-          } else {
-            existing.services.push({ title: s.title, total: parsePrice(s.totalPrice) })
-          }
-        })
+      const existingP = productMap.get(pKey)
+      if (existingP) {
+        existingP.quantity += qty
+        existingP.amount += meterage
+        existingP.total += getProductOnlyPrice(item)
+        if (desc && !existingP.descriptions.includes(desc)) existingP.descriptions.push(desc)
       } else {
-        groupMap.set(key, {
-          productName: item.productName,
-          productCode: item.productCode,
-          length: item.length,
-          width: item.width,
-          quantity: parseFloat(item.quantity) || 0,
-          meterage: parseFloat(item.meterage) || 0,
-          unitPrice: item.unitPrice,
-          productTotal: productOnly,
-          services: item.services.map((s) => ({
-            title: s.title,
-            total: parsePrice(s.totalPrice),
-          })),
-          description: item.description,
-        })
+        const row: SummaryRow = {
+          kind: "product",
+          title: item.productName,
+          code: item.productCode,
+          quantity: qty,
+          amount: meterage,
+          unit: item.unit,
+          unitPrice: parsePrice(item.unitPrice),
+          total: getProductOnlyPrice(item),
+          descriptions: desc ? [desc] : [],
+        }
+        productMap.set(pKey, row)
+        productRows.push(row)
       }
+
+      item.services.forEach((s) => {
+        const cnt = parseFloat(s.count) || 1
+        const unitQty =
+          s.unit === "عددی" && !String(s.unitQuantity || "").trim() ? 1 : parseFloat(s.unitQuantity) || 0
+        const sKey = `${s.title}|${s.unit}|${s.unitPrice}`
+
+        const existingS = serviceMap.get(sKey)
+        if (existingS) {
+          existingS.quantity += cnt
+          existingS.amount += cnt * unitQty
+          existingS.total += parsePrice(s.totalPrice)
+        } else {
+          const row: SummaryRow = {
+            kind: "service",
+            title: s.title,
+            code: "",
+            quantity: cnt,
+            amount: cnt * unitQty,
+            unit: s.unit,
+            unitPrice: parsePrice(s.unitPrice),
+            total: parsePrice(s.totalPrice),
+            descriptions: [],
+          }
+          serviceMap.set(sKey, row)
+          serviceRows.push(row)
+        }
+      })
     })
 
-    groupMap.forEach((g) => groupedItems.push(g))
+    // اول همه‌ی کالاها، بعد خدمات (هر خدمت در یک سطر جدا)
+    const summaryRows: SummaryRow[] = [...productRows, ...serviceRows]
+
+    // ========== حالت جزئی: مثل چاپ نرم‌افزار قبلی ==========
+    // برای هر کالا (هم‌نام + هم‌واحد + هم‌قیمت) یک بلوک ساخته می‌شود:
+    //   ۱) خدمات آن کالا: سطر «مجموع» هر خدمت + سطر(های) خود خدمت (جمع تعداد و متراژ همه‌ی قطعات)
+    //   ۲) سطر «مجموع» کالا (متراژ کل) + هر قطعه در یک سطر جدا
+    type DetailVariant = {
+      code: string
+      quantity: number
+      amount: number
+      unit: string
+      unitPrice: number
+      total: number
+    }
+    type DetailBlock = {
+      productName: string
+      unit: string
+      unitPrice: number
+      items: OrderItem[]
+      services: { title: string; variants: DetailVariant[] }[]
+    }
+    type DetailRow = {
+      kind: "svc-total" | "prod-total" | "service" | "product"
+      no?: number
+      title: string
+      code?: string
+      length?: string
+      width?: string
+      quantity?: number
+      amount?: number
+      unit?: string
+      unitPrice?: number | null
+      total: number
+      description?: string
+    }
+
+    const detailBlocks: DetailBlock[] = []
+    const blockMap = new Map<string, DetailBlock>()
+
+    items.forEach((item) => {
+      const key = `${item.productName}|${item.unit}|${item.unitPrice}`
+      let block = blockMap.get(key)
+      if (!block) {
+        block = {
+          productName: item.productName,
+          unit: item.unit,
+          unitPrice: parsePrice(item.unitPrice),
+          items: [],
+          services: [],
+        }
+        blockMap.set(key, block)
+        detailBlocks.push(block)
+      }
+      block.items.push(item)
+
+      item.services.forEach((s) => {
+        const cnt = parseFloat(s.count) || 1
+        const unitQty =
+          s.unit === "عددی" && !String(s.unitQuantity || "").trim() ? 1 : parseFloat(s.unitQuantity) || 0
+        const price = parsePrice(s.unitPrice)
+
+        let svc = block!.services.find((x) => x.title === s.title)
+        if (!svc) {
+          svc = { title: s.title, variants: [] }
+          block!.services.push(svc)
+        }
+        let v = svc.variants.find((x) => x.unit === s.unit && x.unitPrice === price)
+        if (!v) {
+          v = {
+            code: serviceCodeByName.get(s.title) || "",
+            quantity: 0,
+            amount: 0,
+            unit: s.unit,
+            unitPrice: price,
+            total: 0,
+          }
+          svc.variants.push(v)
+        }
+        v.quantity += cnt
+        v.amount += cnt * unitQty
+        v.total += parsePrice(s.totalPrice)
+      })
+    })
+
+    const detailRows: DetailRow[] = []
+    let detailNo = 0
+    detailBlocks.forEach((b) => {
+      // ۱) خدمات این کالا
+      b.services.forEach((svc) => {
+        const svcName = `${svc.title} ${b.productName}`
+        const prices = new Set(svc.variants.map((v) => v.unitPrice))
+        detailRows.push({
+          kind: "svc-total",
+          title: svcName,
+          unitPrice: prices.size === 1 ? svc.variants[0].unitPrice : null,
+          total: svc.variants.reduce((sum, v) => sum + v.total, 0),
+        })
+        svc.variants.forEach((v) => {
+          detailRows.push({
+            kind: "service",
+            no: ++detailNo,
+            title: svcName,
+            code: v.code,
+            length: "0",
+            width: "0",
+            quantity: v.quantity,
+            amount: v.amount,
+            unit: v.unit,
+            unitPrice: v.unitPrice,
+            total: v.total,
+          })
+        })
+      })
+
+      // ۲) خود کالا: یک سطر «مجموع» با متراژ کل + هر قطعه در یک سطر
+      detailRows.push({
+        kind: "prod-total",
+        title: b.productName,
+        amount: b.items.reduce((sum, it) => sum + (parseFloat(it.meterage) || 0), 0),
+        unitPrice: b.unitPrice,
+        total: b.items.reduce((sum, it) => sum + getProductOnlyPrice(it), 0),
+      })
+      b.items.forEach((it) => {
+        detailRows.push({
+          kind: "product",
+          no: ++detailNo,
+          title: it.productName,
+          code: it.productCode,
+          length: it.length,
+          width: it.width,
+          quantity: parseFloat(it.quantity) || 0,
+          amount: parseFloat(it.meterage) || 0,
+          unit: it.unit,
+          unitPrice: parsePrice(it.unitPrice),
+          total: getProductOnlyPrice(it),
+          description: it.description,
+        })
+      })
+    })
 
     return (
       <div
@@ -1338,8 +1629,8 @@ export default function NewOrderClient() {
             </div>
           </div>
 
-          {/* ========== حالت جزئی ========== */}
-          {invoiceMode === "detailed" ? (
+          {/* ========== ریز فاکتور (هر قلم + خدمات خودش + جمع ردیف) ========== */}
+          {invoiceMode === "breakdown" ? (
             <table className="w-full border-collapse text-sm mb-5">
               <thead>
                 <tr className="bg-teal-700 text-white">
@@ -1466,111 +1757,201 @@ export default function NewOrderClient() {
                 </tr>
               </tbody>
             </table>
-          ) : (
-            /* ========== حالت کلی (با گروه‌بندی خودکار) ========== */
+          ) : invoiceMode === "summary" ? (
+            /* ========== حالت کلی: هر کالا و هر خدمت در یک سطر جدا ========== */
             <table className="w-full border-collapse text-sm mb-5">
               <thead>
                 <tr className="bg-teal-700 text-white">
                   <th className="border border-teal-600 p-2.5 text-center font-bold">ردیف</th>
-                  <th className="border border-teal-600 p-2.5 text-center font-bold">شرح</th>
+                  <th className="border border-teal-600 p-2.5 text-center font-bold">نام کالا یا خدمات</th>
                   <th className="border border-teal-600 p-2.5 text-center font-bold">تعداد</th>
                   <th className="border border-teal-600 p-2.5 text-center font-bold">متراژ</th>
+                  <th className="border border-teal-600 p-2.5 text-center font-bold">واحد</th>
+                  <th className="border border-teal-600 p-2.5 text-center font-bold">قیمت</th>
                   <th className="border border-teal-600 p-2.5 text-center font-bold">قیمت کل</th>
+                  <th className="border border-teal-600 p-2.5 text-center font-bold">شرح</th>
                 </tr>
               </thead>
               <tbody>
-                {groupedItems.map((g, i) => {
-                  const servicesTotal = g.services.reduce((sum, s) => sum + s.total, 0)
-                  const itemGrand = g.productTotal + servicesTotal
-
-                  return (
-                    <Fragment key={i}>
-                      {/* سطر کالا */}
-                      <tr className="hover:bg-teal-50/40">
-                        <td className="border border-gray-300 p-2 text-center font-bold">{i + 1}</td>
-                        <td className="border border-gray-300 p-2 font-semibold">
-                          {g.productCode && (
-                            <bdi className="text-xs text-teal-700 font-mono ml-1.5">{g.productCode}</bdi>
-                          )}
-                          <bdi>{g.productName}</bdi>
-                          {(g.length || g.width) && (
-                            <span className="text-xs text-gray-500 mr-2">
-                              ({g.length} × {g.width})
-                            </span>
-                          )}
-                        </td>
-                        <td className="border border-gray-300 p-2 text-center">{g.quantity}</td>
-                        <td className="border border-gray-300 p-2 text-center">{fmt3(g.meterage)}</td>
-                        <td className="border border-gray-300 p-2 text-left font-bold text-teal-800">
-                          {formatPrice(g.productTotal)}
-                        </td>
-                      </tr>
-
-                      {/* سطر خدمات */}
-                      {g.services.length > 0 && (
-                        <tr className="bg-amber-50/60">
-                          <td className="border border-gray-300 p-2"></td>
-                          <td className="border border-gray-300 p-2 text-xs text-gray-700" colSpan={3}>
-                            <span className="font-bold text-amber-800">خدمات: </span>
-                            {g.services.map((s) => `${s.title} (${formatPrice(s.total)})`).join(" ، ")}
-                          </td>
-                          <td className="border border-gray-300 p-2 text-left font-bold text-teal-700">
-                            {formatPrice(servicesTotal)}
-                          </td>
-                        </tr>
+                {summaryRows.map((r, i) => (
+                  <tr key={i} className={r.kind === "service" ? "bg-amber-50/70" : "hover:bg-teal-50/40"}>
+                    <td className="border border-gray-300 p-2 text-center font-bold">{i + 1}</td>
+                    <td className={`border border-gray-300 p-2 font-semibold ${r.kind === "service" ? "text-amber-900" : ""}`}>
+                      {r.code && (
+                        <bdi className="text-xs text-teal-700 font-mono ml-1.5">{r.code}</bdi>
                       )}
-
-                      {/* جمع این ردیف */}
-                      <tr className="bg-teal-100/80">
-                        <td className="border border-gray-300 p-2"></td>
-                        <td colSpan={3} className="border border-gray-300 p-2 text-left font-bold text-teal-900">
-                          جمع این ردیف
-                        </td>
-                        <td className="border border-gray-300 p-2 text-left font-bold text-teal-900">
-                          {formatPrice(itemGrand)}
-                        </td>
-                      </tr>
-                    </Fragment>
-                  )
-                })}
+                      <bdi>{r.title}</bdi>
+                    </td>
+                    <td className="border border-gray-300 p-2 text-center">{fmtAmount(r.quantity)}</td>
+                    <td className="border border-gray-300 p-2 text-center">{fmtAmount(r.amount)}</td>
+                    <td className="border border-gray-300 p-2 text-center">{r.unit}</td>
+                    <td className="border border-gray-300 p-2 text-center">{formatPrice(r.unitPrice)}</td>
+                    <td className="border border-gray-300 p-2 text-left font-bold text-teal-800">
+                      {formatPrice(r.total)}
+                    </td>
+                    <td className="border border-gray-300 p-2 text-xs text-gray-700">
+                      {r.descriptions.join("، ")}
+                    </td>
+                  </tr>
+                ))}
 
                 {/* جمع‌ها + تخفیف + ارزش افزوده */}
                 <tr className="bg-gray-100">
-                  <td colSpan={4} className="border border-gray-300 p-2.5 text-left font-bold">جمع کل کالا و خدمات</td>
+                  <td colSpan={6} className="border border-gray-300 p-2.5 text-left font-bold">جمع کل کالا و خدمات</td>
                   <td className="border border-gray-300 p-2.5 text-left font-bold text-teal-800">
                     {grandTotal.toLocaleString("en-US")}
                   </td>
+                  <td className="border border-gray-300 p-2.5"></td>
                 </tr>
 
                 {hasDiscount && (
                   <tr className="bg-rose-50">
-                    <td colSpan={4} className="border border-gray-300 p-2.5 text-left font-bold text-rose-700">
+                    <td colSpan={6} className="border border-gray-300 p-2.5 text-left font-bold text-rose-700">
                       تخفیف ({discountMode === "percent" ? `${discountPercent}٪` : `${discountDisplayPercent}٪`})
                     </td>
                     <td className="border border-gray-300 p-2.5 text-left font-bold text-rose-700">
                       -{discountAmount.toLocaleString("en-US")}
                     </td>
+                    <td className="border border-gray-300 p-2.5"></td>
                   </tr>
                 )}
 
                 {isOfficialInvoice && (
                   <tr className="bg-amber-50">
-                    <td colSpan={4} className="border border-gray-300 p-2.5 text-left font-bold text-amber-700">
+                    <td colSpan={6} className="border border-gray-300 p-2.5 text-left font-bold text-amber-700">
                       ارزش افزوده (۱۰٪)
                     </td>
                     <td className="border border-gray-300 p-2.5 text-left font-bold text-amber-700">
                       {vatAmount.toLocaleString("en-US")}
                     </td>
+                    <td className="border border-gray-300 p-2.5"></td>
                   </tr>
                 )}
 
                 <tr className="bg-teal-700 text-white">
-                  <td colSpan={4} className="border border-teal-600 p-3 text-left font-bold text-base">
+                  <td colSpan={6} className="border border-teal-600 p-3 text-left font-bold text-base">
                     مبلغ قابل پرداخت
                   </td>
                   <td className="border border-teal-600 p-3 text-left font-bold text-lg">
                     {finalTotal.toLocaleString("en-US")} ریال
                   </td>
+                  <td className="border border-teal-600 p-3"></td>
+                </tr>
+              </tbody>
+            </table>
+          ) : (
+            /* ========== حالت جزئی: بلوک هر کالا (خدمات + مجموع + قطعات) ========== */
+            <table className="w-full border-collapse text-xs mb-5">
+              <thead>
+                <tr className="bg-teal-700 text-white">
+                  <th className="border border-teal-600 p-2 text-center font-bold">ردیف</th>
+                  <th className="border border-teal-600 p-2 text-center font-bold">نام کالا یا خدمات</th>
+                  <th className="border border-teal-600 p-2 text-center font-bold">کد</th>
+                  <th className="border border-teal-600 p-2 text-center font-bold">طول</th>
+                  <th className="border border-teal-600 p-2 text-center font-bold">عرض</th>
+                  <th className="border border-teal-600 p-2 text-center font-bold">تعداد</th>
+                  <th className="border border-teal-600 p-2 text-center font-bold">متراژ</th>
+                  <th className="border border-teal-600 p-2 text-center font-bold">واحد</th>
+                  <th className="border border-teal-600 p-2 text-center font-bold">قیمت</th>
+                  <th className="border border-teal-600 p-2 text-center font-bold">قیمت کل</th>
+                  <th className="border border-teal-600 p-2 text-center font-bold">شرح</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detailRows.map((r, i) => {
+                  const isTotal = r.kind === "svc-total" || r.kind === "prod-total"
+                  const rowClass =
+                    r.kind === "svc-total"
+                      ? "bg-amber-100/70 font-bold"
+                      : r.kind === "prod-total"
+                        ? "bg-teal-100/80 font-bold"
+                        : r.kind === "service"
+                          ? "bg-amber-50/70"
+                          : "hover:bg-teal-50/40"
+                  const cell = "border border-gray-300 p-1.5 text-center"
+
+                  return (
+                    <tr key={i} className={rowClass}>
+                      <td className={`${cell} ${isTotal ? "text-[10px]" : "font-bold"}`}>
+                        {isTotal ? "مجموع:" : r.no}
+                      </td>
+                      <td className="border border-gray-300 p-1.5 font-semibold">
+                        <bdi>{r.title}</bdi>
+                      </td>
+
+                      {isTotal ? (
+                        <>
+                          <td colSpan={4} className={cell}></td>
+                          <td className={cell}>{r.amount != null ? fmtAmount(r.amount) : ""}</td>
+                          <td className={cell}></td>
+                          <td className={cell}>{r.unitPrice ? formatPrice(r.unitPrice) : ""}</td>
+                          <td className="border border-gray-300 p-1.5 text-left font-bold text-teal-800">
+                            {formatPrice(r.total)}
+                          </td>
+                          <td className={cell}></td>
+                        </>
+                      ) : (
+                        <>
+                          <td className={cell}>
+                            <bdi>{r.code}</bdi>
+                          </td>
+                          <td className={cell}>{r.length}</td>
+                          <td className={cell}>{r.width}</td>
+                          <td className={cell}>{r.quantity != null ? fmtAmount(r.quantity) : ""}</td>
+                          <td className={cell}>{r.amount != null ? fmtAmount(r.amount) : ""}</td>
+                          <td className={cell}>{r.unit}</td>
+                          <td className={cell}>{formatPrice(r.unitPrice ?? 0)}</td>
+                          <td className="border border-gray-300 p-1.5 text-left font-bold text-teal-800">
+                            {formatPrice(r.total)}
+                          </td>
+                          <td className="border border-gray-300 p-1.5 text-gray-700">{r.description || ""}</td>
+                        </>
+                      )}
+                    </tr>
+                  )
+                })}
+
+                {/* جمع کل + تخفیف + ارزش افزوده + مبلغ نهایی */}
+                <tr className="bg-gray-100">
+                  <td colSpan={9} className="border border-gray-300 p-2.5 text-left font-bold">جمع کل کالا و خدمات</td>
+                  <td className="border border-gray-300 p-2.5 text-left font-bold text-teal-800">
+                    {grandTotal.toLocaleString("en-US")}
+                  </td>
+                  <td className="border border-gray-300 p-2.5"></td>
+                </tr>
+
+                {hasDiscount && (
+                  <tr className="bg-rose-50">
+                    <td colSpan={9} className="border border-gray-300 p-2.5 text-left font-bold text-rose-700">
+                      تخفیف ({discountMode === "percent" ? `${discountPercent}٪` : `${discountDisplayPercent}٪`})
+                    </td>
+                    <td className="border border-gray-300 p-2.5 text-left font-bold text-rose-700">
+                      -{discountAmount.toLocaleString("en-US")}
+                    </td>
+                    <td className="border border-gray-300 p-2.5"></td>
+                  </tr>
+                )}
+
+                {isOfficialInvoice && (
+                  <tr className="bg-amber-50">
+                    <td colSpan={9} className="border border-gray-300 p-2.5 text-left font-bold text-amber-700">
+                      ارزش افزوده (۱۰٪)
+                    </td>
+                    <td className="border border-gray-300 p-2.5 text-left font-bold text-amber-700">
+                      {vatAmount.toLocaleString("en-US")}
+                    </td>
+                    <td className="border border-gray-300 p-2.5"></td>
+                  </tr>
+                )}
+
+                <tr className="bg-teal-700 text-white">
+                  <td colSpan={9} className="border border-teal-600 p-3 text-left font-bold text-base">
+                    مبلغ قابل پرداخت
+                  </td>
+                  <td className="border border-teal-600 p-3 text-left font-bold text-base">
+                    {finalTotal.toLocaleString("en-US")} ریال
+                  </td>
+                  <td className="border border-teal-600 p-3"></td>
                 </tr>
               </tbody>
             </table>
@@ -1682,21 +2063,44 @@ export default function NewOrderClient() {
                           onChange={(e) => {
                             setCustomerSearch(e.target.value)
                             setCustomerName(e.target.value)
+                            setCustomerActiveIndex(0)
                             setShowCustomerDropdown(true)
                           }}
                           onFocus={() => setShowCustomerDropdown(true)}
-                          onKeyDown={(e) => handleEnter(e, customerGroupRef)}
+                          onKeyDown={(e) => {
+                            const listOpen = showCustomerDropdown && filteredCustomers.length > 0
+                            if (e.key === "ArrowDown" && listOpen) {
+                              e.preventDefault()
+                              setCustomerActiveIndex((i) => Math.min(i + 1, filteredCustomers.length - 1))
+                            } else if (e.key === "ArrowUp" && listOpen) {
+                              e.preventDefault()
+                              setCustomerActiveIndex((i) => Math.max(i - 1, 0))
+                            } else if (e.key === "Enter") {
+                              e.preventDefault()
+                              // اگر لیست باز است و چیزی تایپ شده، مشتریِ هایلایت‌شده (پیش‌فرض: اولین نتیجه) انتخاب می‌شود
+                              if (listOpen && customerSearch.trim()) {
+                                selectCustomer(filteredCustomers[Math.min(customerActiveIndex, filteredCustomers.length - 1)])
+                              }
+                              setShowCustomerDropdown(false)
+                              focusRef(customerGroupRef)
+                            }
+                          }}
                           placeholder="جستجوی مشتری..."
                           className={inputClass}
                         />
                         {showCustomerDropdown && filteredCustomers.length > 0 && (
                           <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-teal-200 bg-white shadow-2xl">
-                            {filteredCustomers.map((c) => (
+                            {filteredCustomers.map((c, idx) => (
                               <button
                                 key={c.id}
                                 type="button"
                                 onClick={() => selectCustomer(c)}
-                                className="w-full text-right px-3 py-2 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50"
+                                ref={(el) => {
+                                  if (el && idx === customerActiveIndex) el.scrollIntoView({ block: "nearest" })
+                                }}
+                                className={`w-full text-right px-3 py-2 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50 ${
+                                  idx === customerActiveIndex ? "bg-yellow-100" : ""
+                                }`}
                               >
                                 <bdi className="text-teal-700 font-mono text-xs ml-2">{c.code}</bdi>
                                 <bdi>{c.name}</bdi>
@@ -1920,8 +2324,8 @@ export default function NewOrderClient() {
                 <h2 className="mb-3 text-xl font-bold text-blue-950">
                   {editingItemId ? "ویرایش کالا" : "افزودن کالا جدید"}
                 </h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-2 items-end">
-                  <div className="lg:col-span-2 relative min-w-[220px]" onClick={(e) => e.stopPropagation()}>
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-10 gap-3 items-end">
+                  <div className="col-span-2 md:col-span-4 lg:col-span-3 relative min-w-0" onClick={(e) => e.stopPropagation()}>
                     <label className={labelClass}>نام کالا</label>
                     <input
                       ref={productRef}
@@ -1991,7 +2395,27 @@ export default function NewOrderClient() {
                   </div>
                   <div>
                     <label className={labelClass}>طول (cm)</label>
-                    <input ref={lengthRef} type="number" value={newLength} onChange={(e) => setNewLength(e.target.value)} onKeyDown={(e) => handleEnter(e, widthRef)} className={inputClass} />
+                    <input
+                      ref={lengthRef}
+                      type="number"
+                      value={newLength}
+                      onChange={(e) => {
+                        setNewLength(e.target.value)
+                        setLengthError(false)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault()
+                          // برای «مترمربع» و «مترطول» تا طول وارد نشده به فیلد بعدی نمی‌رود
+                          if (newUnit !== "عددی" && !newLength.trim()) {
+                            setLengthError(true)
+                            return
+                          }
+                          focusRef(widthRef)
+                        }
+                      }}
+                      className={`${inputClass} ${lengthError ? "!border-red-400 !bg-red-50" : ""}`}
+                    />
                   </div>
                   <div>
                     <label className={labelClass}>عرض (cm)</label>
@@ -1999,7 +2423,21 @@ export default function NewOrderClient() {
                   </div>
                   <div>
                     <label className={labelClass}>تعداد</label>
-                    <input ref={quantityRef} type="number" value={newQuantity} onChange={(e) => setNewQuantity(e.target.value)} onKeyDown={(e) => handleEnter(e, installCodeRef)} className={inputClass} />
+                    <input
+                      ref={quantityRef}
+                      type="number"
+                      value={newQuantity}
+                      onChange={(e) => setNewQuantity(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault()
+                          if (!newQuantity.trim()) setNewQuantity("1")
+                          focusRef(installCodeRef)
+                        }
+                      }}
+                      placeholder="1"
+                      className={inputClass}
+                    />
                   </div>
                   <div>
                     <label className={labelClass}>کد نصب</label>
@@ -2049,7 +2487,11 @@ export default function NewOrderClient() {
               {/* جدول اقلام — relative z-0 تا زیر دراپ‌داون‌های بالایی قرار بگیرد */}
               {items.length > 0 && (
                 <div className="relative z-0 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/20 overflow-x-auto">
-                  <p className="text-xs text-blue-700 mb-2">برای ویرایش روی هر ردیف کلیک کنید. عرض هر ستون از گوشه‌ی آن قابل تغییر دستی است.</p>
+                  <p className="text-xs text-blue-700 mb-2">
+                    برای ویرایش روی هر ردیف کلیک کنید (همان ردیف انتخاب هم می‌شود). با ردیف انتخاب‌شده، کلید
+                    <strong> F3 </strong> پنجره‌ی خدمات و کلید <strong> F4 </strong> پنجره‌ی توضیحات را باز می‌کند.
+                    عرض هر ستون از گوشه‌ی آن قابل تغییر دستی است.
+                  </p>
                   <table className="w-full text-sm text-blue-900 border-collapse">
                     <thead>
                       <tr className="border-b border-teal-500/30 bg-teal-600 text-white text-center">
@@ -2084,10 +2526,10 @@ export default function NewOrderClient() {
                           <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "6rem", maxWidth: "14rem" }}>قیمت کل</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "12rem", maxWidth: "26rem" }}>خدمات</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "12rem", maxWidth: "26rem" }}>خدمات (F3)</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
-                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "6rem", maxWidth: "20rem" }}>توضیحات</div>
+                          <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "6rem", maxWidth: "20rem" }}>توضیحات (F4)</div>
                         </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
                           <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "7rem", maxWidth: "14rem" }}>عملیات</div>
@@ -2098,10 +2540,15 @@ export default function NewOrderClient() {
                       {items.map((item, index) => (
                         <tr
                           key={item.id}
-                          onClick={() => startEditItem(item)}
+                          onClick={() => {
+                            setSelectedItemId(item.id)
+                            startEditItem(item)
+                          }}
                           className={`border-b border-teal-500/10 hover:bg-yellow-50 cursor-pointer transition-colors ${
                             item.flagged ? "bg-orange-100" : "bg-white/40"
-                          } ${editingItemId === item.id ? "ring-2 ring-inset ring-amber-400" : ""}`}
+                          } ${editingItemId === item.id ? "ring-2 ring-inset ring-amber-400" : ""} ${
+                            selectedItemId === item.id && editingItemId !== item.id ? "ring-2 ring-inset ring-teal-500" : ""
+                          }`}
                           onContextMenu={(e) => {
                             e.preventDefault()
                             setContextMenu({ x: e.clientX, y: e.clientY, itemId: item.id })
@@ -2125,26 +2572,48 @@ export default function NewOrderClient() {
                           <td className="p-2.5 text-left border border-teal-100">{formatPrice(item.unitPrice)}</td>
                           <td className="p-2.5 font-bold text-teal-700 text-left border border-teal-100">{item.totalPrice}</td>
                           <td className="p-2.5 border border-teal-100 text-center">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); openServices(item.id) }}
-                              className={`rounded-lg px-2 py-1.5 text-xs font-bold w-full leading-5 whitespace-normal break-words ${
-                                item.services.length > 0 ? "bg-amber-500/25 text-amber-900" : "bg-amber-500/15 hover:bg-amber-500/30 text-amber-800"
-                              }`}
-                              title={item.services.length > 0 ? item.services.map((s) => s.title).join("، ") : "افزودن خدمات"}
-                            >
-                              {item.services.length > 0 ? item.services.map((s) => s.title).join("، ") : "افزودن"}
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); openServices(item.id) }}
+                                className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-bold leading-5 whitespace-normal break-words ${
+                                  item.services.length > 0 ? "bg-amber-500/25 text-amber-900" : "bg-amber-500/15 hover:bg-amber-500/30 text-amber-800"
+                                }`}
+                                title={item.services.length > 0 ? item.services.map((s) => s.title).join("، ") : "افزودن خدمات (F3)"}
+                              >
+                                {item.services.length > 0 ? item.services.map((s) => s.title).join("، ") : "افزودن"}
+                              </button>
+                              {item.services.length > 0 && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); clearItemServices(item.id) }}
+                                  title="حذف خدمات"
+                                  className="shrink-0 rounded-lg bg-red-500/15 hover:bg-red-500/30 px-1.5 py-1.5 text-xs font-bold text-red-700"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
                           </td>
                           <td className="p-2.5 border border-teal-100 text-center">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); openDescriptionModal(item.id) }}
-                              className={`rounded-lg px-2 py-1.5 text-xs font-bold w-full leading-5 whitespace-normal break-words text-right ${
-                                item.description ? "bg-teal-500/25 text-teal-900" : "bg-teal-500/15 hover:bg-teal-500/30 text-teal-800"
-                              }`}
-                              title={item.description || "افزودن توضیحات"}
-                            >
-                              {item.description || "افزودن"}
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); openDescriptionModal(item.id) }}
+                                className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-bold leading-5 whitespace-normal break-words text-right ${
+                                  item.description ? "bg-teal-500/25 text-teal-900" : "bg-teal-500/15 hover:bg-teal-500/30 text-teal-800"
+                                }`}
+                                title={item.description || "افزودن توضیحات (F4)"}
+                              >
+                                {item.description || "افزودن"}
+                              </button>
+                              {item.description && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); clearItemDescription(item.id) }}
+                                  title="حذف توضیحات"
+                                  className="shrink-0 rounded-lg bg-red-500/15 hover:bg-red-500/30 px-1.5 py-1.5 text-xs font-bold text-red-700"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
                           </td>
                           <td className="p-2.5 border border-teal-100">
                             <div className="flex gap-1 justify-center">
@@ -2421,15 +2890,33 @@ export default function NewOrderClient() {
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault()
-                          saveDescription()
+                          if ((e.ctrlKey || e.metaKey) && canAddDescription) {
+                            // Ctrl+Enter: افزودن به لیست مشترک و ثبت روی قلم
+                            addDescriptionToList().then((t) => {
+                              if (t) saveDescriptionText(t)
+                            })
+                          } else {
+                            saveDescription()
+                          }
                         }
                       }}
                       placeholder="جستجو یا وارد کردن توضیحات..."
                       className={inputClass}
                       autoFocus
                     />
-                    {showModalDescDropdown && filteredModalDescriptions.length > 0 && (
+                    {showModalDescDropdown && (filteredModalDescriptions.length > 0 || canAddDescription) && (
                       <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-teal-200 bg-white shadow-2xl">
+                        {canAddDescription && (
+                          <button
+                            type="button"
+                            onClick={addDescriptionToList}
+                            disabled={addingDescription}
+                            className="sticky top-0 z-10 w-full text-right px-4 py-2.5 text-sm font-bold text-teal-800 bg-teal-50 hover:bg-teal-100 border-b border-teal-200 disabled:opacity-60"
+                          >
+                            {addingDescription ? "در حال ذخیره..." : `+ افزودن «${modalDescriptionSearch.trim()}» به لیست توضیحات`}
+                            <span className="mr-2 text-xs font-normal text-teal-600">(Ctrl+Enter)</span>
+                          </button>
+                        )}
                         {filteredModalDescriptions.map((d) => (
                           <button
                             key={d}
@@ -2574,17 +3061,21 @@ export default function NewOrderClient() {
                       <span className="mx-2 text-teal-600">|</span>
                       طول: <strong>{currentItem.length}</strong> × عرض: <strong>{currentItem.width}</strong>
                       <span className="mx-2 text-teal-600">|</span>
+                      تعداد: <strong>{currentItem.quantity}</strong>
+                      <span className="mx-2 text-teal-600">|</span>
                       متراژ: {currentItem.meterage}
                     </div>
                   )}
 
                   <div className="mb-4">
                     <input
+                      ref={serviceSearchRef}
                       type="text"
                       value={serviceSearch}
                       onChange={(e) => setServiceSearch(e.target.value)}
                       onKeyDown={(e) => handleEnter(e, svcTitleRef)}
-                      placeholder="جستجوی خدمت..."
+                      placeholder="جستجوی خدمت... (مثلاً یک حرف مثل «د» برای دیاموند)"
+                      autoFocus
                       className="w-full rounded-xl border border-teal-500/40 px-4 py-3.5 text-lg font-semibold text-blue-950 focus:border-teal-500 focus:outline-none hover:bg-yellow-100 transition-colors"
                     />
                   </div>
@@ -2791,7 +3282,7 @@ export default function NewOrderClient() {
                         onClick={() => {
                           setEditingServiceId(null)
                           setSvcTitle("")
-                          setSvcCount("1")
+                          setSvcCount(defaultSvcCount())
                           setSvcUnitQuantity("")
                           setSvcUnitPrice("")
                           setSvcLengthCount("1")
@@ -2908,6 +3399,12 @@ export default function NewOrderClient() {
                           className={`rounded-lg px-3 py-1 text-sm font-bold ${invoiceMode === "summary" ? "bg-white text-teal-800" : "bg-white/20"}`}
                         >
                           کلی
+                        </button>
+                        <button
+                          onClick={() => setInvoiceMode("breakdown")}
+                          className={`rounded-lg px-3 py-1 text-sm font-bold ${invoiceMode === "breakdown" ? "bg-white text-teal-800" : "bg-white/20"}`}
+                        >
+                          ریز فاکتور
                         </button>
                       </div>
                     </div>

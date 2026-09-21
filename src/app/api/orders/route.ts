@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { safeDate } from "@/lib/date"
-
+import { getSession } from "@/lib/auth"
 export async function GET() {
   try {
     const orders = await prisma.order.findMany({
@@ -105,9 +105,10 @@ export async function POST(req: NextRequest) {
       Array.isArray(mapImages) && mapImages.length
         ? JSON.stringify(mapImages)
         : null
-
+const session = await getSession()
+const salesRepName = session?.displayName || null
     const order = await prisma.order.create({
-      data: {
+      data: {salesRep: salesRepName,
         orderNumber: String(nextOrderNumber),
         customerId: customer.id,
         customerOrderNumber: nextCustomerOrderNumber,
