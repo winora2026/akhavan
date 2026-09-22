@@ -232,7 +232,7 @@ export default function NewOrderClient() {
   const [deliveryDate, setDeliveryDate] = useState<any>(null)
   const [customerName, setCustomerName] = useState("")
   // TODO: پس از افزودن سیستم لاگین کارشناسان، این مقدار باید به‌صورت خودکار از کاربر واردشده پر شود
-  const [salesRep, setSalesRep] = useState("data.user.displayName")
+  const [salesRep, setSalesRep] = useState("")
   const [customerSearch, setCustomerSearch] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
   // ایندکس مشتریِ هایلایت‌شده در لیست (برای انتخاب با کیبورد)
@@ -353,6 +353,20 @@ export default function NewOrderClient() {
       cancelled = true
     }
   }, [])
+    useEffect(() => {
+    ;(async () => {
+      try {
+        const res = await fetch("/api/auth/me")
+        if (!res.ok) return
+        const data = await res.json()
+        if (data.user?.displayName) {
+          setSalesRep(data.user.displayName)
+        }
+      } catch (e) {
+        console.error(e)
+      }
+    })()
+  }, [])
 
   useEffect(() => {
     if (!editId) return
@@ -369,6 +383,9 @@ export default function NewOrderClient() {
         setCustomerSearch(order.customer?.name || "")
         setCustomerGroup(order.customer?.customerGroup || "همکار")
         setPriority(order.priority || "عادی")
+                if (order.salesRep) {
+          setSalesRep(order.salesRep)
+        }
 
         setOrderDate(new DateObject({ date: new Date(order.orderDate), calendar: persian, locale: persian_fa }))
         if (order.deliveryDate) {
