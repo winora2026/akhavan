@@ -196,10 +196,54 @@ export async function PATCH(req: NextRequest) {
       )
     }
 
+    // برگرداندن فاکتور به پیش‌فاکتور فقط اگر برش شروع نشده باشد
+    if (status === "پیش‌فاکتور") {
+      const prod = await prisma.productionOrder.findFirst({
+        where: { orderId: id },
+        include: {
+          items: {
+            include: {
+              stations: { include: { station: true } },
+            },
+          },
+        },
+      })
+
+      if (prod) {
+        const cutStarted = prod.items.some((item) =>
+          item.stations.some(
+            (s) =>
+              s.station?.name === "برش" &&
+              (s.status === "در حال انجام" || s.status === "تکمیل شده")
+          )
+        )
+        if (cutStarted) {
+          return NextResponse.json(
+            {
+              error:
+                "این سفارش وارد ایستگاه برش شده و قابل برگشت به پیش‌فاکتور نیست",
+            },
+            { status: 400 }
+          )
+        }
+
+        await prisma.productionHistory.deleteMany({
+          where: { productionOrderId: prod.id },
+        })
+        await prisma.productionItemStation.deleteMany({
+          where: { productionItem: { productionOrderId: prod.id } },
+        })
+        await prisma.productionItem.deleteMany({
+          where: { productionOrderId: prod.id },
+        })
+        await prisma.productionOrder.delete({ where: { id: prod.id } })
+      }
+    }
+
     const order = await prisma.order.update({
       where: { id },
       data: {
-        status: status,
+        status,
         notes: convertedBy ? `تبدیل شده توسط: ${convertedBy}` : undefined,
       },
       include: {
@@ -223,18 +267,11 @@ export async function PATCH(req: NextRequest) {
             body: JSON.stringify({ orderId: order.id }),
           }
         )
-
-        if (res.ok) {
-          productionOrder = await res.json()
-        }
+        if (res.ok) productionOrder = await res.json()
       }
     }
 
-    return NextResponse.json({
-      success: true,
-      order,
-      productionOrder,
-    })
+    return NextResponse.json({ success: true, order, productionOrder })
   } catch (error: any) {
     console.error("Error updating order:", error)
     return NextResponse.json(
