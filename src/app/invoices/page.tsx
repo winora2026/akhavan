@@ -36,11 +36,41 @@ type OrderFromApi = {
   }[]
 }
 
+type SortKey =
+  | "customer"
+  | "orderNumber"
+  | "customerOrderNumber"
+  | "orderDate"
+  | "deliveryDate"
+  | "priority"
+  | "totalMeterage"
+  | "totalQuantity"
+  | "totalPrice"
+  | "discountAmount"
+  | "installationDate"
+  | "salesRep"
+
 const DEFAULT_EXPERTS = [
   "خانم حسینی",
   "خانم قنبرنژاد",
   "مائده عباس زاده",
   "مجتبی خاجی",
+]
+
+const PERSIAN_MONTHS = [
+  { value: "همه", label: "همه ماه‌ها" },
+  { value: "01", label: "فروردین" },
+  { value: "02", label: "اردیبهشت" },
+  { value: "03", label: "خرداد" },
+  { value: "04", label: "تیر" },
+  { value: "05", label: "مرداد" },
+  { value: "06", label: "شهریور" },
+  { value: "07", label: "مهر" },
+  { value: "08", label: "آبان" },
+  { value: "09", label: "آذر" },
+  { value: "10", label: "دی" },
+  { value: "11", label: "بهمن" },
+  { value: "12", label: "اسفند" },
 ]
 
 const PERSIAN_DATE_REGEX = /^\d{3,4}\/\d{1,2}\/\d{1,2}$/
@@ -79,15 +109,19 @@ const formatDate = (dateStr: string | null | undefined) => {
   }
 }
 
-const toFaMonthKey = (dateStr: string | null | undefined) => {
+const getFaMonth = (dateStr: string | null | undefined) => {
   const d = parseOrderDate(dateStr)
   if (!d) return ""
   try {
-    return new DateObject({
+    const dObj = new DateObject({
       date: d,
       calendar: persian,
       locale: persian_fa,
-    }).format("YYYY/MM")
+    })
+    // از شماره‌ی عددی ماه استفاده می‌کنیم (نه format با locale فارسی)
+    // چون format("MM") با locale فارسی ارقام فارسی (۰۶) برمی‌گردونه
+    // که با مقادیر لاتین "01".."12" توی PERSIAN_MONTHS مچ نمی‌شه
+    return String(dObj.month.number).padStart(2, "0")
   } catch {
     return ""
   }
@@ -101,6 +135,8 @@ export default function InvoicesPage() {
   const [toDate, setToDate] = useState<any>(null)
   const [selectedMonth, setSelectedMonth] = useState("همه")
   const [selectedExpert, setSelectedExpert] = useState("همه کارشناسان")
+  const [sortKey, setSortKey] = useState<SortKey>("orderDate")
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
   const [revertItem, setRevertItem] = useState<OrderFromApi | null>(null)
   const [reverting, setReverting] = useState(false)
 
@@ -112,14 +148,14 @@ export default function InvoicesPage() {
     try {
       setLoading(true)
       const res = await fetch("/api/orders")
-      if (!res.ok) throw new Error("خطا")
+      if (!res.ok) throw new Error("خطا در دریافت سفارش‌ها")
       const data = await res.json()
-      setOrders(
-        (Array.isArray(data) ? data : []).filter(
-          (o: OrderFromApi) => o.status === "فاکتور"
-        )
+      const invoices = (Array.isArray(data) ? data : []).filter(
+        (o: OrderFromApi) => o.status === "فاکتور"
       )
-    } catch {
+      setOrders(invoices)
+    } catch (error) {
+      console.error(error)
       alert("خطا در بارگذاری لیست فاکتورها")
     } finally {
       setLoading(false)
@@ -136,15 +172,26 @@ export default function InvoicesPage() {
     ]
   }, [orders])
 
-  const monthOptions = useMemo(() => {
-    const keys = orders
-      .map((o) => toFaMonthKey(o.orderDate))
-      .filter(Boolean)
-    return ["همه", ...Array.from(new Set(keys)).sort().reverse()]
-  }, [orders])
+  const getTotalPrice = (order: OrderFromApi) =>
+    order.items?.reduce((sum, item) => sum + (item.totalPrice || 0), 0) || 0
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"))
+    } else {
+      setSortKey(key)
+      setSortDir("asc")
+    }
+  }
+
+  const sortIndicator = (key: SortKey) => {
+    if (sortKey !== key) return " ↕"
+    return sortDir === "asc" ? " ↑" : " ↓"
+  }
 
   const filtered = useMemo(() => {
-    let result = orders
+    let result = [...orders]
+
     const q = search.trim().toLowerCase()
     if (q) {
       result = result.filter(
@@ -155,6 +202,7 @@ export default function InvoicesPage() {
           (item.salesRep || "").toLowerCase().includes(q)
       )
     }
+
     if (fromDate) {
       const from = fromDate?.toDate ? fromDate.toDate() : new Date(fromDate)
       from.setHours(0, 0, 0, 0)
@@ -174,41 +222,105 @@ export default function InvoicesPage() {
         return d <= to
       })
     }
+
     if (selectedMonth !== "همه") {
       result = result.filter(
-        (item) => toFaMonthKey(item.orderDate) === selectedMonth
+        (item) => getFaMonth(item.orderDate) === selectedMonth
       )
     }
+
     if (selectedExpert !== "همه کارشناسان") {
       result = result.filter((item) => item.salesRep === selectedExpert)
     }
+
+    const dir = sortDir === "asc" ? 1 : -1
+    result.sort((a, b) => {
+      const priceA = getTotalPrice(a)
+      const priceB = getTotalPrice(b)
+      switch (sortKey) {
+        case "customer":
+          return (
+            dir *
+            (a.customer?.name || "").localeCompare(b.customer?.name || "", "fa")
+          )
+        case "orderNumber":
+          return (
+            dir *
+            String(a.orderNumber).localeCompare(String(b.orderNumber), "fa", {
+              numeric: true,
+            })
+          )
+        case "customerOrderNumber":
+          return (
+            dir *
+            String(a.customerOrderNumber || "").localeCompare(
+              String(b.customerOrderNumber || ""),
+              "fa",
+              { numeric: true }
+            )
+          )
+        case "orderDate": {
+          const da = parseOrderDate(a.orderDate)?.getTime() || 0
+          const db = parseOrderDate(b.orderDate)?.getTime() || 0
+          return dir * (da - db)
+        }
+        case "deliveryDate": {
+          const da = parseOrderDate(a.deliveryDate)?.getTime() || 0
+          const db = parseOrderDate(b.deliveryDate)?.getTime() || 0
+          return dir * (da - db)
+        }
+        case "priority":
+          return dir * (a.priority || "").localeCompare(b.priority || "", "fa")
+        case "totalMeterage":
+          return dir * ((a.totalMeterage || 0) - (b.totalMeterage || 0))
+        case "totalQuantity":
+          return dir * ((a.totalQuantity || 0) - (b.totalQuantity || 0))
+        case "totalPrice":
+          return dir * (priceA - priceB)
+        case "discountAmount":
+          return dir * ((a.discountAmount || 0) - (b.discountAmount || 0))
+        case "installationDate": {
+          const da = parseOrderDate(a.installationDate)?.getTime() || 0
+          const db = parseOrderDate(b.installationDate)?.getTime() || 0
+          return dir * (da - db)
+        }
+        case "salesRep":
+          return dir * (a.salesRep || "").localeCompare(b.salesRep || "", "fa")
+        default:
+          return 0
+      }
+    })
+
     return result
-  }, [orders, search, fromDate, toDate, selectedMonth, selectedExpert])
+  }, [
+    orders,
+    search,
+    fromDate,
+    toDate,
+    selectedMonth,
+    selectedExpert,
+    sortKey,
+    sortDir,
+  ])
 
   const report = useMemo(() => {
-    return {
-      totalCount: filtered.length,
-      totalMeterage: filtered.reduce(
-        (s, o) => s + (o.totalMeterage || 0),
-        0
-      ),
-      totalPrice: filtered.reduce(
-        (s, o) =>
-          s + (o.items?.reduce((a, i) => a + (i.totalPrice || 0), 0) || 0),
-        0
-      ),
-      totalDiscount: filtered.reduce(
-        (s, o) => s + (o.discountAmount || 0),
-        0
-      ),
-    }
+    const totalCount = filtered.length
+    const totalMeterage = filtered.reduce(
+      (sum, o) => sum + (o.totalMeterage || 0),
+      0
+    )
+    const totalPrice = filtered.reduce((sum, o) => sum + getTotalPrice(o), 0)
+    const totalDiscount = filtered.reduce(
+      (sum, o) => sum + (o.discountAmount || 0),
+      0
+    )
+    return { totalCount, totalMeterage, totalPrice, totalDiscount }
   }, [filtered])
 
-  const formatPrice = (n: number) =>
-    n || n === 0 ? n.toLocaleString("en-US") : "—"
-
-  const getTotalPrice = (order: OrderFromApi) =>
-    order.items?.reduce((sum, item) => sum + (item.totalPrice || 0), 0) || 0
+  const formatPrice = (n: number) => {
+    if (!n && n !== 0) return "—"
+    return n.toLocaleString("en-US")
+  }
 
   const confirmRevert = async () => {
     if (!revertItem) return
@@ -234,6 +346,9 @@ export default function InvoicesPage() {
     }
   }
 
+  const thClass =
+    "p-3 font-bold whitespace-nowrap text-center cursor-pointer select-none hover:bg-teal-500/25 transition"
+
   return (
     <div
       className="min-h-screen p-4 bg-cover bg-center bg-fixed"
@@ -253,7 +368,8 @@ export default function InvoicesPage() {
       <div className="pointer-events-none fixed inset-0 bg-black/5" />
 
       <div className="relative z-10 max-w-[1920px] mx-auto">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 p-5 border border-teal-500/20">
+        <div className="mb-4 flex items-center justify-between rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
+          <div className="w-48" />
           <div className="text-center flex-1">
             <h1 className="text-3xl font-bold text-blue-950">لیست فاکتورها</h1>
             <p className="text-lg font-bold text-blue-900 mt-1">
@@ -263,20 +379,20 @@ export default function InvoicesPage() {
           <div className="flex gap-3">
             <Link
               href="/order/new"
-              className="rounded-xl bg-teal-500 hover:bg-teal-600 px-6 py-3 text-lg font-bold text-white focus:ring-2 focus:ring-teal-400"
+              className="rounded-xl bg-teal-500 hover:bg-teal-600 px-6 py-3 text-lg font-bold text-white shadow transition focus:outline-none focus:ring-2 focus:ring-teal-400"
             >
               + ثبت سفارش جدید
             </Link>
             <Link
               href="/order"
-              className="rounded-xl border border-teal-500/40 bg-white/40 px-6 py-3 text-lg font-bold text-blue-900 focus:ring-2 focus:ring-teal-400"
+              className="rounded-xl border border-teal-500/40 bg-white/40 hover:bg-white/60 px-6 py-3 text-lg font-bold text-blue-900 transition focus:outline-none focus:ring-2 focus:ring-teal-400"
             >
               پیش‌فاکتورها
             </Link>
           </div>
         </div>
 
-        <div className="mb-4 rounded-2xl bg-teal-500/10 p-4 border border-teal-500/20">
+        <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
             <div className="md:col-span-3">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
@@ -286,8 +402,8 @@ export default function InvoicesPage() {
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="نام مشتری / شماره / کارشناس..."
-                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 font-semibold focus:ring-2 focus:ring-teal-400 focus:outline-none"
+                placeholder="نام مشتری / شماره سفارش / کارشناس..."
+                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400 hover:bg-yellow-100 transition"
               />
             </div>
             <div className="md:col-span-2">
@@ -297,16 +413,16 @@ export default function InvoicesPage() {
               <select
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(e.target.value)}
-                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 font-semibold focus:ring-2 focus:ring-teal-400 focus:outline-none"
+                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400"
               >
-                {monthOptions.map((m) => (
-                  <option key={m} value={m}>
-                    {m === "همه" ? "همه ماه‌ها" : m}
+                {PERSIAN_MONTHS.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
                   </option>
                 ))}
               </select>
             </div>
-            <div className="md:col-span-2">
+            <div className="md:col-span-2 relative z-30">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
                 از تاریخ
               </label>
@@ -315,14 +431,15 @@ export default function InvoicesPage() {
                 onChange={setFromDate}
                 calendar={persian}
                 locale={persian_fa}
-                inputClass="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 font-semibold"
+                calendarPosition="bottom-right"
+                inputClass="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
                 containerClassName="w-full"
                 placeholder="از تاریخ"
                 portal
                 zIndex={1000}
               />
             </div>
-            <div className="md:col-span-2">
+            <div className="md:col-span-2 relative z-30">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
                 تا تاریخ
               </label>
@@ -331,7 +448,8 @@ export default function InvoicesPage() {
                 onChange={setToDate}
                 calendar={persian}
                 locale={persian_fa}
-                inputClass="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 font-semibold"
+                calendarPosition="bottom-right"
+                inputClass="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
                 containerClassName="w-full"
                 placeholder="تا تاریخ"
                 portal
@@ -345,7 +463,7 @@ export default function InvoicesPage() {
               <select
                 value={selectedExpert}
                 onChange={(e) => setSelectedExpert(e.target.value)}
-                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 font-semibold focus:ring-2 focus:ring-teal-400 focus:outline-none"
+                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400"
               >
                 {salesExperts.map((name) => (
                   <option key={name} value={name}>
@@ -355,8 +473,11 @@ export default function InvoicesPage() {
               </select>
             </div>
             <div className="md:col-span-1">
-              <div className="rounded-xl bg-teal-500/20 border border-teal-500/30 px-3 py-2.5 text-center font-bold text-teal-800">
-                {filtered.length}
+              <div className="rounded-xl bg-teal-500/20 border border-teal-500/30 px-3 py-2.5 text-center">
+                <span className="text-sm text-blue-700">تعداد: </span>
+                <span className="text-xl font-bold text-teal-700">
+                  {filtered.length}
+                </span>
               </div>
             </div>
           </div>
@@ -365,88 +486,141 @@ export default function InvoicesPage() {
         <div
           id="invoice-table"
           tabIndex={-1}
-          className="rounded-2xl bg-teal-500/10 p-4 border border-teal-500/20 overflow-x-auto focus:ring-2 focus:ring-teal-400"
+          className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-x-auto focus:outline-none focus:ring-2 focus:ring-teal-400"
         >
           {loading ? (
-            <p className="text-center py-16 font-bold text-blue-700">
+            <p className="text-center text-blue-700 py-16 text-xl font-bold">
               در حال بارگذاری...
             </p>
           ) : (
-            <table className="w-full text-sm text-blue-900">
+            <table className="w-full text-sm text-blue-900 border-collapse">
               <thead>
-                <tr className="border-b border-teal-500/30 bg-teal-500/15">
-                  <th className="p-3 text-center">ردیف</th>
-                  <th className="p-3">نام مشتری</th>
-                  <th className="p-3 text-center">ش سفارش</th>
-                  <th className="p-3 text-center">ش سفارش مشتری</th>
-                  <th className="p-3 text-center">تاریخ سفارش</th>
-                  <th className="p-3 text-center">تاریخ تحویل</th>
-                  <th className="p-3 text-center">اولویت</th>
-                  <th className="p-3 text-center">متراژ</th>
-                  <th className="p-3 text-center">تعداد</th>
-                  <th className="p-3 text-left">قیمت کل</th>
-                  <th className="p-3 text-left">تخفیف</th>
-                  <th className="p-3 text-center">نصب</th>
-                  <th className="p-3 text-center">کارشناس</th>
-                  <th className="p-3 text-center">عملیات</th>
+                <tr className="border-b border-teal-500/30 bg-teal-500/15 text-right">
+                  <th className="p-3 font-bold text-center">ردیف</th>
+                  <th className={thClass} onClick={() => toggleSort("customer")}>
+                    نام مشتری{sortIndicator("customer")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("orderNumber")}
+                  >
+                    ش سفارش{sortIndicator("orderNumber")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("customerOrderNumber")}
+                  >
+                    ش سفارش مشتری{sortIndicator("customerOrderNumber")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("orderDate")}
+                  >
+                    تاریخ سفارش{sortIndicator("orderDate")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("deliveryDate")}
+                  >
+                    تاریخ تحویل{sortIndicator("deliveryDate")}
+                  </th>
+                  <th className={thClass} onClick={() => toggleSort("priority")}>
+                    اولویت{sortIndicator("priority")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("totalMeterage")}
+                  >
+                    متراژ کل{sortIndicator("totalMeterage")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("totalQuantity")}
+                  >
+                    تعداد کل{sortIndicator("totalQuantity")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("totalPrice")}
+                  >
+                    قیمت کل{sortIndicator("totalPrice")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("discountAmount")}
+                  >
+                    تخفیف{sortIndicator("discountAmount")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("installationDate")}
+                  >
+                    تاریخ نصب{sortIndicator("installationDate")}
+                  </th>
+                  <th className={thClass} onClick={() => toggleSort("salesRep")}>
+                    کارشناس{sortIndicator("salesRep")}
+                  </th>
+                  <th className="p-3 font-bold text-center">عملیات</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((item, index) => (
                   <tr
                     key={item.id}
-                    className="border-b border-teal-500/10 bg-white/30 hover:bg-teal-400/20"
+                    className="border-b border-teal-500/10 transition-colors hover:bg-teal-400/20 bg-white/30"
                   >
                     <td className="p-3 text-center font-bold">{index + 1}</td>
-                    <td className="p-3 font-bold">
+                    <td className="p-3 font-bold whitespace-nowrap">
                       {item.customer?.name || "—"}
                     </td>
-                    <td className="p-3 text-center">{item.orderNumber}</td>
-                    <td className="p-3 text-center">
+                    <td className="p-3 font-semibold text-center">
+                      {item.orderNumber}
+                    </td>
+                    <td className="p-3 font-semibold text-center">
                       {item.customerOrderNumber || "—"}
                     </td>
-                    <td className="p-3 text-center">
+                    <td className="p-3 whitespace-nowrap text-center">
                       {formatDate(item.orderDate)}
                     </td>
-                    <td className="p-3 text-center">
+                    <td className="p-3 whitespace-nowrap text-center">
                       {formatDate(item.deliveryDate)}
                     </td>
                     <td className="p-3 text-center">
                       {item.priority || "عادی"}
                     </td>
-                    <td className="p-3 text-center">
+                    <td className="p-3 text-center font-semibold">
                       {item.totalMeterage?.toFixed(4) || "0"}
                     </td>
-                    <td className="p-3 text-center">
+                    <td className="p-3 text-center font-semibold">
                       {item.totalQuantity || 0}
                     </td>
-                    <td className="p-3 text-left font-bold text-teal-800">
+                    <td className="p-3 text-left font-bold text-teal-800 whitespace-nowrap">
                       {formatPrice(getTotalPrice(item))}
                     </td>
-                    <td className="p-3 text-left text-orange-700">
+                    <td className="p-3 text-left font-semibold text-orange-700 whitespace-nowrap">
                       {item.discountAmount
                         ? formatPrice(item.discountAmount)
                         : "—"}
                     </td>
-                    <td className="p-3 text-center">
+                    <td className="p-3 text-center whitespace-nowrap">
                       {item.installationDate
                         ? formatDate(item.installationDate)
                         : "—"}
                     </td>
-                    <td className="p-3 text-center font-semibold">
+                    <td className="p-3 text-center text-xs font-semibold text-blue-800">
                       {item.salesRep || "—"}
                     </td>
                     <td className="p-3 text-center">
                       <div className="flex flex-col gap-1 items-center">
                         <Link
                           href={`/order/new?edit=${item.id}`}
-                          className="rounded-lg bg-blue-500/20 px-3 py-1.5 text-xs font-bold text-blue-900 focus:ring-2 focus:ring-blue-400"
+                          className="inline-block rounded-lg bg-blue-500/20 hover:bg-blue-500/40 px-3 py-1.5 text-xs font-bold text-blue-900 transition focus:ring-2 focus:ring-blue-400"
                         >
                           ویرایش
                         </Link>
                         <button
                           onClick={() => setRevertItem(item)}
-                          className="rounded-lg bg-amber-500/20 hover:bg-amber-500/40 px-3 py-1.5 text-xs font-bold text-amber-900 focus:ring-2 focus:ring-amber-400"
+                          className="rounded-lg bg-amber-500/30 hover:bg-amber-500/50 px-3 py-1.5 text-xs font-bold text-amber-900 transition focus:ring-2 focus:ring-amber-400"
                         >
                           برگشت به پیش‌فاکتور
                         </button>
@@ -457,36 +631,40 @@ export default function InvoicesPage() {
               </tbody>
             </table>
           )}
+
           {!loading && filtered.length === 0 && (
-            <p className="text-center py-12 font-bold text-blue-700">
+            <p className="text-center text-blue-700 py-12 text-xl font-bold">
               موردی یافت نشد
             </p>
           )}
         </div>
 
         {!loading && filtered.length > 0 && (
-          <div className="mt-4 rounded-2xl bg-teal-600/10 p-5 border border-teal-500/30">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-              <div className="rounded-xl bg-white/50 p-4">
-                <p className="text-sm text-blue-700">تعداد</p>
+          <div className="mt-4 rounded-2xl bg-teal-600/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/30">
+            <h3 className="text-lg font-bold text-blue-950 mb-4 text-center">
+              گزارش خلاصه
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-4 text-center">
+                <p className="text-sm text-blue-700 mb-1">تعداد کل</p>
                 <p className="text-2xl font-bold text-teal-700">
                   {report.totalCount}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/50 p-4">
-                <p className="text-sm text-blue-700">متراژ</p>
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-4 text-center">
+                <p className="text-sm text-blue-700 mb-1">متراژ کل</p>
                 <p className="text-2xl font-bold text-teal-700">
                   {report.totalMeterage.toFixed(4)}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/50 p-4">
-                <p className="text-sm text-blue-700">قیمت کل</p>
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-4 text-center">
+                <p className="text-sm text-blue-700 mb-1">قیمت کل</p>
                 <p className="text-2xl font-bold text-teal-700">
                   {formatPrice(report.totalPrice)}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/50 p-4">
-                <p className="text-sm text-blue-700">تخفیف</p>
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-4 text-center">
+                <p className="text-sm text-blue-700 mb-1">مجموع تخفیف</p>
                 <p className="text-2xl font-bold text-orange-600">
                   {formatPrice(report.totalDiscount)}
                 </p>
@@ -497,31 +675,43 @@ export default function InvoicesPage() {
       </div>
 
       {revertItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white/95 backdrop-blur-xl p-6 shadow-2xl border border-teal-500/30">
             <h3 className="text-xl font-bold text-blue-950 mb-3">
               برگشت به پیش‌فاکتور
             </h3>
-            <p className="mb-2">
-              فاکتور <strong>{revertItem.orderNumber}</strong>
-            </p>
-            <p className="text-sm text-gray-600 mb-4">
-              فقط اگر هنوز وارد ایستگاه برش نشده باشد، سفارش تولید حذف و وضعیت
-              به پیش‌فاکتور برمی‌گردد.
-            </p>
+            <div className="space-y-2 text-base text-blue-900 mb-4">
+              <p>
+                فاکتور شماره{" "}
+                <strong className="text-teal-700">
+                  {revertItem.orderNumber}
+                </strong>
+              </p>
+              <p>
+                مشتری:{" "}
+                <strong className="text-teal-700">
+                  {revertItem.customer?.name}
+                </strong>
+              </p>
+              <p className="text-sm text-gray-600 mt-3">
+                فقط اگر هنوز وارد ایستگاه برش نشده باشد، سفارش تولید حذف و وضعیت
+                به پیش‌فاکتور برمی‌گردد تا بتوانید ویرایش کنید.
+              </p>
+            </div>
             <div className="flex gap-3 justify-end">
               <button
                 onClick={() => setRevertItem(null)}
-                className="rounded-xl border px-5 py-2.5 font-bold"
+                disabled={reverting}
+                className="rounded-xl border border-gray-300 px-5 py-2.5 text-base font-bold text-blue-900 hover:bg-gray-100 transition disabled:opacity-50"
               >
                 انصراف
               </button>
               <button
                 onClick={confirmRevert}
                 disabled={reverting}
-                className="rounded-xl bg-amber-500 text-white px-5 py-2.5 font-bold disabled:opacity-50"
+                className="rounded-xl bg-amber-500 hover:bg-amber-600 px-5 py-2.5 text-base font-bold text-white shadow transition disabled:opacity-50"
               >
-                {reverting ? "..." : "تأیید برگشت"}
+                {reverting ? "در حال برگشت..." : "تأیید برگشت"}
               </button>
             </div>
           </div>

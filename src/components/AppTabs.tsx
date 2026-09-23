@@ -67,7 +67,7 @@ export default function AppTabs() {
 
   return (
     <div
-      className="sticky top-0 z-[40] bg-white/90 backdrop-blur border-b border-teal-200 px-2 py-1.5 flex gap-1 overflow-x-auto print:hidden"
+      className="sticky top-0 z-[40] border-b border-teal-500/25 bg-teal-900/25 backdrop-blur-xl px-2 py-1.5 flex gap-1 overflow-x-auto print:hidden"
       dir="rtl"
       role="tablist"
       aria-label="صفحات باز"
@@ -77,17 +77,17 @@ export default function AppTabs() {
         return (
           <div
             key={tab.href}
-            className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-sm font-bold whitespace-nowrap ${
+            className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-sm font-bold whitespace-nowrap shadow-sm ${
               active
-                ? "bg-teal-500 text-white border-teal-600"
-                : "bg-white text-blue-900 border-teal-200 hover:bg-teal-50"
+                ? "bg-teal-500 text-white border-teal-400"
+                : "bg-white/40 text-blue-950 border-white/30 hover:bg-white/60"
             }`}
           >
             <Link
               href={tab.href}
               role="tab"
               aria-selected={active}
-              className="focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-teal-400 rounded"
+              className="focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-teal-300 rounded"
             >
               {tab.title}
             </Link>
@@ -95,7 +95,7 @@ export default function AppTabs() {
               type="button"
               aria-label={`بستن ${tab.title}`}
               onClick={() => closeTab(tab.href)}
-              className="leading-none px-1 rounded hover:bg-black/10 focus:outline-none focus:ring-2 focus:ring-teal-400"
+              className="leading-none px-1 rounded hover:bg-black/10 focus:outline-none focus:ring-2 focus:ring-teal-300"
             >
               ×
             </button>

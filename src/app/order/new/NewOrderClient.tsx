@@ -73,6 +73,10 @@ const fmt3 = (n: number) => {
   return (sign * t).toFixed(5)
 }
 
+// با اسکرول ماوس روی فیلد عددیِ فوکوس‌شده، مقدار عوض نشود (جلوگیری از تغییر
+// تصادفی اعداد وقتی کاربر بدون قصد روی فیلد اسکرول می‌کند)
+const blockWheelChange = (e: React.WheelEvent<HTMLInputElement>) => e.currentTarget.blur()
+
 // واحدهایی که «تعداد واحد»شان در مودال خدمات خودکار محاسبه می‌شود
 const autoUnits = ["مترمربع", "محیط", "چند طول چند عرض", "ابعاد دایره"]
 
@@ -104,6 +108,8 @@ const calcServiceUnitQty = (item: OrderItem, s: ServiceItem): string => {
 const inputClass = "w-full rounded-xl border border-teal-500/30 bg-white/40 px-3 py-2 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:ring-2 focus:ring-teal-300 focus:outline-none hover:bg-yellow-100 transition-colors duration-150"
 const labelClass = "mb-1 block text-sm font-bold text-blue-900"
 const selectClass = inputClass
+// کلاس مخصوص فیلدهای قیمت (واحد)، با فونت بزرگ‌تر تا عدد کامل دیده شود و جا نیفتد
+const priceInputClass = "w-full rounded-xl border border-teal-500/30 bg-white/40 px-3 py-2.5 text-lg font-bold text-blue-950 focus:border-teal-500 focus:ring-2 focus:ring-teal-300 focus:outline-none hover:bg-yellow-100 transition-colors duration-150"
 // کلاس اختصاصی اینپوت تاریخ‌ها: چون کتابخانه تاریخ‌شمار استایل پیش‌فرض خودش را روی اینپوت اعمال می‌کند،
 // همان اندازه‌ی سایر فیلدها (ارتفاع، پدینگ، فونت) را با !important روی آن اعمال می‌کنیم تا هم‌اندازه شوند
 const dateInputClass = `${inputClass} !h-[42px] !min-h-[42px] !box-border !py-2 !px-3 !text-sm !leading-normal`
@@ -127,6 +133,39 @@ const normalizeText = (value: string) => {
     .replace(/[۰۱۲۳۴۵۶۷۸۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d))) // ارقام فارسی
     .toLowerCase()
     .trim()
+}
+
+// ===== کمک‌توابع پیش‌نویس خودکار سفارش =====
+// کلید ذخیره‌سازی پیش‌نویسِ سفارشِ در حال تکمیل در localStorage؛ با این کار اگر
+// کارشناسی به‌اشتباه تب/صفحه را ببندد، اطلاعاتی که تا آن لحظه وارد کرده از بین نمی‌رود
+// و دفعه‌ی بعد که صفحه‌ی «سفارش جدید» را باز کند همان‌ها بازیابی می‌شوند.
+const DRAFT_STORAGE_KEY = "newOrderDraft"
+
+const serializeDraftDate = (d: any): string | null => (d && typeof d.toDate === "function" ? d.toDate().toISOString() : null)
+const deserializeDraftDate = (iso: string | null | undefined) =>
+  iso ? new DateObject({ date: new Date(iso), calendar: persian, locale: persian_fa }) : null
+
+// ===== کمک‌توابع تاریخ کاری (برای محاسبه‌ی خودکار تاریخ تحویل) =====
+// آرایه‌ی تعطیلات رسمی به فرمت میلادی "YYYY-MM-DD". چون تعطیلات رسمی ایران هرساله
+// تغییر می‌کند این لیست باید سالانه به‌روزرسانی شود (یا بعداً با یک سرویس/API
+// تعطیلات رسمی جایگزین شود). تا وقتی خالی است، فقط جمعه‌ها تعطیل حساب می‌شوند.
+const IRAN_HOLIDAYS: string[] = []
+
+const isNonWorkingDay = (d: Date) => {
+  if (d.getDay() === 5) return true // جمعه
+  const iso = d.toISOString().slice(0, 10)
+  return IRAN_HOLIDAYS.includes(iso)
+}
+
+// n روز کاریِ بعد از تاریخ start را برمی‌گرداند (جمعه‌ها و تعطیلات رسمیِ بالا حساب نمی‌شوند)
+const addBusinessDays = (start: Date, n: number) => {
+  const result = new Date(start)
+  let added = 0
+  while (added < n) {
+    result.setDate(result.getDate() + 1)
+    if (!isNonWorkingDay(result)) added++
+  }
+  return result
 }
 
 const customersList = (customersSeedRaw as any[]).map((c: any) => {
@@ -230,6 +269,8 @@ export default function NewOrderClient() {
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
   const [orderDate, setOrderDate] = useState<any>(null)
   const [deliveryDate, setDeliveryDate] = useState<any>(null)
+  // نحوه‌ی محاسبه‌ی تاریخ تحویل: "4"/"7"/"10"/"15"/"30" = خودکار بر اساس روز کاری، "manual" = انتخاب دستی
+  const [deliveryDateMode, setDeliveryDateMode] = useState<"4" | "7" | "10" | "15" | "30" | "manual">("4")
   const [customerName, setCustomerName] = useState("")
   // TODO: پس از افزودن سیستم لاگین کارشناسان، این مقدار باید به‌صورت خودکار از کاربر واردشده پر شود
   const [salesRep, setSalesRep] = useState("")
@@ -328,12 +369,24 @@ export default function NewOrderClient() {
   // فقط در دسکتاپ (lg به بالا) دو ستون کنار هم قرار می‌گیرند و عرض درصدی معنا دارد
   const [isLgScreen, setIsLgScreen] = useState(false)
 
+  // آیا پیش‌نویسِ ذخیره‌شده (یا وضعیتِ اولیه‌ی بدون پیش‌نویس) بازیابی شده — تا زمانی که
+  // این مقدار true نشده، افکتِ ذخیره‌ی خودکار چیزی نمی‌نویسد (تا پیش‌نویس قبلی را با
+  // مقادیر اولیه‌ی خالی فرم بازنویسی نکند)
+  const draftRestoredRef = useRef(false)
+
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 1024px)")
     const update = () => setIsLgScreen(mq.matches)
     update()
     mq.addEventListener("change", update)
     return () => mq.removeEventListener("change", update)
+  }, [])
+
+  // با باز شدن صفحه، فوکوس خودکار روی «نام مشتری» می‌رود تا کارشناس بدون نیاز
+  // به کلیک با موس، مستقیم تایپ کردن نام مشتری را شروع کند
+  useEffect(() => {
+    const t = setTimeout(() => customerSearchRef.current?.focus(), 100)
+    return () => clearTimeout(t)
   }, [])
 
   // بارگذاری توضیحاتی که کارشناس‌ها قبلاً به لیست اضافه کرده‌اند
@@ -368,6 +421,140 @@ export default function NewOrderClient() {
     })()
   }, [])
 
+  // ===== پیش‌نویس خودکار سفارش =====
+  // با باز شدن صفحه (و فقط وقتی در حالت ویرایش سفارش موجود یا انتقال از «طراحی باکس»
+  // نیستیم)، اگر پیش‌نویسِ ذخیره‌شده‌ای در localStorage باشد بازیابی می‌شود؛ در غیر این
+  // صورت تاریخ سفارش به‌صورت خودکار روی «امروز» تنظیم می‌شود (بدون نیاز به باز کردن تقویم).
+  useEffect(() => {
+    if (editId || searchParams.get("fromBoxDesign") === "1") {
+      draftRestoredRef.current = true
+      return
+    }
+    try {
+      const raw = localStorage.getItem(DRAFT_STORAGE_KEY)
+      if (raw) {
+        const d = JSON.parse(raw)
+        if (d.customerName) setCustomerName(d.customerName)
+        if (d.customerSearch) setCustomerSearch(d.customerSearch)
+        if (d.customerGroup) setCustomerGroup(d.customerGroup)
+        if (d.productionLine) setProductionLine(d.productionLine)
+        if (d.priority) setPriority(d.priority)
+        setOrderDate(d.orderDate ? deserializeDraftDate(d.orderDate) : new DateObject({ calendar: persian, locale: persian_fa }))
+        if (d.deliveryDate) setDeliveryDate(deserializeDraftDate(d.deliveryDate))
+        if (d.deliveryDateMode) setDeliveryDateMode(d.deliveryDateMode)
+        if (d.hasInstallation) setHasInstallation(true)
+        if (d.installDate) setInstallDate(deserializeDraftDate(d.installDate))
+        if (d.installAddress) setInstallAddress(d.installAddress)
+        if (d.installPhone) setInstallPhone(d.installPhone)
+        if (d.installNotes) setInstallNotes(d.installNotes)
+        if (d.manualTotalQuantity) setManualTotalQuantity(d.manualTotalQuantity)
+        if (d.manualTotalMeterage) setManualTotalMeterage(d.manualTotalMeterage)
+        if (d.quantityLocked) setQuantityLocked(true)
+        if (d.meterageLocked) setMeterageLocked(true)
+        if (Array.isArray(d.items) && d.items.length) setItems(d.items)
+        if (Array.isArray(d.mapImages) && d.mapImages.length) setMapImages(d.mapImages)
+        if (d.hasDiscount) setHasDiscount(true)
+        if (d.discountPercent) setDiscountPercent(d.discountPercent)
+        if (d.discountMode) setDiscountMode(d.discountMode)
+        if (d.manualDiscountAmount) setManualDiscountAmount(d.manualDiscountAmount)
+        if (d.isOfficialInvoice) setIsOfficialInvoice(true)
+      } else {
+        setOrderDate(new DateObject({ calendar: persian, locale: persian_fa }))
+      }
+    } catch (err) {
+      console.error(err)
+      setOrderDate(new DateObject({ calendar: persian, locale: persian_fa }))
+    } finally {
+      draftRestoredRef.current = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ذخیره‌ی خودکار (و با تأخیر کوتاه) پیش‌نویس سفارش در حال تکمیل — با هر تغییری در فرم
+  // (چه وسط ثبت، چه بعد از تکمیل) اجرا می‌شود تا در صورت بسته‌شدن اشتباهیِ صفحه چیزی از
+  // بین نرود. در حالت ویرایش سفارش موجود (editId) چیزی نوشته نمی‌شود.
+  useEffect(() => {
+    if (!draftRestoredRef.current || editId) return
+    const t = setTimeout(() => {
+      try {
+        const isEmpty =
+          !customerName.trim() && items.length === 0 && !installAddress.trim() && !installPhone.trim() && !installNotes.trim() && mapImages.length === 0
+        if (isEmpty) {
+          localStorage.removeItem(DRAFT_STORAGE_KEY)
+          return
+        }
+        const draft = {
+          customerName,
+          customerSearch,
+          customerGroup,
+          productionLine,
+          priority,
+          orderDate: serializeDraftDate(orderDate),
+          deliveryDate: serializeDraftDate(deliveryDate),
+          deliveryDateMode,
+          hasInstallation,
+          installDate: serializeDraftDate(installDate),
+          installAddress,
+          installPhone,
+          installNotes,
+          manualTotalQuantity,
+          manualTotalMeterage,
+          quantityLocked,
+          meterageLocked,
+          items,
+          mapImages,
+          hasDiscount,
+          discountPercent,
+          discountMode,
+          manualDiscountAmount,
+          isOfficialInvoice,
+        }
+        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft))
+      } catch (err) {
+        console.error(err)
+      }
+    }, 400)
+    return () => clearTimeout(t)
+  }, [
+    editId,
+    customerName,
+    customerSearch,
+    customerGroup,
+    productionLine,
+    priority,
+    orderDate,
+    deliveryDate,
+    deliveryDateMode,
+    hasInstallation,
+    installDate,
+    installAddress,
+    installPhone,
+    installNotes,
+    manualTotalQuantity,
+    manualTotalMeterage,
+    quantityLocked,
+    meterageLocked,
+    items,
+    mapImages,
+    hasDiscount,
+    discountPercent,
+    discountMode,
+    manualDiscountAmount,
+    isOfficialInvoice,
+  ])
+
+  // محاسبه‌ی خودکار تاریخ تحویل بر اساس تاریخ سفارش و گزینه‌ی انتخاب‌شده (۴/۷/۱۰/۱۵/۳۰ روز
+  // کاری). اگر حالت «انتخاب دستی» فعال باشد (چون کارشناس خودش تاریخ را از تقویم انتخاب
+  // کرده)، این افکت کاری انجام نمی‌دهد.
+  useEffect(() => {
+    if (deliveryDateMode === "manual") return
+    if (!orderDate || typeof orderDate.toDate !== "function") return
+    const days = parseInt(deliveryDateMode, 10)
+    if (!days) return
+    const result = addBusinessDays(orderDate.toDate(), days)
+    setDeliveryDate(new DateObject({ date: result, calendar: persian, locale: persian_fa }))
+  }, [orderDate, deliveryDateMode])
+
   useEffect(() => {
     if (!editId) return
     ;(async () => {
@@ -391,6 +578,8 @@ export default function NewOrderClient() {
         if (order.deliveryDate) {
           setDeliveryDate(new DateObject({ date: new Date(order.deliveryDate), calendar: persian, locale: persian_fa }))
         }
+        // سفارشِ موجود تاریخ تحویل مشخص خودش را دارد؛ نباید با تغییر تاریخ سفارش دوباره محاسبه شود
+        setDeliveryDateMode("manual")
 
         setHasInstallation(order.hasInstallation)
         if (order.installationDate) {
@@ -560,15 +749,33 @@ export default function NewOrderClient() {
   // و ارقام یکسان‌سازی می‌شوند)، سپس کوئری به کلمات تقسیم می‌شود و هر کالایی
   // که همه‌ی کلمات را در نام یا کدش داشته باشد match می‌شود — مستقل از ترتیب
   // کلمات، پس "6 میل" هم مثل "میل 6" کار می‌کند و همه‌ی شیشه/آینه‌های 6 میل را می‌آورد.
-  // اگر کل کوئری فقط رقم باشد، به‌عنوان جستجوی کد در نظر گرفته می‌شود و کدهایی
-  // که با همان رقم شروع می‌شوند اول لیست می‌آیند (برای رفع قاطی‌شدن کد و نام).
+  // اگر کل کوئری فقط رقم باشد (مثلاً «4»)، ابتدا به‌عنوان جستجوی «ضخامت» در نظر گرفته
+  // می‌شود: فقط کالاهایی که آن عدد را دقیقاً به‌صورت «X میل» در نامشان دارند برگردانده
+  // می‌شوند (تا همه‌ی شیشه/آینه‌های ۴ میل بیایند، نه هر کالایی که رقم ۴ در کد یا نامش
+  // باشد). اگر با این روش نتیجه‌ای پیدا نشد، به جستجوی معمولیِ زیررشته‌ای برمی‌گردیم.
   const filteredProducts = useMemo(() => {
     const raw = debouncedProductQuery.trim()
     if (!raw) return productsList.slice(0, 8)
 
     const normalizedQuery = normalizeText(raw)
     const tokens = normalizedQuery.split(/\s+/).filter(Boolean)
-    const isNumericQuery = /^[0-9]+$/.test(normalizedQuery)
+    const isNumericQuery = /^[0-9]+(\.[0-9]+)?$/.test(normalizedQuery)
+
+    if (isNumericQuery) {
+      const escaped = normalizedQuery.replace(/\./g, "\\.")
+      // عدد باید یک «واحد» مستقل باشد (نه بخشی از عدد بزرگ‌تر) و بلافاصله «میل» بیاید
+      const thicknessRegex = new RegExp(`(^|[^0-9.])${escaped}\\s*میل`)
+      const thicknessMatches = productsList.filter((p) => thicknessRegex.test(p.normalizedName))
+      if (thicknessMatches.length) {
+        return thicknessMatches
+          .sort((a, b) => {
+            const aStarts = a.normalizedCode.startsWith(normalizedQuery) ? 0 : 1
+            const bStarts = b.normalizedCode.startsWith(normalizedQuery) ? 0 : 1
+            return aStarts - bStarts
+          })
+          .slice(0, 40)
+      }
+    }
 
     const results = productsList.filter((p) =>
       tokens.every(
@@ -1148,7 +1355,10 @@ export default function NewOrderClient() {
     setSvcUnitPrice("")
     setSvcLengthCount("1")
     setSvcWidthCount("1")
-    svcTitleRef.current?.focus()
+    // بعد از ثبت هر خدمت، فوکوس به کادر جستجو برمی‌گردد تا بدون نیاز به موس
+    // بشود بلافاصله «سختی کار» بعدی را جستجو کرد
+    setServiceSearch("")
+    serviceSearchRef.current?.focus()
   }
 
   const removeService = (id: number) => setTempServices(tempServices.filter((s) => s.id !== id))
@@ -1339,6 +1549,12 @@ export default function NewOrderClient() {
       }
       if (result.assignedOrderNumber) setOrderNumber(String(result.assignedOrderNumber))
       if (result.assignedCustomerOrderNumber) setCustomerOrderNumber(String(result.assignedCustomerOrderNumber))
+      // با ثبت موفق سفارش، پیش‌نویسِ محلی دیگر لازم نیست و پاک می‌شود
+      try {
+        localStorage.removeItem(DRAFT_STORAGE_KEY)
+      } catch (err) {
+        console.error(err)
+      }
       alert(editingOrderId ? "سفارش با موفقیت ویرایش شد" : `سفارش با شماره ${result.assignedOrderNumber || ""} با موفقیت ذخیره شد`)
       router.push("/order")
     } catch (error) {
@@ -1465,8 +1681,11 @@ export default function NewOrderClient() {
 
     // ========== حالت جزئی: مثل چاپ نرم‌افزار قبلی ==========
     // برای هر کالا (هم‌نام + هم‌واحد + هم‌قیمت) یک بلوک ساخته می‌شود:
-    //   ۱) خدمات آن کالا: سطر «مجموع» هر خدمت + سطر(های) خود خدمت (جمع تعداد و متراژ همه‌ی قطعات)
-    //   ۲) سطر «مجموع» کالا (متراژ کل) + هر قطعه در یک سطر جدا
+    //   ۱) خدمات آن کالا: سطر «مجموع» هر خدمت (فقط اگر آن خدمت بیش از یک واریانت/سطر داشته باشد)
+    //      + سطر(های) خود خدمت (جمع تعداد و متراژ همه‌ی قطعات)
+    //   ۲) سطر «مجموع» کالا (متراژ کل، فقط اگر بیش از یک قطعه باشد) + هر قطعه در یک سطر جدا
+    // نکته: اگر کل بلوک فقط یک قطعه/یک واریانت باشد، ردیف «مجموع» اضافی نمایش داده نمی‌شود
+    // چون با خود همان یک سطر یکی است.
     type DetailVariant = {
       code: string
       quantity: number
@@ -1552,12 +1771,16 @@ export default function NewOrderClient() {
       b.services.forEach((svc) => {
         const svcName = `${svc.title} ${b.productName}`
         const prices = new Set(svc.variants.map((v) => v.unitPrice))
-        detailRows.push({
-          kind: "svc-total",
-          title: svcName,
-          unitPrice: prices.size === 1 ? svc.variants[0].unitPrice : null,
-          total: svc.variants.reduce((sum, v) => sum + v.total, 0),
-        })
+        // سطر «مجموع» فقط وقتی لازم است که این خدمت بیش از یک ردیف (واریانت) داشته باشد؛
+        // اگر فقط یک ردیف باشد، مجموع همان یک سطر است و نیازی به تکرار نیست
+        if (svc.variants.length > 1) {
+          detailRows.push({
+            kind: "svc-total",
+            title: svcName,
+            unitPrice: prices.size === 1 ? svc.variants[0].unitPrice : null,
+            total: svc.variants.reduce((sum, v) => sum + v.total, 0),
+          })
+        }
         svc.variants.forEach((v) => {
           detailRows.push({
             kind: "service",
@@ -1575,14 +1798,16 @@ export default function NewOrderClient() {
         })
       })
 
-      // ۲) خود کالا: یک سطر «مجموع» با متراژ کل + هر قطعه در یک سطر
-      detailRows.push({
-        kind: "prod-total",
-        title: b.productName,
-        amount: b.items.reduce((sum, it) => sum + (parseFloat(it.meterage) || 0), 0),
-        unitPrice: b.unitPrice,
-        total: b.items.reduce((sum, it) => sum + getProductOnlyPrice(it), 0),
-      })
+      // ۲) خود کالا: سطر «مجموع» فقط وقتی این کالا بیش از یک قطعه دارد + هر قطعه در یک سطر
+      if (b.items.length > 1) {
+        detailRows.push({
+          kind: "prod-total",
+          title: b.productName,
+          amount: b.items.reduce((sum, it) => sum + (parseFloat(it.meterage) || 0), 0),
+          unitPrice: b.unitPrice,
+          total: b.items.reduce((sum, it) => sum + getProductOnlyPrice(it), 0),
+        })
+      }
       b.items.forEach((it) => {
         detailRows.push({
           kind: "product",
@@ -1605,11 +1830,10 @@ export default function NewOrderClient() {
       <div
         id="invoice-print-area"
         ref={invoiceRef}
-        className="relative overflow-hidden print:overflow-visible print:min-h-0 bg-white"
+        className="relative overflow-hidden print:overflow-visible min-h-[1120px] print:!min-h-0 bg-white"
         dir="rtl"
         style={{
           fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif",
-          minHeight: "1120px",
           WebkitPrintColorAdjust: "exact",
           printColorAdjust: "exact",
         } as React.CSSProperties}
@@ -1982,7 +2206,7 @@ export default function NewOrderClient() {
           </div>
 
           {/* اطلاعات واریز */}
-          <div className="mt-8 pt-4 border-t border-gray-200 text-sm text-gray-700">
+          <div className="mt-8 pt-4 border-t border-gray-200 text-sm text-gray-700 break-inside-avoid">
             <p className="font-bold mb-2 text-teal-800">اطلاعات واریز:</p>
             {isOfficialInvoice ? (
               <div className="bg-teal-50/50 rounded-lg p-3 border border-teal-100 leading-6">
@@ -2099,7 +2323,8 @@ export default function NewOrderClient() {
                                 selectCustomer(filteredCustomers[Math.min(customerActiveIndex, filteredCustomers.length - 1)])
                               }
                               setShowCustomerDropdown(false)
-                              focusRef(customerGroupRef)
+                              // با تأخیر صفر، بعد از بسته‌شدن دراپ‌داون و رندر مجدد، فوکوس مطمئناً جابه‌جا شود
+                              setTimeout(() => focusRef(customerGroupRef), 0)
                             }
                           }}
                           placeholder="جستجوی مشتری..."
@@ -2222,13 +2447,33 @@ export default function NewOrderClient() {
                       zIndex={1000}
                       placeholder="انتخاب تاریخ"
                     />
+                    <p className="text-xs mt-0.5 text-blue-600">به‌صورت خودکار روی تاریخ امروز تنظیم می‌شود</p>
                   </div>
 
                   <div ref={deliveryDateWrapRef} onKeyDown={(e) => handleEnter(e, hasInstallationRef)} className="w-full">
-                    <label className={labelClass}>تاریخ تحویل</label>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <label className={labelClass + " mb-0"}>تاریخ تحویل</label>
+                      <select
+                        value={deliveryDateMode}
+                        onChange={(e) => setDeliveryDateMode(e.target.value as any)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="rounded-lg border border-teal-500/30 bg-white/60 px-1.5 py-0.5 text-[11px] font-bold text-teal-800 focus:outline-none hover:bg-yellow-100"
+                        title="نحوه‌ی محاسبه‌ی تاریخ تحویل"
+                      >
+                        <option value="4">۴ روز کاری</option>
+                        <option value="7">۷ روز کاری</option>
+                        <option value="10">۱۰ روز کاری</option>
+                        <option value="15">۱۵ روز کاری</option>
+                        <option value="30">۳۰ روز کاری</option>
+                        <option value="manual">انتخاب دستی</option>
+                      </select>
+                    </div>
                     <DatePicker
                       value={deliveryDate}
-                      onChange={setDeliveryDate}
+                      onChange={(v) => {
+                        setDeliveryDate(v)
+                        setDeliveryDateMode("manual")
+                      }}
                       calendar={persian}
                       locale={persian_fa}
                       calendarPosition="bottom-right"
@@ -2239,6 +2484,9 @@ export default function NewOrderClient() {
                       zIndex={1000}
                       placeholder="انتخاب تاریخ"
                     />
+                    <p className="text-xs mt-0.5 text-blue-600">
+                      {deliveryDateMode === "manual" ? "تاریخ به‌صورت دستی انتخاب شده" : `${deliveryDateMode} روز کاری بعد از تاریخ سفارش (خودکار)`}
+                    </p>
                   </div>
                 </div>
 
@@ -2341,7 +2589,7 @@ export default function NewOrderClient() {
                 <h2 className="mb-3 text-xl font-bold text-blue-950">
                   {editingItemId ? "ویرایش کالا" : "افزودن کالا جدید"}
                 </h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-10 gap-3 items-end">
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-11 gap-3 items-end">
                   <div className="col-span-2 md:col-span-4 lg:col-span-3 relative min-w-0" onClick={(e) => e.stopPropagation()}>
                     <label className={labelClass}>نام کالا</label>
                     <input
@@ -2356,7 +2604,7 @@ export default function NewOrderClient() {
                       }}
                       onFocus={() => setShowProductDropdown(true)}
                       onKeyDown={(e) => handleEnter(e, unitPriceRef)}
-                      placeholder="جستجوی کالا..."
+                      placeholder="جستجوی کالا... (مثلاً «4» برای همه‌ی ۴ میلی‌ها)"
                       className={inputClass}
                       autoComplete="off"
                     />
@@ -2381,15 +2629,15 @@ export default function NewOrderClient() {
                             <bdi className="truncate">{p.name}</bdi>
                           </button>
                         ))}
-                        {filteredProducts.length === 20 && (
+                        {(filteredProducts.length === 20 || filteredProducts.length === 40) && (
                           <p className="px-4 py-1.5 text-xs text-gray-400 border-t border-teal-50">
-                            فقط ۲۰ نتیجه اول نمایش داده می‌شود — برای دقیق‌تر شدن نتایج، کلمه‌ی بیشتری تایپ کنید
+                            فقط نتایج اول نمایش داده می‌شود — برای دقیق‌تر شدن نتایج، کلمه‌ی بیشتری تایپ کنید
                           </p>
                         )}
                       </div>
                     )}
                   </div>
-                  <div>
+                  <div className="col-span-2 md:col-span-2 lg:col-span-2">
                     <label className={labelClass}>قیمت واحد</label>
                     <input
                       ref={unitPriceRef}
@@ -2397,7 +2645,7 @@ export default function NewOrderClient() {
                       value={newUnitPrice}
                       onChange={(e) => setNewUnitPrice(formatWithCommas(e.target.value))}
                       onKeyDown={(e) => handleEnter(e, unitRef)}
-                      className={inputClass}
+                      className={priceInputClass}
                       placeholder=""
                       autoComplete="off"
                     />
@@ -2420,6 +2668,7 @@ export default function NewOrderClient() {
                         setNewLength(e.target.value)
                         setLengthError(false)
                       }}
+                      onWheel={blockWheelChange}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault()
@@ -2436,7 +2685,7 @@ export default function NewOrderClient() {
                   </div>
                   <div>
                     <label className={labelClass}>عرض (cm)</label>
-                    <input ref={widthRef} type="number" value={newWidth} onChange={(e) => setNewWidth(e.target.value)} onKeyDown={(e) => handleEnter(e, quantityRef)} className={inputClass} />
+                    <input ref={widthRef} type="number" value={newWidth} onChange={(e) => setNewWidth(e.target.value)} onWheel={blockWheelChange} onKeyDown={(e) => handleEnter(e, quantityRef)} className={inputClass} />
                   </div>
                   <div>
                     <label className={labelClass}>تعداد</label>
@@ -2445,6 +2694,7 @@ export default function NewOrderClient() {
                       type="number"
                       value={newQuantity}
                       onChange={(e) => setNewQuantity(e.target.value)}
+                      onWheel={blockWheelChange}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault()
@@ -3177,6 +3427,7 @@ export default function NewOrderClient() {
                           type="number"
                           value={svcCount}
                           onChange={(e) => setSvcCount(e.target.value)}
+                          onWheel={blockWheelChange}
                           onKeyDown={(e) => handleEnter(e, svcCountNextRef())}
                           className={inputClass}
                         />
@@ -3198,6 +3449,7 @@ export default function NewOrderClient() {
                             value={svcUnitQuantity}
                             placeholder={svcUnit === "عددی" ? "1" : ""}
                             onChange={(e) => setSvcUnitQuantity(e.target.value)}
+                            onWheel={blockWheelChange}
                             onKeyDown={(e) => handleEnter(e, svcUnitPriceRef)}
                             className={inputClass}
                           />
@@ -3210,6 +3462,7 @@ export default function NewOrderClient() {
                               type="number"
                               value={svcDiameter}
                               onChange={(e) => setSvcDiameter(e.target.value)}
+                              onWheel={blockWheelChange}
                               onKeyDown={(e) => handleEnter(e, svcUnitPriceRef)}
                               className={inputClass}
                               placeholder="مثلاً ۱۲۰"
@@ -3236,6 +3489,7 @@ export default function NewOrderClient() {
                               type="number"
                               value={svcLengthCount}
                               onChange={(e) => setSvcLengthCount(e.target.value)}
+                              onWheel={blockWheelChange}
                               onKeyDown={(e) => handleEnter(e, svcWidthCountRef)}
                               className={inputClass}
                             />
@@ -3247,6 +3501,7 @@ export default function NewOrderClient() {
                               type="number"
                               value={svcWidthCount}
                               onChange={(e) => setSvcWidthCount(e.target.value)}
+                              onWheel={blockWheelChange}
                               onKeyDown={(e) => handleEnter(e, svcUnitPriceRef)}
                               className={inputClass}
                             />
@@ -3273,7 +3528,7 @@ export default function NewOrderClient() {
                             addOrUpdateService()
                           }
                         }}
-                        className={inputClass}
+                        className={priceInputClass}
                         placeholder=""
                       />
                     </div>
@@ -3401,33 +3656,43 @@ export default function NewOrderClient() {
                 <div className="w-full max-w-5xl max-h-[94vh] overflow-y-auto rounded-2xl bg-white shadow-2xl">
 
                   {/* هدر کنترل‌ها */}
-                  <div className="sticky top-0 z-10 flex items-center justify-between bg-teal-700 text-white px-5 py-3 rounded-t-2xl flex-wrap gap-y-2">
-                    <div className="flex gap-3 items-center">
-                      <h3 className="text-lg font-bold">پیش فاکتور</h3>
+                  <div className="sticky top-0 z-10 flex flex-col gap-3 bg-teal-700 text-white px-5 py-4 rounded-t-2xl">
+                    <div className="flex items-center justify-between flex-wrap gap-y-2 gap-x-4">
+                      <div className="flex gap-3 items-center">
+                        <h3 className="text-lg font-bold">پیش فاکتور</h3>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setInvoiceMode("detailed")}
+                            className={`rounded-lg px-3 py-1 text-sm font-bold ${invoiceMode === "detailed" ? "bg-white text-teal-800" : "bg-white/20"}`}
+                          >
+                            جزئی
+                          </button>
+                          <button
+                            onClick={() => setInvoiceMode("summary")}
+                            className={`rounded-lg px-3 py-1 text-sm font-bold ${invoiceMode === "summary" ? "bg-white text-teal-800" : "bg-white/20"}`}
+                          >
+                            کلی
+                          </button>
+                          <button
+                            onClick={() => setInvoiceMode("breakdown")}
+                            className={`rounded-lg px-3 py-1 text-sm font-bold ${invoiceMode === "breakdown" ? "bg-white text-teal-800" : "bg-white/20"}`}
+                          >
+                            ریز فاکتور
+                          </button>
+                        </div>
+                      </div>
                       <div className="flex gap-2">
-                        <button
-                          onClick={() => setInvoiceMode("detailed")}
-                          className={`rounded-lg px-3 py-1 text-sm font-bold ${invoiceMode === "detailed" ? "bg-white text-teal-800" : "bg-white/20"}`}
-                        >
-                          جزئی
+                        <button onClick={() => window.print()} className="rounded-lg bg-white/20 px-3 py-1.5 text-sm font-bold">
+                          چاپ
                         </button>
-                        <button
-                          onClick={() => setInvoiceMode("summary")}
-                          className={`rounded-lg px-3 py-1 text-sm font-bold ${invoiceMode === "summary" ? "bg-white text-teal-800" : "bg-white/20"}`}
-                        >
-                          کلی
-                        </button>
-                        <button
-                          onClick={() => setInvoiceMode("breakdown")}
-                          className={`rounded-lg px-3 py-1 text-sm font-bold ${invoiceMode === "breakdown" ? "bg-white text-teal-800" : "bg-white/20"}`}
-                        >
-                          ریز فاکتور
+                        <button onClick={() => setShowInvoice(false)} className="rounded-lg bg-white/20 px-3 py-1.5 text-sm font-bold">
+                          بستن
                         </button>
                       </div>
                     </div>
-                    <div className="flex gap-2 items-center flex-wrap">
-                      {/* تخفیف: کنترل ساده و همیشه‌دیده، بدون پاپ‌آپ — چک‌باکس فقط روشن/خاموش می‌کند،
-                          و وقتی روشن است، انتخاب «درصدی/دستی» و مقدارش همین‌جا و همیشه در دسترس است. */}
+
+                    {/* نوار تخفیف / فاکتور رسمی — در ردیف جداگانه و با فاصله‌ی بیشتر تا شلوغ/باریک نشود */}
+                    <div className="flex items-center gap-3 flex-wrap bg-white/10 rounded-xl px-3 py-2.5">
                       <div className="flex items-center gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
                         <label className="flex items-center gap-1.5 text-sm cursor-pointer">
                           <input
@@ -3440,11 +3705,11 @@ export default function NewOrderClient() {
                         </label>
 
                         {hasDiscount && (
-                          <div className="flex items-center gap-1.5 bg-white/15 rounded-lg px-1.5 py-1">
+                          <div className="flex items-center gap-2 bg-white/15 rounded-lg px-2 py-1.5">
                             <button
                               type="button"
                               onClick={() => setDiscountMode("percent")}
-                              className={`rounded-md px-2 py-1 text-xs font-bold ${
+                              className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
                                 discountMode === "percent" ? "bg-white text-teal-800" : "bg-white/10 text-white hover:bg-white/25"
                               }`}
                             >
@@ -3453,7 +3718,7 @@ export default function NewOrderClient() {
                             <button
                               type="button"
                               onClick={() => setDiscountMode("manual")}
-                              className={`rounded-md px-2 py-1 text-xs font-bold ${
+                              className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
                                 discountMode === "manual" ? "bg-white text-teal-800" : "bg-white/10 text-white hover:bg-white/25"
                               }`}
                             >
@@ -3464,7 +3729,7 @@ export default function NewOrderClient() {
                               <select
                                 value={discountPercent}
                                 onChange={(e) => setDiscountPercent(Number(e.target.value))}
-                                className="rounded-md px-1.5 py-1 text-xs font-bold text-teal-900 focus:outline-none"
+                                className="rounded-md px-2 py-1.5 text-xs font-bold text-teal-900 focus:outline-none min-w-[64px]"
                               >
                                 {discountOptions.map((p) => (
                                   <option key={p} value={p}>{p}٪</option>
@@ -3476,12 +3741,15 @@ export default function NewOrderClient() {
                                 value={manualDiscountAmount}
                                 onChange={(e) => setManualDiscountAmount(formatWithCommas(e.target.value))}
                                 placeholder="مبلغ به ریال"
-                                className="w-28 rounded-md px-2 py-1 text-xs font-bold text-teal-900 focus:outline-none"
+                                className="w-32 rounded-md px-2 py-1.5 text-xs font-bold text-teal-900 focus:outline-none"
                               />
                             )}
                           </div>
                         )}
                       </div>
+
+                      <span className="hidden sm:block w-px h-6 bg-white/20" />
+
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <input
                           type="checkbox"
@@ -3491,12 +3759,6 @@ export default function NewOrderClient() {
                         />
                         فاکتور رسمی (+۱۰٪)
                       </label>
-                      <button onClick={() => window.print()} className="rounded-lg bg-white/20 px-3 py-1.5 text-sm font-bold">
-                        چاپ
-                      </button>
-                      <button onClick={() => setShowInvoice(false)} className="rounded-lg bg-white/20 px-3 py-1.5 text-sm font-bold">
-                        بستن
-                      </button>
                     </div>
                   </div>
 
@@ -3521,6 +3783,17 @@ export default function NewOrderClient() {
       )}
 
       <style jsx global>{`
+        /* حذف دکمه‌های بالا/پایین (spinner) فیلدهای عددی — تا با کلیک یا
+           اسکرول اشتباهی ماوس، مقدار عدد تغییر نکند */
+        input[type="number"] {
+          -moz-appearance: textfield;
+        }
+        input[type="number"]::-webkit-outer-spin-button,
+        input[type="number"]::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+
         @media print {
           @page {
             size: A4;
@@ -3538,6 +3811,12 @@ export default function NewOrderClient() {
           }
           tr {
             page-break-inside: avoid;
+          }
+          /* جلوگیری از فضای خالیِ اضافه (که باعث چاپ یک صفحه‌ی اضافیِ بی‌مورد و جابه‌جایی/پرش
+             اطلاعات واریز به صفحه‌ی بعد می‌شد). این قانون با !important، استایل inline
+             min-height را هم در حالت چاپ خنثی می‌کند. */
+          #invoice-print-area {
+            min-height: 0 !important;
           }
           .invoice-header {
             position: fixed !important;

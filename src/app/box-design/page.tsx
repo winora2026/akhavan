@@ -92,40 +92,80 @@ function edgeDesc(
   if (face === "shelf" || face === "door") return "دیاموند"
   if (mode === "diamond") return "دیاموند"
 
-  let miterLen = 0, miterWid = 0, diaLen = 0, diaWid = 0
+  let miterLen = 0
+  let miterWid = 0
+  let diaLen = 0
+  let diaWid = 0
+
   const joint = (cond: boolean, isLen: boolean) => {
-    if (cond) (isLen ? miterLen++ : miterWid++)
-    else (isLen ? diaLen++ : diaWid++)
+    if (cond) {
+      if (isLen) miterLen++
+      else miterWid++
+    } else {
+      if (isLen) diaLen++
+      else diaWid++
+    }
   }
 
   if (face === "top" || face === "bottom") {
-    joint(!!faces.back, true); joint(!!faces.front, true)
-    joint(!!faces.left, false); joint(!!faces.right, false)
+    joint(!!faces.back, true)
+    joint(!!faces.front, true)
+    joint(!!faces.left, false)
+    joint(!!faces.right, false)
   } else if (face === "back" || face === "front") {
-    joint(!!faces.top, true); joint(!!faces.bottom, true)
-    joint(!!faces.left, false); joint(!!faces.right, false)
+    joint(!!faces.top, true)
+    joint(!!faces.bottom, true)
+    joint(!!faces.left, false)
+    joint(!!faces.right, false)
   } else {
-    joint(!!faces.top, true); joint(!!faces.bottom, true)
-    joint(!!faces.back, false); joint(!!faces.front, false)
+    joint(!!faces.top, true)
+    joint(!!faces.bottom, true)
+    joint(!!faces.back, false)
+    joint(!!faces.front, false)
   }
 
   const parts: string[] = []
-  const push = (n: number, kind: string, label: string) => {
-    if (n <= 0) return
-    if (n === 1) parts.push(`یک ${kind} ${label}`)
-    else if (n === 2) parts.push(`دو ${kind} ${label}`)
-    else parts.push(`${n} ${kind} ${label}`)
+
+  // ترکیب طول و عرض لول ۴۵ درجه
+  if (miterLen > 0 || miterWid > 0) {
+    const miterParts: string[] = []
+    if (miterLen === 1) miterParts.push("یک طول")
+    else if (miterLen === 2) miterParts.push("دو طول")
+    else if (miterLen > 2) miterParts.push(`${miterLen} طول`)
+
+    if (miterWid === 1) miterParts.push("یک عرض")
+    else if (miterWid === 2) miterParts.push("دو عرض")
+    else if (miterWid > 2) miterParts.push(`${miterWid} عرض`)
+
+    if (miterParts.length) {
+      parts.push(miterParts.join(" + ") + " لول ۴۵ درجه")
+    }
   }
-  push(miterLen, "طول", "فارسی‌بر")
-  push(miterWid, "عرض", "فارسی‌بر")
-  push(diaLen, "طول", "دیاموند")
-  push(diaWid, "عرض", "دیاموند")
+
+  // دیاموند
+  if (diaLen > 0 || diaWid > 0) {
+    const diaParts: string[] = []
+    if (diaLen === 1) diaParts.push("یک طول")
+    else if (diaLen === 2) diaParts.push("دو طول")
+    else if (diaLen > 2) diaParts.push(`${diaLen} طول`)
+
+    if (diaWid === 1) diaParts.push("یک عرض")
+    else if (diaWid === 2) diaParts.push("دو عرض")
+    else if (diaWid > 2) diaParts.push(`${diaWid} عرض`)
+
+    if (diaParts.length) {
+      parts.push(diaParts.join(" + ") + " دیاموند")
+    }
+  }
+
   return parts.length ? parts.join(" + ") : "دیاموند"
 }
 
 function buildPartsForOne(cfg: BoxConfig, boxIndex: number): { parts: Part[]; uvM: number } {
   const { boxType, thickness, dimensions: dim, faces, shelfCount, shelfWidthCm, hasSlidingDoors, doorThickness } = cfg
-  const L = dim.length, W = dim.width, H = dim.height
+  const L = dim.length
+  const W = dim.width
+  const H = dim.height
   const t = thickness / 10
   const miter = 0.2
   const shelfRecess = hasSlidingDoors ? 3 : 0
@@ -133,7 +173,14 @@ function buildPartsForOne(cfg: BoxConfig, boxIndex: number): { parts: Part[]; uv
   const parts: Part[] = []
   const mode = boxType === "diamond" ? "diamond" : "miter"
 
-  const add = (face: FaceKey | "shelf" | "door", name: string, a: number, b: number, qty: number, thick?: number) => {
+  const add = (
+    face: FaceKey | "shelf" | "door",
+    name: string,
+    a: number,
+    b: number,
+    qty: number,
+    thick?: number
+  ) => {
     if (a <= 0 || b <= 0 || qty <= 0) return
     const lengthCm = round1(Math.max(a, b))
     const widthCm = round1(Math.min(a, b))
@@ -169,7 +216,7 @@ function buildPartsForOne(cfg: BoxConfig, boxIndex: number): { parts: Part[]; uv
     if (faces.right) add("right", "دیواره راست", sideW, sideH, 1)
 
     const shelfL = L - leftT - rightT
-    const shelfW = (shelfWidthCm ?? (W - backT - frontT)) - shelfRecess
+    const shelfW = (shelfWidthCm ?? W - backT - frontT) - shelfRecess
     for (let i = 0; i < shelfCount; i++) {
       add("shelf", `طبقه ${i + 1}`, shelfL, Math.max(shelfW, 1), 1)
     }
@@ -264,17 +311,16 @@ function BoxSchematic({
   const Ct = { x: C.x, y: C.y - hz }
   const Dt = { x: D.x, y: D.y - hz }
 
-  const poly = (pts: { x: number; y: number }[], fill: string, opacity = 1) => (
+  const poly = (pts: { x: number; y: number }[], fill: string, opacity = 0.3) => (
     <polygon
       points={pts.map((p) => `${p.x},${p.y}`).join(" ")}
       fill={fill}
-      stroke="#111"
-      strokeWidth="1.4"
+      stroke="#0d9488"
+      strokeWidth="2.1"
       opacity={opacity}
     />
   )
 
-  // موقعیت Y طبقات
   const shelvesY: number[] = []
   if (shelfCount > 0 && height > 0) {
     const topMargin = 10
@@ -297,20 +343,16 @@ function BoxSchematic({
     }
   }
 
-  // رسم طبقه سه‌بعدی
   const drawShelf = (y: number, key: number) => {
-    const thickness = 5 // ضخامت بصری طبقه
-    const inset = 4
+    const thickness = 4
+    const inset = 5
 
-    // سطح رویی طبقه
     const topFace = [
       { x: A.x + inset, y: y },
       { x: B.x - inset, y: y },
-      { x: C.x - inset - 4, y: y - wy * 0.32 },
+      { x: C.x - inset - 5, y: y - wy * 0.32 },
       { x: D.x + inset, y: y - wy * 0.32 },
     ]
-
-    // سطح جلویی (ضخامت)
     const frontFace = [
       { x: A.x + inset, y: y },
       { x: B.x - inset, y: y },
@@ -318,19 +360,22 @@ function BoxSchematic({
       { x: A.x + inset, y: y + thickness },
     ]
 
-    // سطح کناری راست
-    const sideFace = [
-      { x: B.x - inset, y: y },
-      { x: C.x - inset - 4, y: y - wy * 0.32 },
-      { x: C.x - inset - 4, y: y - wy * 0.32 + thickness },
-      { x: B.x - inset, y: y + thickness },
-    ]
-
     return (
       <g key={key}>
-        {poly(topFace, "#94a3b8", 0.95)}
-        {poly(frontFace, "#64748b", 0.9)}
-        {poly(sideFace, "#7c8a9a", 0.85)}
+        <polygon
+          points={topFace.map((p) => `${p.x},${p.y}`).join(" ")}
+          fill="#99f6e4"
+          stroke="#0d9488"
+          strokeWidth="1.8"
+          opacity="0.45"
+        />
+        <polygon
+          points={frontFace.map((p) => `${p.x},${p.y}`).join(" ")}
+          fill="#5eead4"
+          stroke="#0d9488"
+          strokeWidth="1.5"
+          opacity="0.5"
+        />
       </g>
     )
   }
@@ -343,39 +388,55 @@ function BoxSchematic({
         </text>
       )}
 
-      {faces.bottom && poly([A, B, C, D], "#9ca3af")}
-      {faces.back && poly([D, C, Ct, Dt], "#6b7280")}
-      {faces.left && poly([A, D, Dt, At], "#7b8494")}
-      {faces.right && poly([B, C, Ct, Bt], "#c5cad3")}
-      {faces.front && poly([A, B, Bt, At], "#aeb4bf", 0.8)}
-      {faces.top && poly([At, Bt, Ct, Dt], "#d1d5db")}
+      {faces.bottom && poly([A, B, C, D], "#ccfbf1", 0.25)}
+      {faces.back && poly([D, C, Ct, Dt], "#99f6e4", 0.3)}
+      {faces.left && poly([A, D, Dt, At], "#5eead4", 0.28)}
+      {faces.right && poly([B, C, Ct, Bt], "#2dd4bf", 0.22)}
+      {faces.front && poly([A, B, Bt, At], "#99f6e4", 0.2)}
+      {faces.top && poly([At, Bt, Ct, Dt], "#ccfbf1", 0.3)}
 
-      {/* طبقات سه‌بعدی */}
       {shelvesY.map((y, i) => drawShelf(y, i))}
 
       {hasSlidingDoors && (
         <>
-          <rect x={A.x + 8} y={At.y + 10} width={lx * 0.4} height={hz - 20} fill="#94a3b8" stroke="#1e293b" strokeWidth="1.3" opacity="0.6" />
-          <rect x={A.x + lx * 0.5} y={At.y + 10} width={lx * 0.4} height={hz - 20} fill="#94a3b8" stroke="#1e293b" strokeWidth="1.3" opacity="0.6" />
+          <rect
+            x={A.x + 8}
+            y={At.y + 10}
+            width={lx * 0.4}
+            height={hz - 20}
+            fill="#99f6e4"
+            stroke="#0d9488"
+            strokeWidth="1.5"
+            opacity="0.35"
+          />
+          <rect
+            x={A.x + lx * 0.5}
+            y={At.y + 10}
+            width={lx * 0.4}
+            height={hz - 20}
+            fill="#99f6e4"
+            stroke="#0d9488"
+            strokeWidth="1.5"
+            opacity="0.35"
+          />
         </>
       )}
 
-      {/* ابعاد */}
-      <line x1={A.x} y1={A.y + 16} x2={B.x} y2={B.y + 16} stroke="#111" strokeWidth="1" />
-      <text x={(A.x + B.x) / 2} y={A.y + 30} textAnchor="middle" fontSize="12" fontWeight="700">
+      <line x1={A.x} y1={A.y + 16} x2={B.x} y2={B.y + 16} stroke="#0f766e" strokeWidth="1.2" />
+      <text x={(A.x + B.x) / 2} y={A.y + 30} textAnchor="middle" fontSize="12" fontWeight="700" fill="#134e4a">
         {length || "—"}
       </text>
-      <line x1={B.x + 10} y1={B.y} x2={C.x + 10} y2={C.y} stroke="#111" strokeWidth="1" />
-      <text x={C.x + 24} y={(B.y + C.y) / 2 + 4} fontSize="12" fontWeight="700">
+      <line x1={B.x + 10} y1={B.y} x2={C.x + 10} y2={C.y} stroke="#0f766e" strokeWidth="1.2" />
+      <text x={C.x + 24} y={(B.y + C.y) / 2 + 4} fontSize="12" fontWeight="700" fill="#134e4a">
         {width || "—"}
       </text>
-      <line x1={A.x - 14} y1={A.y} x2={At.x - 14} y2={At.y} stroke="#111" strokeWidth="1" />
-      <text x={A.x - 26} y={(A.y + At.y) / 2} fontSize="12" fontWeight="700">
+      <line x1={A.x - 14} y1={A.y} x2={At.x - 14} y2={At.y} stroke="#0f766e" strokeWidth="1.2" />
+      <text x={A.x - 26} y={(A.y + At.y) / 2} fontSize="12" fontWeight="700" fill="#134e4a">
         {height || "—"}
       </text>
 
       <text x="170" y="228" textAnchor="middle" fontSize="12" fontWeight="700" fill="#0f766e">
-        {boxType === "diamond" ? "اتصال: دیاموند" : "اتصال: فارسی‌بر ۴۵°"}
+        {boxType === "diamond" ? "اتصال: دیاموند" : "اتصال: لول ۴۵ درجه"}
       </text>
     </svg>
   )
@@ -414,10 +475,19 @@ export default function BoxDesignPage() {
 
   const filteredCustomers = useMemo(() => {
     const q = customerSearch.trim().toLowerCase()
-    if (!q) return customersList.slice(0, 8)
+    if (!q) return customersList.slice(0, 10)
+
     return customersList
-      .filter((c) => c.name.toLowerCase().includes(q) || c.code.includes(q))
-      .slice(0, 12)
+      .filter((c) => {
+        const fullName = c.name.toLowerCase()
+        const code = (c.code || "").toLowerCase()
+        return (
+          fullName.includes(q) ||
+          code.includes(q) ||
+          fullName.split(" ").some((part) => part.startsWith(q))
+        )
+      })
+      .slice(0, 15)
   }, [customerSearch])
 
   const selectCustomer = (c: { name: string }) => {
@@ -552,6 +622,8 @@ export default function BoxDesignPage() {
 
     const finalItems = totalParts.map((p) => {
       const cfg = boxes[p.boxIndex ?? 0]
+      const perimeter = round1((p.lengthCm + p.widthCm) * 2)
+
       return {
         productName: `${cfg.glassName} ${cfg.thickness} میل - ${p.name}`,
         installCode: "",
@@ -559,9 +631,10 @@ export default function BoxDesignPage() {
         length: String(p.lengthCm),
         width: String(p.widthCm),
         quantity: String(p.qty),
-        meterage: (p.areaM2).toFixed(4),
-        perimeter: "",
-        description: p.edgeNote,
+        meterage: p.areaM2.toFixed(4),
+        perimeter: String(perimeter),
+        description: "",
+        services: p.edgeNote, // ← خدمات (لول ۴۵ درجه و ...)
       }
     })
 
@@ -589,27 +662,37 @@ export default function BoxDesignPage() {
     router.push("/order/new?fromBoxDesign=1")
   }
 
-  const focusClass = "focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:bg-yellow-50 transition"
+  const focusClass =
+    "focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:bg-yellow-50 transition"
 
   return (
     <div
       className="min-h-screen p-4 bg-cover bg-center bg-fixed"
       style={{
-        backgroundImage: "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
+        backgroundImage:
+          "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
         fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif",
       }}
       dir="rtl"
     >
-      <link href="https://cdn.jsdelivr.net/npm/vazirmatn@33.003/Vazirmatn-font-face.css" rel="stylesheet" />
+      <link
+        href="https://cdn.jsdelivr.net/npm/vazirmatn@33.003/Vazirmatn-font-face.css"
+        rel="stylesheet"
+      />
       <div className="pointer-events-none fixed inset-0 bg-black/5" />
 
       <div className="relative z-10 max-w-6xl mx-auto">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
           <div>
             <h1 className="text-2xl font-bold text-blue-950">طراحی باکس</h1>
-            <p className="text-sm text-blue-800 mt-1">دیاموند / فارسی‌بر + طبقات سه‌بعدی + درب ریلی + چند باکس</p>
+            <p className="text-sm text-blue-800 mt-1">
+              دیاموند / لول ۴۵ درجه + طبقات سه‌بعدی + درب ریلی + چند باکس
+            </p>
           </div>
-          <Link href="/" className="rounded-xl border border-teal-500/40 bg-white/40 hover:bg-white/60 px-4 py-2.5 text-blue-900 font-bold">
+          <Link
+            href="/"
+            className="rounded-xl border border-teal-500/40 bg-white/40 hover:bg-white/60 px-4 py-2.5 text-blue-900 font-bold"
+          >
             بازگشت
           </Link>
         </div>
@@ -617,10 +700,16 @@ export default function BoxDesignPage() {
         <div className="mb-4 flex items-center justify-between rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 border border-teal-500/20">
           {[1, 2, 3, 4].map((s) => (
             <div key={s} className="flex items-center flex-1">
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ${step >= s ? "bg-teal-600 text-white" : "bg-white/50 text-gray-500"}`}>
+              <div
+                className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ${
+                  step >= s ? "bg-teal-600 text-white" : "bg-white/50 text-gray-500"
+                }`}
+              >
                 {s}
               </div>
-              {s < 4 && <div className={`flex-1 h-1 mx-2 ${step > s ? "bg-teal-600" : "bg-white/40"}`} />}
+              {s < 4 && (
+                <div className={`flex-1 h-1 mx-2 ${step > s ? "bg-teal-600" : "bg-white/40"}`} />
+              )}
             </div>
           ))}
         </div>
@@ -634,7 +723,9 @@ export default function BoxDesignPage() {
               <div className="relative">
                 <label className="block text-sm font-bold mb-1 text-blue-900">نام مشتری</label>
                 <input
-                  ref={(el) => { inputRefs.current[0] = el }}
+                  ref={(el) => {
+                    inputRefs.current[0] = el
+                  }}
                   type="text"
                   value={customerSearch}
                   onChange={(e) => {
@@ -646,13 +737,18 @@ export default function BoxDesignPage() {
                   onBlur={() => setTimeout(() => setShowCustomerDropdown(false), 150)}
                   onKeyDown={(e) => handleKeyDown(e, 0)}
                   className={`w-full rounded-xl border border-teal-500/30 bg-white/70 px-3 py-2.5 font-semibold ${focusClass}`}
-                  placeholder="جستجوی مشتری..."
+                  placeholder="جستجوی مشتری (نام یا کد)..."
                   autoComplete="off"
                 />
                 {showCustomerDropdown && filteredCustomers.length > 0 && (
                   <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-teal-200 bg-white shadow-2xl">
                     {filteredCustomers.map((c) => (
-                      <button key={c.id} type="button" onClick={() => selectCustomer(c)} className="w-full text-right px-3 py-2 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50">
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => selectCustomer(c)}
+                        className="w-full text-right px-3 py-2 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50"
+                      >
                         <span className="text-teal-700 font-mono text-xs ml-2">{c.code}</span>
                         {c.name}
                       </button>
@@ -661,10 +757,11 @@ export default function BoxDesignPage() {
                 )}
               </div>
 
-              {/* تعداد در حالت یکسان */}
               {isUniform && (
                 <div>
-                  <label className="block text-sm font-bold mb-1 text-blue-900">تعداد باکس (یکسان)</label>
+                  <label className="block text-sm font-bold mb-1 text-blue-900">
+                    تعداد باکس (یکسان)
+                  </label>
                   <input
                     type="number"
                     min={1}
@@ -672,7 +769,9 @@ export default function BoxDesignPage() {
                     onChange={(e) => updateBox(0, { qty: Number(e.target.value) || 1 })}
                     className={`w-32 rounded-xl border border-teal-500/30 bg-white/70 px-3 py-2.5 font-bold ${focusClass}`}
                   />
-                  <p className="text-xs text-gray-600 mt-1">اگر چند باکس کاملاً یکسان می‌خواهید، اینجا تعداد را وارد کنید.</p>
+                  <p className="text-xs text-gray-600 mt-1">
+                    اگر چند باکس کاملاً یکسان می‌خواهید، اینجا تعداد را وارد کنید.
+                  </p>
                 </div>
               )}
 
@@ -685,7 +784,7 @@ export default function BoxDesignPage() {
                       const different = e.target.checked
                       setIsUniform(!different)
                       if (!different) {
-                        setBoxes([ { ...boxes[0], label: "باکس ۱" } ])
+                        setBoxes([{ ...boxes[0], label: "باکس ۱" }])
                       }
                     }}
                   />
@@ -699,15 +798,27 @@ export default function BoxDesignPage() {
               {!isUniform && (
                 <div className="space-y-3">
                   {boxes.map((b, idx) => (
-                    <div key={b.id} className="flex items-center gap-3 bg-white/50 p-3 rounded-xl border border-teal-100">
+                    <div
+                      key={b.id}
+                      className="flex items-center gap-3 bg-white/50 p-3 rounded-xl border border-teal-100"
+                    >
                       <span className="font-bold text-teal-800 w-24">{b.label}</span>
                       <span className="text-sm">تعداد: {b.qty}</span>
-                      <button type="button" onClick={() => removeBox(idx)} disabled={boxes.length <= 1} className="text-red-600 text-sm font-bold disabled:opacity-30">
+                      <button
+                        type="button"
+                        onClick={() => removeBox(idx)}
+                        disabled={boxes.length <= 1}
+                        className="text-red-600 text-sm font-bold disabled:opacity-30"
+                      >
                         حذف
                       </button>
                     </div>
                   ))}
-                  <button type="button" onClick={addBox} className="px-4 py-2 rounded-xl bg-teal-100 text-teal-800 font-bold text-sm">
+                  <button
+                    type="button"
+                    onClick={addBox}
+                    className="px-4 py-2 rounded-xl bg-teal-100 text-teal-800 font-bold text-sm"
+                  >
                     + افزودن باکس جدید
                   </button>
                 </div>
@@ -723,19 +834,25 @@ export default function BoxDesignPage() {
                   <h3 className="font-black text-teal-800 mb-4">
                     {isUniform ? "تنظیمات باکس" : cfg.label}
                     {isUniform && cfg.qty > 1 && (
-                      <span className="text-sm font-normal text-gray-600 mr-2">(تعداد: {cfg.qty})</span>
+                      <span className="text-sm font-normal text-gray-600 mr-2">
+                        (تعداد: {cfg.qty})
+                      </span>
                     )}
                   </h3>
 
                   {step === 2 && (
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      {([
-                        ["length", "طول"],
-                        ["width", "عرض"],
-                        ["height", "ارتفاع"],
-                      ] as const).map(([key, label]) => (
+                      {(
+                        [
+                          ["length", "طول"],
+                          ["width", "عرض"],
+                          ["height", "ارتفاع"],
+                        ] as const
+                      ).map(([key, label]) => (
                         <div key={key}>
-                          <label className="block text-sm font-bold mb-1 text-blue-900">{label}</label>
+                          <label className="block text-sm font-bold mb-1 text-blue-900">
+                            {label}
+                          </label>
                           <input
                             type="number"
                             min={0}
@@ -743,7 +860,10 @@ export default function BoxDesignPage() {
                             value={cfg.dimensions[key] || ""}
                             onChange={(e) =>
                               updateBox(boxIdx, {
-                                dimensions: { ...cfg.dimensions, [key]: Number(e.target.value) },
+                                dimensions: {
+                                  ...cfg.dimensions,
+                                  [key]: Number(e.target.value),
+                                },
                               })
                             }
                             className={`w-full rounded-xl border border-teal-500/30 bg-white/70 px-3 py-2.5 ${focusClass}`}
@@ -757,7 +877,10 @@ export default function BoxDesignPage() {
                     <div className="space-y-4">
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                         {(Object.keys(cfg.faces) as FaceKey[]).map((key) => (
-                          <label key={key} className="flex items-center gap-2 p-2 rounded-xl border border-teal-500/30 bg-white/50 cursor-pointer">
+                          <label
+                            key={key}
+                            className="flex items-center gap-2 p-2 rounded-xl border border-teal-500/30 bg-white/50 cursor-pointer"
+                          >
                             <input
                               type="checkbox"
                               checked={cfg.faces[key]}
@@ -777,22 +900,28 @@ export default function BoxDesignPage() {
                           <label className="block text-sm font-bold mb-1">نوع اتصال</label>
                           <select
                             value={cfg.boxType}
-                            onChange={(e) => updateBox(boxIdx, { boxType: e.target.value as BoxType })}
+                            onChange={(e) =>
+                              updateBox(boxIdx, { boxType: e.target.value as BoxType })
+                            }
                             className={`w-full rounded-xl border border-teal-500/30 bg-white/70 px-3 py-2 ${focusClass}`}
                           >
                             <option value="diamond">دیاموند</option>
-                            <option value="miter">فارسی‌بر</option>
+                            <option value="miter">لول ۴۵ درجه</option>
                           </select>
                         </div>
                         <div>
                           <label className="block text-sm font-bold mb-1">ضخامت (میل)</label>
                           <select
                             value={cfg.thickness}
-                            onChange={(e) => updateBox(boxIdx, { thickness: Number(e.target.value) })}
+                            onChange={(e) =>
+                              updateBox(boxIdx, { thickness: Number(e.target.value) })
+                            }
                             className={`w-full rounded-xl border border-teal-500/30 bg-white/70 px-3 py-2 ${focusClass}`}
                           >
                             {[6, 8, 10, 12, 15, 19].map((t) => (
-                              <option key={t} value={t}>{t} میل</option>
+                              <option key={t} value={t}>
+                                {t} میل
+                              </option>
                             ))}
                           </select>
                         </div>
@@ -804,7 +933,9 @@ export default function BoxDesignPage() {
                             className={`w-full rounded-xl border border-teal-500/30 bg-white/70 px-3 py-2 ${focusClass}`}
                           >
                             {glassOptions.map((g) => (
-                              <option key={g} value={g}>{g}</option>
+                              <option key={g} value={g}>
+                                {g}
+                              </option>
                             ))}
                           </select>
                         </div>
@@ -818,7 +949,9 @@ export default function BoxDesignPage() {
                             min={0}
                             max={8}
                             value={cfg.shelfCount}
-                            onChange={(e) => updateBox(boxIdx, { shelfCount: Number(e.target.value) || 0 })}
+                            onChange={(e) =>
+                              updateBox(boxIdx, { shelfCount: Number(e.target.value) || 0 })
+                            }
                             className={`w-32 rounded-xl border border-teal-500/30 bg-white/70 px-3 py-2 ${focusClass}`}
                           />
                         </div>
@@ -827,7 +960,9 @@ export default function BoxDesignPage() {
                             <input
                               type="checkbox"
                               checked={cfg.hasSlidingDoors}
-                              onChange={(e) => updateBox(boxIdx, { hasSlidingDoors: e.target.checked })}
+                              onChange={(e) =>
+                                updateBox(boxIdx, { hasSlidingDoors: e.target.checked })
+                              }
                             />
                             درب ریلی
                           </label>
@@ -837,7 +972,9 @@ export default function BoxDesignPage() {
                       {cfg.shelfCount > 0 && (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-teal-50/50 p-3 rounded-xl">
                           <div>
-                            <label className="block text-sm font-bold mb-1">عرض طبقه (خالی = کامل)</label>
+                            <label className="block text-sm font-bold mb-1">
+                              عرض طبقه (خالی = کامل)
+                            </label>
                             <input
                               type="number"
                               step="0.1"
@@ -855,7 +992,9 @@ export default function BoxDesignPage() {
                               <input
                                 type="checkbox"
                                 checked={cfg.useCustomShelfOffset}
-                                onChange={(e) => updateBox(boxIdx, { useCustomShelfOffset: e.target.checked })}
+                                onChange={(e) =>
+                                  updateBox(boxIdx, { useCustomShelfOffset: e.target.checked })
+                                }
                               />
                               فاصله دلخواه از بالا
                             </label>
@@ -864,7 +1003,11 @@ export default function BoxDesignPage() {
                                 type="number"
                                 step="0.1"
                                 value={cfg.shelfOffsetFromTop}
-                                onChange={(e) => updateBox(boxIdx, { shelfOffsetFromTop: Number(e.target.value) || 0 })}
+                                onChange={(e) =>
+                                  updateBox(boxIdx, {
+                                    shelfOffsetFromTop: Number(e.target.value) || 0,
+                                  })
+                                }
                                 className={`mt-2 w-32 rounded-xl border border-teal-500/30 bg-white/70 px-3 py-2 ${focusClass}`}
                                 placeholder="cm از سقف"
                               />
@@ -880,7 +1023,9 @@ export default function BoxDesignPage() {
                             type="number"
                             min={1}
                             value={cfg.qty}
-                            onChange={(e) => updateBox(boxIdx, { qty: Number(e.target.value) || 1 })}
+                            onChange={(e) =>
+                              updateBox(boxIdx, { qty: Number(e.target.value) || 1 })
+                            }
                             className={`w-24 rounded-xl border border-teal-500/30 bg-white/70 px-3 py-2 ${focusClass}`}
                           />
                         </div>
@@ -899,7 +1044,10 @@ export default function BoxDesignPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {allResults.map((res, idx) => (
-                  <div key={boxes[idx].id} className="rounded-xl border border-teal-500/30 bg-white/70 p-3">
+                  <div
+                    key={boxes[idx].id}
+                    className="rounded-xl border border-teal-500/30 bg-white/70 p-3"
+                  >
                     <div data-schematic>
                       <BoxSchematic
                         faces={res.cfg.faces}
@@ -907,23 +1055,40 @@ export default function BoxDesignPage() {
                         width={res.cfg.dimensions.width}
                         height={res.cfg.dimensions.height}
                         shelfCount={res.cfg.shelfCount}
-                        shelfOffsetFromTop={res.cfg.useCustomShelfOffset ? res.cfg.shelfOffsetFromTop : null}
+                        shelfOffsetFromTop={
+                          res.cfg.useCustomShelfOffset ? res.cfg.shelfOffsetFromTop : null
+                        }
                         hasSlidingDoors={res.cfg.hasSlidingDoors}
                         boxType={res.cfg.boxType}
-                        label={isUniform ? (res.cfg.qty > 1 ? `${res.cfg.qty} عدد یکسان` : undefined) : res.cfg.label}
+                        label={
+                          isUniform
+                            ? res.cfg.qty > 1
+                              ? `${res.cfg.qty} عدد یکسان`
+                              : undefined
+                            : res.cfg.label
+                        }
                       />
                     </div>
                     <div className="text-sm mt-2 text-right space-y-0.5">
-                      <p className="font-bold">{res.cfg.glassName} {res.cfg.thickness} میل</p>
-                      <p>{res.cfg.dimensions.length} × {res.cfg.dimensions.width} × {res.cfg.dimensions.height} cm</p>
-                      <p className="text-teal-800 font-black">UV = {res.uvM} m | متراژ = {res.totalArea} m²</p>
+                      <p className="font-bold">
+                        {res.cfg.glassName} {res.cfg.thickness} میل
+                      </p>
+                      <p>
+                        {res.cfg.dimensions.length} × {res.cfg.dimensions.width} ×{" "}
+                        {res.cfg.dimensions.height} cm
+                      </p>
+                      <p className="text-teal-800 font-black">
+                        UV = {res.uvM} m | متراژ = {res.totalArea} m²
+                      </p>
                     </div>
                   </div>
                 ))}
               </div>
 
               <div className="rounded-xl overflow-hidden border border-teal-500/30">
-                <div className="bg-teal-600 text-white px-4 py-2 font-bold">لیست قطعات برش (مجموع)</div>
+                <div className="bg-teal-600 text-white px-4 py-2 font-bold">
+                  لیست قطعات برش (مجموع)
+                </div>
                 <table className="w-full text-sm bg-white/80">
                   <thead>
                     <tr className="bg-gray-100 text-right">
@@ -936,13 +1101,19 @@ export default function BoxDesignPage() {
                   </thead>
                   <tbody>
                     {totalParts.length === 0 ? (
-                      <tr><td colSpan={5} className="p-4 text-center text-gray-500">قطعه‌ای محاسبه نشد</td></tr>
+                      <tr>
+                        <td colSpan={5} className="p-4 text-center text-gray-500">
+                          قطعه‌ای محاسبه نشد
+                        </td>
+                      </tr>
                     ) : (
                       totalParts.map((p, i) => (
                         <tr key={p.id} className="border-t">
                           <td className="p-2">{i + 1}</td>
                           <td className="p-2 font-bold">{p.name}</td>
-                          <td className="p-2 text-center font-black">{p.lengthCm} × {p.widthCm}</td>
+                          <td className="p-2 text-center font-black">
+                            {p.lengthCm} × {p.widthCm}
+                          </td>
                           <td className="p-2 text-center">{p.qty}</td>
                           <td className="p-2 text-xs font-semibold">{p.edgeNote}</td>
                         </tr>
@@ -961,21 +1132,35 @@ export default function BoxDesignPage() {
           )}
 
           <div className="flex justify-between mt-8 pt-6 border-t border-teal-500/20">
-            <button onClick={prevStep} disabled={step === 1} className="px-5 py-2.5 rounded-xl border border-gray-300 bg-white/70 font-bold disabled:opacity-40">
+            <button
+              onClick={prevStep}
+              disabled={step === 1}
+              className="px-5 py-2.5 rounded-xl border border-gray-300 bg-white/70 font-bold disabled:opacity-40"
+            >
               قبلی
             </button>
             <div className="flex gap-3">
               {step < 4 && (
-                <button onClick={nextStep} className="px-5 py-2.5 rounded-xl border border-teal-500/50 bg-white/60 font-bold text-teal-800">
+                <button
+                  onClick={nextStep}
+                  className="px-5 py-2.5 rounded-xl border border-teal-500/50 bg-white/60 font-bold text-teal-800"
+                >
                   Skip
                 </button>
               )}
               {step < 4 ? (
-                <button onClick={nextStep} disabled={!canNext} className="px-5 py-2.5 rounded-xl bg-teal-600 text-white font-bold hover:bg-teal-700 disabled:opacity-40">
+                <button
+                  onClick={nextStep}
+                  disabled={!canNext}
+                  className="px-5 py-2.5 rounded-xl bg-teal-600 text-white font-bold hover:bg-teal-700 disabled:opacity-40"
+                >
                   بعدی
                 </button>
               ) : (
-                <button onClick={sendToPreInvoice} className="px-5 py-2.5 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700">
+                <button
+                  onClick={sendToPreInvoice}
+                  className="px-5 py-2.5 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700"
+                >
                   ارسال به پیش‌فاکتور
                 </button>
               )}

@@ -11,7 +11,7 @@ const USERS: {
   // فروش
   { username: "حسینی", displayName: "خانم حسینی", role: "sales", stationName: null },
   { username: "قنبرنژاد", displayName: "خانم قنبرنژاد", role: "sales", stationName: null },
-  { username: "عباس زاده", displayName: "مائده عباس‌زاده", role: "sales", stationName: null },
+  { username: "عباس زاده", displayName: "مائده عباس‌زاده", role: "designer", stationName: null },
   // مالی و مدیریت
   { username: "فرحی", displayName: "خانم فرحی", role: "finance", stationName: null },
   { username: "مجتبی خاجی", displayName: "مجتبی خاجی", role: "admin", stationName: null },
