@@ -29,6 +29,18 @@ type CuttingItem = {
   installationCode?: string | null
 }
 
+type SortKey =
+  | "barcode"
+  | "productName"
+  | "length"
+  | "width"
+  | "quantity"
+  | "customerName"
+  | "orderNumber"
+  | "priority"
+  | "labelStatus"
+  | "labelPrintCount"
+
 const normalizeText = (value: string) => {
   if (!value) return ""
   return value
@@ -61,9 +73,33 @@ export default function CuttingPlanningPage() {
   const [wasteDepartment, setWasteDepartment] = useState<"تولید" | "اداری">("تولید")
   const [wastePerson, setWastePerson] = useState("")
 
+  const [sortKey, setSortKey] = useState<SortKey>("orderNumber")
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
+
   useEffect(() => {
     fetchData()
   }, [])
+
+  // Escape: بستن مودال‌ها
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return
+      if (showReprintModal) {
+        setShowReprintModal(false)
+        return
+      }
+      if (showLabelPreview) {
+        setShowLabelPreview(false)
+        return
+      }
+      if (showReportPreview) {
+        setShowReportPreview(false)
+        return
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [showReprintModal, showLabelPreview, showReportPreview])
 
   const loadJsBarcode = (onReady: () => void) => {
     // @ts-ignore
@@ -105,8 +141,8 @@ export default function CuttingPlanningPage() {
           el.innerHTML = ""
           JsBarcode(el, String(label.barcode), {
             format: "CODE128",
-            width: 2,
-            height: 48,
+            width: 1.6,
+            height: 36,
             displayValue: false,
             margin: 0,
             background: "#F0E000",
@@ -128,8 +164,22 @@ export default function CuttingPlanningPage() {
     }
   }, [showLabelPreview, labels])
 
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"))
+    } else {
+      setSortKey(key)
+      setSortDir("asc")
+    }
+  }
+
+  const sortIndicator = (key: SortKey) => {
+    if (sortKey !== key) return " ↕"
+    return sortDir === "asc" ? " ↑" : " ↓"
+  }
+
   const filtered = useMemo(() => {
-    let list = items
+    let list = [...items]
     const qProduct = normalizeText(productName)
     const qSearch = normalizeText(search)
 
@@ -153,8 +203,60 @@ export default function CuttingPlanningPage() {
           normalizeText(i.productName || "").includes(qSearch)
       )
     }
+
+    const dir = sortDir === "asc" ? 1 : -1
+    list.sort((a, b) => {
+      const num = (v: number | null | undefined) =>
+        v == null || Number.isNaN(Number(v)) ? 0 : Number(v)
+      switch (sortKey) {
+        case "barcode":
+          return (
+            dir *
+            String(a.barcode || "").localeCompare(String(b.barcode || ""), "fa", {
+              numeric: true,
+            })
+          )
+        case "productName":
+          return (
+            dir *
+            (a.productName || "").localeCompare(b.productName || "", "fa")
+          )
+        case "length":
+          return dir * (num(a.length) - num(b.length))
+        case "width":
+          return dir * (num(a.width) - num(b.width))
+        case "quantity":
+          return dir * (num(a.quantity) - num(b.quantity))
+        case "customerName":
+          return (
+            dir *
+            (a.customerName || "").localeCompare(b.customerName || "", "fa")
+          )
+        case "orderNumber":
+          return (
+            dir *
+            String(a.orderNumber || "").localeCompare(
+              String(b.orderNumber || ""),
+              "fa",
+              { numeric: true }
+            )
+          )
+        case "priority":
+          return dir * (a.priority || "").localeCompare(b.priority || "", "fa")
+        case "labelStatus":
+          return (
+            dir *
+            (a.labelStatus || "").localeCompare(b.labelStatus || "", "fa")
+          )
+        case "labelPrintCount":
+          return dir * (num(a.labelPrintCount) - num(b.labelPrintCount))
+        default:
+          return 0
+      }
+    })
+
     return list
-  }, [items, productName, labelStatus, priority, search])
+  }, [items, productName, labelStatus, priority, search, sortKey, sortDir])
 
   const reportRows = useMemo(
     () => filtered.filter((i) => selectedIds.includes(i.productionItemId)),
@@ -185,8 +287,8 @@ export default function CuttingPlanningPage() {
           el.innerHTML = ""
           JsBarcode(el, String(row.barcode), {
             format: "CODE128",
-            width: 1.2,
-            height: 28,
+            width: 1.1,
+            height: 26,
             displayValue: false,
             margin: 0,
           })
@@ -320,6 +422,58 @@ export default function CuttingPlanningPage() {
 
   const handlePrintBrowser = () => window.print()
 
+  /** خروجی اکسل از برگه برنامه‌ریزی (CSV با BOM برای Excel فارسی) */
+  const exportReportExcel = () => {
+    if (reportRows.length === 0) {
+      alert("ردیفی برای خروجی نیست")
+      return
+    }
+    const headers = [
+      "ردیف",
+      "بارکد",
+      "کد نصب",
+      "سفارش",
+      "تاریخ سفارش",
+      "تاریخ تحویل",
+      "اولویت",
+      "نام مشتری",
+      "نام کالا",
+      "طول",
+      "عرض",
+      "تعداد",
+      "متراژ",
+      "خدمات",
+      "توضیحات",
+    ]
+    const lines = reportRows.map((row, idx) =>
+      [
+        idx + 1,
+        row.barcode || "",
+        row.installationCode || "",
+        row.orderNumber || "",
+        formatFaDate(row.orderDate),
+        formatFaDate(row.deliveryDate),
+        row.priority || "عادی",
+        row.customerName || "",
+        row.productName || "",
+        row.length ?? "",
+        row.width ?? "",
+        row.quantity,
+        row.meterage != null ? Number(row.meterage).toFixed(4) : "",
+        (row.servicesText || "").replace(/,/g, "،"),
+        (row.notes || "").replace(/,/g, "،"),
+      ].join(",")
+    )
+    const csv = "\uFEFF" + [headers.join(","), ...lines].join("\n")
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `برنامه-برش-${reportTitleProduct.replace(/\s+/g, "-")}-${todayFa.replace(/\//g, "-")}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   const getLabelStatusColor = (status: string) => {
     switch (status) {
       case "چاپ‌نشده":
@@ -342,6 +496,9 @@ export default function CuttingPlanningPage() {
     }
   }
 
+  const thClass =
+    "p-3 font-bold text-center cursor-pointer select-none hover:bg-teal-500/25 transition whitespace-nowrap"
+
   return (
     <div
       className="min-h-screen p-4 bg-cover bg-center bg-fixed"
@@ -352,10 +509,11 @@ export default function CuttingPlanningPage() {
       }}
       dir="rtl"
     >
+      {/* Portrait A4 برای برگه برنامه‌ریزی */}
       <style jsx global>{`
         @media print {
           @page {
-            size: A4 landscape;
+            size: A4 portrait;
             margin: 8mm;
           }
         }
@@ -528,16 +686,51 @@ export default function CuttingPlanningPage() {
                     />
                   </th>
                   <th className="p-3 font-bold text-center">ردیف</th>
-                  <th className="p-3 font-bold text-center">بارکد</th>
-                  <th className="p-3 font-bold">نام کالا</th>
-                  <th className="p-3 font-bold text-center">طول</th>
-                  <th className="p-3 font-bold text-center">عرض</th>
-                  <th className="p-3 font-bold text-center">تعداد</th>
-                  <th className="p-3 font-bold">مشتری</th>
-                  <th className="p-3 font-bold text-center">ش سفارش</th>
-                  <th className="p-3 font-bold text-center">اولویت</th>
-                  <th className="p-3 font-bold text-center">وضعیت برچسب</th>
-                  <th className="p-3 font-bold text-center">تعداد چاپ</th>
+                  <th className={thClass} onClick={() => toggleSort("barcode")}>
+                    بارکد{sortIndicator("barcode")}
+                  </th>
+                  <th
+                    className={thClass + " text-right"}
+                    onClick={() => toggleSort("productName")}
+                  >
+                    نام کالا{sortIndicator("productName")}
+                  </th>
+                  <th className={thClass} onClick={() => toggleSort("length")}>
+                    طول{sortIndicator("length")}
+                  </th>
+                  <th className={thClass} onClick={() => toggleSort("width")}>
+                    عرض{sortIndicator("width")}
+                  </th>
+                  <th className={thClass} onClick={() => toggleSort("quantity")}>
+                    تعداد{sortIndicator("quantity")}
+                  </th>
+                  <th
+                    className={thClass + " text-right"}
+                    onClick={() => toggleSort("customerName")}
+                  >
+                    مشتری{sortIndicator("customerName")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("orderNumber")}
+                  >
+                    ش سفارش{sortIndicator("orderNumber")}
+                  </th>
+                  <th className={thClass} onClick={() => toggleSort("priority")}>
+                    اولویت{sortIndicator("priority")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("labelStatus")}
+                  >
+                    وضعیت برچسب{sortIndicator("labelStatus")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("labelPrintCount")}
+                  >
+                    تعداد چاپ{sortIndicator("labelPrintCount")}
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -654,6 +847,7 @@ export default function CuttingPlanningPage() {
         </div>
       )}
 
+      {/* لیبل — چیدمان شبیه سپهر، مرتب‌تر */}
       {showLabelPreview && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-auto print:static print:bg-white print:p-0">
           <div className="bg-white rounded-2xl p-6 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-0">
@@ -685,19 +879,20 @@ export default function CuttingPlanningPage() {
                   style={{
                     backgroundColor: "#F0E000",
                     width: 360,
-                    minHeight: 230,
+                    minHeight: 210,
                     padding: 10,
-                    borderRadius: 8,
+                    borderRadius: 6,
                     border: "1px solid #c4a000",
                   }}
                   dir="rtl"
                 >
+                  {/* بالا: لوگو چپ | تاریخ و شماره سفارش راست */}
                   <div className="flex justify-between items-start gap-2">
                     <img
                       src="https://i.postimg.cc/PrV3wWPS/Whats-App-Image-2026-09-04-at-10-25-58-PM.jpg"
                       alt="Akhavan"
                       style={{
-                        height: 48,
+                        height: 44,
                         width: "auto",
                         mixBlendMode: "multiply",
                       }}
@@ -716,52 +911,90 @@ export default function CuttingPlanningPage() {
 
                   <div
                     style={{
-                      borderTop: "1.5px solid rgba(0,0,0,0.3)",
-                      margin: "8px 0",
+                      borderTop: "1.5px solid rgba(0,0,0,0.35)",
+                      margin: "6px 0 8px",
                     }}
                   />
 
-                  <div className="flex justify-between items-start gap-2">
-                    <div className="flex-1">
-                      <p className="font-bold text-[15px]">{label.productName}</p>
-                      <p className="font-black text-2xl mt-1 tracking-wide">
-                        {label.length ?? "—"}*{label.width ?? "—"}=1
-                      </p>
-                      {label.notes ? (
-                        <p className="text-[12px] font-semibold mt-1">
-                          {label.notes}
-                        </p>
-                      ) : null}
-                    </div>
-                    <div className="max-w-[42%] text-left">
-                      <p className="font-bold text-sm leading-5">
-                        {label.customerName}
-                      </p>
-                      {label.servicesText ? (
-                        <p className="text-[11px] font-semibold mt-1 leading-4">
-                          {label.servicesText}
-                        </p>
-                      ) : null}
-                    </div>
-                  </div>
+                  {/* وسط: راست = مشتری + خدمات | چپ = کالا + ابعاد (LTR) + توضیحات */}
+<div
+  className="flex justify-between items-start gap-3"
+  style={{ direction: "rtl" }}
+>
+  {/* راست: مشتری + خدمات */}
+  <div style={{ width: "42%", textAlign: "right" }}>
+    <p className="font-black text-[15px] leading-5">
+      {label.customerName || "—"}
+    </p>
+    {label.servicesText ? (
+      <p className="text-[15px] font-black mt-2 leading-5">
+        {label.servicesText}
+      </p>
+    ) : null}
+  </div>
 
+  {/* چپ: نام کالا + ابعاد + توضیحات — همه از چپ */}
+  <div style={{ width: "55%", textAlign: "left", direction: "ltr" }}>
+    <p
+      style={{
+        fontWeight: 700,
+        fontSize: 15,
+        lineHeight: 1.35,
+        textAlign: "left",
+        direction: "rtl",
+        unicodeBidi: "plaintext",
+      }}
+    >
+      {label.productName}
+    </p>
+    <p
+      style={{
+        fontWeight: 900,
+        fontSize: 22,
+        marginTop: 4,
+        letterSpacing: "0.02em",
+        textAlign: "left",
+        direction: "ltr",
+        unicodeBidi: "isolate",
+      }}
+    >
+      {label.length ?? "—"} * {label.width ?? "—"} = {label.quantity ?? 1}
+    </p>
+    {label.notes ? (
+      <p
+        style={{
+          fontSize: 12,
+          fontWeight: 600,
+          marginTop: 4,
+          lineHeight: 1.3,
+          textAlign: "left",
+          direction: "rtl",
+          unicodeBidi: "plaintext",
+        }}
+      >
+        {label.notes}
+      </p>
+    ) : null}
+  </div>
+</div>
+
+                  {/* پایین: بارکد جمع‌وجور */}
                   <div
-                    className="mt-3"
+                    className="mt-2"
                     style={{
                       display: "flex",
                       flexDirection: "column",
                       alignItems: "center",
                       width: "100%",
-                      minHeight: 60,
                     }}
                   >
                     <svg
                       id={`barcode-${label.productionItemId}-${idx}`}
-                      width="200"
-                      height="48"
+                      width="180"
+                      height="36"
                       style={{ display: "block" }}
                     />
-                    <p className="font-bold text-sm mt-1 tracking-wider">
+                    <p className="font-bold text-xs mt-0.5 tracking-wider">
                       {label.barcode}
                     </p>
                   </div>
@@ -772,14 +1005,21 @@ export default function CuttingPlanningPage() {
         </div>
       )}
 
+      {/* برگه برنامه‌ریزی — Portrait + طول قبل از عرض + اکسل */}
       {showReportPreview && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-auto print:static print:bg-white print:p-0">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-6xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-2">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-4xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-2">
             <div className="flex justify-between items-center mb-4 print:hidden">
               <h2 className="text-xl font-bold text-blue-950">
                 برگه برنامه‌ریزی برش
               </h2>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={exportReportExcel}
+                  className="rounded-xl bg-emerald-600 hover:bg-emerald-700 px-5 py-2.5 text-white font-bold"
+                >
+                  خروجی Excel
+                </button>
                 <button
                   onClick={handlePrintBrowser}
                   className="rounded-xl bg-blue-600 hover:bg-blue-700 px-5 py-2.5 text-white font-bold"
@@ -810,19 +1050,19 @@ export default function CuttingPlanningPage() {
                 <thead>
                   <tr>
                     {[
-  "بارکد",
-  "ردیف",
-  "کد نصب",
-  "سفارش",
-  "تاریخ سفارش",
-  "تاریخ تحویل",
-  "نام مشتری",
-  "عرض",
-  "طول",
-  "تعداد",
-  "متراژ",
-  "خدمات",
-].map((h) => (
+                      "بارکد",
+                      "ردیف",
+                      "کد نصب",
+                      "سفارش",
+                      "تاریخ سفارش",
+                      "تاریخ تحویل",
+                      "نام مشتری",
+                      "طول",
+                      "عرض",
+                      "تعداد",
+                      "متراژ",
+                      "خدمات",
+                    ].map((h) => (
                       <th
                         key={h}
                         className="border border-black p-1 font-bold bg-gray-100"
@@ -849,8 +1089,8 @@ export default function CuttingPlanningPage() {
                         {idx + 1}
                       </td>
                       <td className="border border-black p-1 text-center">
-  {row.installationCode || "—"}
-</td>
+                        {row.installationCode || "—"}
+                      </td>
                       <td className="border border-black p-1 text-center">
                         {row.orderNumber || "—"}
                       </td>
@@ -866,11 +1106,12 @@ export default function CuttingPlanningPage() {
                       <td className="border border-black p-1">
                         {row.customerName || "—"}
                       </td>
-                      <td className="border border-black p-1 text-center">
-                        {row.width ?? "—"}
-                      </td>
+                      {/* طول قبل از عرض */}
                       <td className="border border-black p-1 text-center">
                         {row.length ?? "—"}
+                      </td>
+                      <td className="border border-black p-1 text-center">
+                        {row.width ?? "—"}
                       </td>
                       <td className="border border-black p-1 text-center">
                         {row.quantity}

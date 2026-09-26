@@ -68,6 +68,8 @@ export default function StationQueuePage() {
 
   const [confirmData, setConfirmData] = useState<any | null>(null)
   const [detail, setDetail] = useState<any | null>(null)
+  // پیش‌نمایش تمام‌صفحه‌ی نقشه (بدون برش، اندازه‌ی واقعی تصویر حفظ می‌شود)
+  const [mapPreviewUrl, setMapPreviewUrl] = useState<string | null>(null)
 
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -86,6 +88,29 @@ export default function StationQueuePage() {
   useEffect(() => {
     inputRef.current?.focus()
   }, [selectedStationId, scanLoading, confirmData, detail])
+
+  // Escape: بستن مودال
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return
+      if (mapPreviewUrl) {
+        setMapPreviewUrl(null)
+        return
+      }
+      if (confirmData) {
+        setConfirmData(null)
+        setBarcode("")
+        setTimeout(() => inputRef.current?.focus(), 50)
+        return
+      }
+      if (detail) {
+        setDetail(null)
+        setTimeout(() => inputRef.current?.focus(), 50)
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [confirmData, detail, mapPreviewUrl])
 
   const fetchStations = async () => {
     try {
@@ -165,6 +190,22 @@ export default function StationQueuePage() {
     } catch {
       return "—"
     }
+  }
+
+  const collectMapUrls = (data: any): string[] => {
+    const urls: string[] = []
+    if (data?.mapImageUrl) urls.push(String(data.mapImageUrl))
+    try {
+      let extra = data?.mapImages
+      if (typeof extra === "string") extra = JSON.parse(extra)
+      if (Array.isArray(extra)) {
+        extra.forEach((x: any) => {
+          const u = typeof x === "string" ? x : x?.url
+          if (u && !urls.includes(u)) urls.push(String(u))
+        })
+      }
+    } catch {}
+    return urls
   }
 
   const doScan = async (confirmed = false) => {
@@ -275,7 +316,6 @@ export default function StationQueuePage() {
           </div>
         </div>
 
-        {/* اسکن */}
         <div className="mb-4 rounded-2xl bg-teal-500/15 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/30">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
             <div className="md:col-span-3">
@@ -353,7 +393,6 @@ export default function StationQueuePage() {
           )}
         </div>
 
-        {/* خلاصه متراژ / تعداد */}
         {summary && (
           <div className="mb-4 grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="rounded-2xl bg-white/50 border border-teal-500/20 p-4 text-center">
@@ -379,7 +418,6 @@ export default function StationQueuePage() {
           </div>
         )}
 
-        {/* فیلتر */}
         <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
             <div className="md:col-span-4">
@@ -427,7 +465,6 @@ export default function StationQueuePage() {
           </div>
         </div>
 
-        {/* جدول */}
         <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-x-auto">
           {loading ? (
             <p className="text-center text-blue-700 py-16 text-xl font-bold">
@@ -515,7 +552,7 @@ export default function StationQueuePage() {
       {detail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div
-            className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto"
+            className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto"
             dir="rtl"
           >
             <div className="flex justify-between items-start mb-4">
@@ -590,27 +627,68 @@ export default function StationQueuePage() {
               ) : null}
             </div>
 
-            {detail.mapImageUrl ? (
-              <div className="mt-4">
-                <p className="text-sm font-bold text-blue-900 mb-2">نقشه / فایل</p>
-                {String(detail.mapImageUrl).toLowerCase().endsWith(".pdf") ? (
-                  <a
-                    href={detail.mapImageUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-teal-700 font-bold underline"
-                  >
-                    باز کردن PDF
-                  </a>
-                ) : (
-                  <img
-                    src={detail.mapImageUrl}
-                    alt="نقشه"
-                    className="max-h-64 rounded-xl border border-teal-200 object-contain"
-                  />
-                )}
-              </div>
-            ) : null}
+            {(() => {
+              const urls = collectMapUrls(detail)
+              if (urls.length === 0) {
+                return (
+                  <p className="mt-4 text-sm text-gray-500">
+                    برای این سفارش نقشه/فایلی ثبت نشده است.
+                  </p>
+                )
+              }
+              return (
+                <div className="mt-4">
+                  <p className="text-sm font-bold text-blue-900 mb-2">
+                    نقشه سفارش
+                  </p>
+                  <div className="flex flex-col gap-3">
+                    {urls.map((url) => {
+                      const lower = url.toLowerCase()
+                      const isPdf =
+                        lower.endsWith(".pdf") || lower.includes(".pdf")
+                      if (isPdf) {
+                        return (
+                          <a
+                            key={url}
+                            href={url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="rounded-xl border border-teal-300 bg-teal-50 px-4 py-3 text-teal-800 font-bold w-fit"
+                          >
+                            باز کردن PDF
+                          </a>
+                        )
+                      }
+                      // نکته‌ی مهم: قبلاً اینجا با object-cover و objectPosition
+                      // "left center" فقط گوشه‌ی چپ تصویر برش زده و نمایش داده
+                      // می‌شد (با این فرض که نقشه همیشه سمت چپ اسکرین است). این
+                      // فرض همیشه درست نبود و باعث می‌شد به‌جای خودِ نقشه، بخش
+                      // نامرتبطی از تصویر (یا کل صفحه) دیده شود. حالا کل تصویر،
+                      // بدون هیچ برشی و با حفظ نسبت ابعاد، کامل نمایش داده می‌شود.
+                      return (
+                        <button
+                          key={url}
+                          type="button"
+                          onClick={() => setMapPreviewUrl(url)}
+                          className="block w-full text-right"
+                        >
+                          <div className="w-full overflow-hidden rounded-xl border border-teal-200 bg-white flex items-center justify-center p-2">
+                            <img
+                              src={url}
+                              alt="نقشه"
+                              className="max-h-[420px] w-auto max-w-full object-contain"
+                            />
+                          </div>
+                          <p className="mt-1 text-xs text-gray-500">
+                            برای بزرگ‌نمایی کامل کلیک کنید
+                          </p>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })()}
 
             <div className="mt-6 flex justify-end">
               <button
@@ -627,7 +705,6 @@ export default function StationQueuePage() {
         </div>
       )}
 
-      {/* تأیید تعداد بالای ۵ */}
       {confirmData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div
@@ -678,6 +755,27 @@ export default function StationQueuePage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* پیش‌نمایش تمام‌صفحه‌ی نقشه — کل تصویر اصلی، بدون هیچ برشی */}
+      {mapPreviewUrl && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4"
+          onClick={() => setMapPreviewUrl(null)}
+        >
+          <img
+            src={mapPreviewUrl}
+            alt="نقشه"
+            className="max-h-[95vh] max-w-[95vw] object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            onClick={() => setMapPreviewUrl(null)}
+            className="absolute top-5 left-5 rounded-full bg-white/20 text-white text-2xl w-12 h-12 flex items-center justify-center"
+          >
+            ✕
+          </button>
         </div>
       )}
     </div>

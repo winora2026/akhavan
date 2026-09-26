@@ -109,18 +109,21 @@ export async function POST(req: Request) {
 
     const qty = stationRow.quantityIn || item.quantity || 1
 
-    if (qty > 5 && !confirmed) {
+        if (qty > 5 && !confirmed) {
+      const salesOrderEarly = item.productionOrder.order
       return NextResponse.json({
         needsConfirmation: true,
         quantity: qty,
         productName: item.productName,
-        orderNumber: item.productionOrder.order?.orderNumber,
-        customerName: item.productionOrder.order?.customer?.name,
+        orderNumber: salesOrderEarly?.orderNumber,
+        customerName: salesOrderEarly?.customer?.name,
         stationName: stationRow.station.name,
         barcode: raw,
         length: item.length,
         width: item.width,
         meterage: item.meterage,
+        mapImageUrl: (salesOrderEarly as any)?.mapImageUrl || null,
+        mapImages: (salesOrderEarly as any)?.mapImages || null,
       })
     }
 

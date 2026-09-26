@@ -64,6 +64,19 @@ const glassOptions = [
   "آینه برنز",
 ]
 
+const normalizeText = (value: string) => {
+  if (!value) return ""
+  return value
+    .replace(/[\u200c\u200f\u200e]/g, "")
+    .replace(/ي/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/ة/g, "ه")
+    .replace(/[٠١٢٣٤٥٦٧٨٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+    .replace(/[۰۱۲۳۴۵۶۷۸۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+    .toLowerCase()
+    .trim()
+}
+
 const customersList = (customersSeedRaw as any[]).map((c: any) => {
   let name = ""
   if (c.customerType === "حقوقی") {
@@ -73,8 +86,17 @@ const customersList = (customersSeedRaw as any[]).map((c: any) => {
     name = `${c.lastName || ""} ${c.firstName || ""}`.trim()
     if (!name) name = (c.companyName || "").trim()
   }
-  if (!name) name = c.companyName || c.lastName || c.firstName || c.code || "بدون نام"
-  return { id: c.id, code: c.code || "", name, group: c.group || "همکار" }
+  if (!name) {
+    name = c.companyName || c.lastName || c.firstName || c.code || "بدون نام"
+  }
+  return {
+    id: c.id,
+    code: c.code || "",
+    name,
+    group: c.group || "همکار",
+    normalizedName: normalizeText(name),
+    normalizedCode: normalizeText(c.code || ""),
+  }
 })
 
 function round1(n: number) {
@@ -126,7 +148,6 @@ function edgeDesc(
 
   const parts: string[] = []
 
-  // ترکیب طول و عرض لول ۴۵ درجه
   if (miterLen > 0 || miterWid > 0) {
     const miterParts: string[] = []
     if (miterLen === 1) miterParts.push("یک طول")
@@ -142,7 +163,6 @@ function edgeDesc(
     }
   }
 
-  // دیاموند
   if (diaLen > 0 || diaWid > 0) {
     const diaParts: string[] = []
     if (diaLen === 1) diaParts.push("یک طول")
@@ -274,6 +294,38 @@ function buildPartsForOne(cfg: BoxConfig, boxIndex: number): { parts: Part[]; uv
 
   return { parts, uvM: round3(uvCm / 100) }
 }
+function getGlassColors(glassName: string) {
+  if (glassName.includes("دودی")) {
+    return {
+      fill: "rgba(100,116,139,0.18)",
+      fillSide: "rgba(71,85,105,0.22)",
+      stroke: "#1e293b",
+      rim: "#64748b",
+    }
+  }
+  if (glassName.includes("برنز")) {
+    return {
+      fill: "rgba(217,119,6,0.14)",
+      fillSide: "rgba(180,83,9,0.18)",
+      stroke: "#78350f",
+      rim: "#d97706",
+    }
+  }
+  if (glassName.includes("آینه")) {
+    return {
+      fill: "rgba(56,189,248,0.16)",
+      fillSide: "rgba(3,105,161,0.2)",
+      stroke: "#0c4a6e",
+      rim: "#0284c7",
+    }
+  }
+  return {
+    fill: "rgba(34,211,238,0.12)",
+    fillSide: "rgba(14,116,144,0.16)",
+    stroke: "#134e4a",
+    rim: "#0d9488",
+  }
+}
 
 function BoxSchematic({
   faces,
@@ -285,6 +337,8 @@ function BoxSchematic({
   hasSlidingDoors,
   boxType,
   label,
+  glassName,
+  zoom = 1,
 }: {
   faces: Record<FaceKey, boolean>
   length: number
@@ -295,150 +349,235 @@ function BoxSchematic({
   hasSlidingDoors: boolean
   boxType: BoxType
   label?: string
+  glassName: string
+  zoom?: number
 }) {
-  const x0 = 55
-  const y0 = 160
-  const lx = 145
-  const wy = 52
-  const hz = 95
+  const col = getGlassColors(glassName)
+  const isMiter = boxType === "miter"
 
-  const A = { x: x0, y: y0 }
-  const B = { x: x0 + lx, y: y0 }
-  const C = { x: x0 + lx + wy, y: y0 - wy * 0.55 }
-  const D = { x: x0 + wy, y: y0 - wy * 0.55 }
-  const At = { x: A.x, y: A.y - hz }
-  const Bt = { x: B.x, y: B.y - hz }
-  const Ct = { x: C.x, y: C.y - hz }
-  const Dt = { x: D.x, y: D.y - hz }
+  const L = Math.max(length, 1)
+  const W = Math.max(width, 1)
+  const H = Math.max(height, 1)
+  const maxDim = Math.max(L, W * 0.72, H)
+  const scale = 195 / maxDim
+  const lx = L * scale
+  const depth = W * scale * 0.48
+  const hz = H * scale
 
-  const poly = (pts: { x: number; y: number }[], fill: string, opacity = 0.3) => (
-    <polygon
-      points={pts.map((p) => `${p.x},${p.y}`).join(" ")}
-      fill={fill}
-      stroke="#0d9488"
-      strokeWidth="2.1"
-      opacity={opacity}
-    />
-  )
+  // 10mm glass is deliberately visible as a real edge strip in the illustration.
+  const edge = Math.max(5, Math.min(10, scale * 0.72))
+  const x0 = 118
+  const y0 = 275
 
-  const shelvesY: number[] = []
-  if (shelfCount > 0 && height > 0) {
-    const topMargin = 10
-    const bottomMargin = 10
-    const usable = hz - topMargin - bottomMargin
+  type P = { x: number; y: number }
+  const A: P = { x: x0, y: y0 }
+  const B: P = { x: x0 + lx, y: y0 }
+  const C: P = { x: x0 + lx + depth, y: y0 - depth }
+  const D: P = { x: x0 + depth, y: y0 - depth }
+  const At: P = { x: A.x, y: A.y - hz }
+  const Bt: P = { x: B.x, y: B.y - hz }
+  const Ct: P = { x: C.x, y: C.y - hz }
+  const Dt: P = { x: D.x, y: D.y - hz }
 
-    if (shelfOffsetFromTop != null && shelfOffsetFromTop > 0) {
-      const firstRatio = Math.min(shelfOffsetFromTop / height, 0.75)
-      const firstY = At.y + topMargin + firstRatio * usable
-      const remaining = usable - (firstY - At.y - topMargin)
-      const step = remaining / Math.max(shelfCount, 1)
-      for (let i = 0; i < shelfCount; i++) {
-        shelvesY.push(firstY + step * i)
-      }
-    } else {
-      const step = usable / (shelfCount + 1)
-      for (let i = 1; i <= shelfCount; i++) {
-        shelvesY.push(At.y + topMargin + step * i)
-      }
-    }
-  }
+  const svgId = `box-${boxType}-${glassName}-${L}-${W}-${H}-${label || "box"}`.replace(/[^a-zA-Z0-9_-]/g, "-")
+  const pstr = (pts: P[]) => pts.map((p) => `${p.x},${p.y}`).join(" ")
+  const add = (p: P, dx: number, dy: number): P => ({ x: p.x + dx, y: p.y + dy })
 
-  const drawShelf = (y: number, key: number) => {
-    const thickness = 4
-    const inset = 5
-
-    const topFace = [
-      { x: A.x + inset, y: y },
-      { x: B.x - inset, y: y },
-      { x: C.x - inset - 5, y: y - wy * 0.32 },
-      { x: D.x + inset, y: y - wy * 0.32 },
-    ]
-    const frontFace = [
-      { x: A.x + inset, y: y },
-      { x: B.x - inset, y: y },
-      { x: B.x - inset, y: y + thickness },
-      { x: A.x + inset, y: y + thickness },
-    ]
-
+  // A strip is the visible 10mm glass edge. It is not just a stroke.
+  const edgeStrip = (a: P, b: P, nx: number, ny: number, key: string, opacity = 0.95) => {
+    const a2 = add(a, nx, ny)
+    const b2 = add(b, nx, ny)
     return (
-      <g key={key}>
-        <polygon
-          points={topFace.map((p) => `${p.x},${p.y}`).join(" ")}
-          fill="#99f6e4"
-          stroke="#0d9488"
-          strokeWidth="1.8"
-          opacity="0.45"
-        />
-        <polygon
-          points={frontFace.map((p) => `${p.x},${p.y}`).join(" ")}
-          fill="#5eead4"
-          stroke="#0d9488"
-          strokeWidth="1.5"
-          opacity="0.5"
-        />
+      <g key={key} opacity={opacity}>
+        <polygon points={pstr([a, b, b2, a2])} fill={col.rim} />
+        <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={col.stroke} strokeWidth={1.15} />
+        <line x1={a2.x} y1={a2.y} x2={b2.x} y2={b2.y} stroke="#ffffff" strokeWidth={0.8} opacity={0.65} />
       </g>
     )
   }
 
+  // Miter cap: a real-looking diagonal cut face at a glass/glass corner.
+  // The cap is a small quadrilateral, not a decorative diagonal line.
+  const miterCap = (p: P, ux: number, uy: number, vx: number, vy: number, key: string) => {
+    const u = { x: ux * edge, y: uy * edge }
+    const v = { x: vx * edge, y: vy * edge }
+    const q1 = add(p, u.x, u.y)
+    const q2 = add(p, v.x, v.y)
+    const q3 = add(p, u.x + v.x, u.y + v.y)
+    return (
+      <g key={key}>
+        <polygon points={pstr([p, q1, q3, q2])} fill={col.rim} opacity={0.96} />
+        <line x1={q1.x} y1={q1.y} x2={q2.x} y2={q2.y} stroke="#ffffff" strokeWidth={1.05} opacity={0.75} />
+      </g>
+    )
+  }
+
+  // Diamond/90° corner: one edge visibly overlaps the other.
+  const diamondJoint = (p: P, a: P, b: P, key: string) => (
+    <g key={key}>
+      <line x1={a.x} y1={a.y} x2={p.x} y2={p.y} stroke={col.stroke} strokeWidth={1.7} opacity={0.95} />
+      <line x1={b.x} y1={b.y} x2={p.x} y2={p.y} stroke={col.rim} strokeWidth={2.6} opacity={0.92} />
+    </g>
+  )
+
+  const panel = (pts: P[], fill: string, opacity: number, key: string) => (
+    <polygon key={key} points={pstr(pts)} fill={fill} stroke={col.stroke} strokeWidth={1.05} opacity={opacity} />
+  )
+
+  const drawPanels = () => (
+    <>
+      {faces.back && panel([D, C, Ct, Dt], col.fillSide, 0.40, "back")}
+      {faces.bottom && panel([A, B, C, D], col.fillSide, 0.32, "bottom")}
+      {faces.left && panel([A, D, Dt, At], col.fillSide, 0.48, "left")}
+      {faces.right && panel([B, C, Ct, Bt], `url(#glass-side-${svgId})`, 0.50, "right")}
+      {faces.front && panel([A, B, Bt, At], `url(#glass-front-${svgId})`, 0.56, "front")}
+      {faces.top && panel([At, Bt, Ct, Dt], `url(#glass-top-${svgId})`, 0.60, "top")}
+    </>
+  )
+
+  // All four edges around the FRONT OPENING remain visible even when front=false.
+  // This is the important correction for the user's "four front lines have no depth" issue.
+  const frontRim = (
+    <g>
+      {(faces.left || faces.front) && edgeStrip(A, At, -edge * 0.78, edge * 0.78, "front-left-rim")}
+      {(faces.right || faces.front) && edgeStrip(B, Bt, edge * 0.78, edge * 0.78, "front-right-rim")}
+      {(faces.top || faces.front) && edgeStrip(At, Bt, 0, -edge, "front-top-rim")}
+      {(faces.bottom || faces.front) && edgeStrip(A, B, 0, edge, "front-bottom-rim")}
+    </g>
+  )
+
+  const sideRims = (
+    <g>
+      {faces.right && edgeStrip(B, C, 0, -edge * 0.68, "right-bottom-rim")}
+      {faces.right && edgeStrip(C, Ct, -edge * 0.72, -edge * 0.72, "right-back-rim")}
+      {faces.right && edgeStrip(Bt, Ct, edge * 0.45, edge * 0.45, "right-top-rim")}
+      {faces.left && edgeStrip(A, D, 0, edge * 0.68, "left-bottom-rim")}
+      {faces.left && edgeStrip(D, Dt, edge * 0.72, -edge * 0.72, "left-back-rim")}
+      {faces.left && edgeStrip(At, Dt, -edge * 0.45, -edge * 0.45, "left-top-rim")}
+      {faces.back && edgeStrip(D, C, 0, edge * 0.62, "back-bottom-rim")}
+      {faces.back && edgeStrip(Dt, Ct, 0, -edge * 0.55, "back-top-rim")}
+    </g>
+  )
+
+  const joints = isMiter ? (
+    <g>
+      {/* Visible 45° cut faces at every exposed corner. */}
+      {(faces.left || faces.front) && miterCap(A, 1, -1, -1, 1, "miter-A")}
+      {(faces.right || faces.front) && miterCap(B, -1, -1, 1, 1, "miter-B")}
+      {(faces.left || faces.top) && miterCap(At, 1, 1, -1, -1, "miter-At")}
+      {(faces.right || faces.top) && miterCap(Bt, -1, 1, 1, -1, "miter-Bt")}
+      {(faces.back || faces.right) && miterCap(C, -1, 1, 1, -1, "miter-C")}
+      {(faces.back || faces.left) && miterCap(D, 1, 1, -1, -1, "miter-D")}
+      {(faces.back || faces.top) && miterCap(Ct, -1, -1, 1, 1, "miter-Ct")}
+      {(faces.back || faces.top) && miterCap(Dt, 1, -1, -1, 1, "miter-Dt")}
+    </g>
+  ) : (
+    <g>
+      {(faces.left || faces.front) && diamondJoint(A, add(A, 0, -edge), add(A, -edge, 0), "diamond-A")}
+      {(faces.right || faces.front) && diamondJoint(B, add(B, 0, -edge), add(B, edge, 0), "diamond-B")}
+      {(faces.left || faces.top) && diamondJoint(At, add(At, 0, edge), add(At, -edge, 0), "diamond-At")}
+      {(faces.right || faces.top) && diamondJoint(Bt, add(Bt, 0, edge), add(Bt, edge, 0), "diamond-Bt")}
+      {(faces.back || faces.right) && diamondJoint(C, add(C, 0, edge), add(C, edge, 0), "diamond-C")}
+      {(faces.back || faces.left) && diamondJoint(D, add(D, 0, edge), add(D, -edge, 0), "diamond-D")}
+    </g>
+  )
+
+  const shelfYs: number[] = []
+  if (shelfCount > 0 && hz > 40) {
+    const usable = Math.max(hz - 30, 1)
+    const step = usable / (shelfCount + 1)
+    for (let i = 1; i <= shelfCount; i++) shelfYs.push(At.y + 15 + step * i)
+  }
+
+  const shelfPolygon = (y: number) => [
+    { x: A.x + edge, y },
+    { x: B.x - edge, y },
+    { x: C.x - edge, y: y - depth * 0.9 },
+    { x: D.x + edge, y: y - depth * 0.9 },
+  ]
+
   return (
-    <svg viewBox="0 0 340 240" className="w-full h-auto" style={{ maxWidth: 360 }}>
-      {label && (
-        <text x="170" y="18" textAnchor="middle" fontSize="13" fontWeight="800" fill="#0f766e">
-          {label}
-        </text>
-      )}
+    <div className="w-full flex flex-col items-center">
+      <svg
+        viewBox="0 0 500 390"
+        width={500 * zoom}
+        height={390 * zoom}
+        className="max-w-full"
+        role="img"
+        aria-label={`${isMiter ? "باکس شیشه‌ای با اتصال مایتر ۴۵ درجه" : "باکس شیشه‌ای با اتصال دیاموند / گونیا"} ${L}×${W}×${H}`}
+      >
+        <defs>
+          <linearGradient id={`glass-front-${svgId}`} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="rgba(255,255,255,0.44)" />
+            <stop offset="55%" stopColor={col.fill} />
+            <stop offset="100%" stopColor={col.fillSide} />
+          </linearGradient>
+          <linearGradient id={`glass-side-${svgId}`} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor={col.fillSide} />
+            <stop offset="100%" stopColor={col.fill} />
+          </linearGradient>
+          <linearGradient id={`glass-top-${svgId}`} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="rgba(255,255,255,0.48)" />
+            <stop offset="100%" stopColor={col.fill} />
+          </linearGradient>
+          <filter id={`glass-shadow-${svgId}`} x="-20%" y="-20%" width="140%" height="160%">
+            <feDropShadow dx="0" dy="7" stdDeviation="6" floodOpacity="0.13" />
+          </filter>
+        </defs>
 
-      {faces.bottom && poly([A, B, C, D], "#ccfbf1", 0.25)}
-      {faces.back && poly([D, C, Ct, Dt], "#99f6e4", 0.3)}
-      {faces.left && poly([A, D, Dt, At], "#5eead4", 0.28)}
-      {faces.right && poly([B, C, Ct, Bt], "#2dd4bf", 0.22)}
-      {faces.front && poly([A, B, Bt, At], "#99f6e4", 0.2)}
-      {faces.top && poly([At, Bt, Ct, Dt], "#ccfbf1", 0.3)}
+        <ellipse cx={(A.x + C.x) / 2} cy={y0 + 17} rx={Math.max(lx * 0.43, 58)} ry={13} fill="#000" opacity={0.08} />
 
-      {shelvesY.map((y, i) => drawShelf(y, i))}
+        <g filter={`url(#glass-shadow-${svgId})`}>
+          {drawPanels()}
+          {sideRims}
+          {frontRim}
+          {joints}
 
-      {hasSlidingDoors && (
-        <>
-          <rect
-            x={A.x + 8}
-            y={At.y + 10}
-            width={lx * 0.4}
-            height={hz - 20}
-            fill="#99f6e4"
-            stroke="#0d9488"
-            strokeWidth="1.5"
-            opacity="0.35"
-          />
-          <rect
-            x={A.x + lx * 0.5}
-            y={At.y + 10}
-            width={lx * 0.4}
-            height={hz - 20}
-            fill="#99f6e4"
-            stroke="#0d9488"
-            strokeWidth="1.5"
-            opacity="0.35"
-          />
-        </>
-      )}
+          {faces.front && (
+            <>
+              <line x1={A.x + lx * 0.15} y1={A.y - hz * 0.1} x2={A.x + lx * 0.39} y2={A.y - hz * 0.88} stroke="#fff" strokeWidth={2.2} opacity={0.20} />
+              <line x1={A.x + lx * 0.56} y1={A.y - hz * 0.2} x2={A.x + lx * 0.66} y2={A.y - hz * 0.62} stroke="#fff" strokeWidth={1.2} opacity={0.12} />
+            </>
+          )}
 
-      <line x1={A.x} y1={A.y + 16} x2={B.x} y2={B.y + 16} stroke="#0f766e" strokeWidth="1.2" />
-      <text x={(A.x + B.x) / 2} y={A.y + 30} textAnchor="middle" fontSize="12" fontWeight="700" fill="#134e4a">
-        {length || "—"}
-      </text>
-      <line x1={B.x + 10} y1={B.y} x2={C.x + 10} y2={C.y} stroke="#0f766e" strokeWidth="1.2" />
-      <text x={C.x + 24} y={(B.y + C.y) / 2 + 4} fontSize="12" fontWeight="700" fill="#134e4a">
-        {width || "—"}
-      </text>
-      <line x1={A.x - 14} y1={A.y} x2={At.x - 14} y2={At.y} stroke="#0f766e" strokeWidth="1.2" />
-      <text x={A.x - 26} y={(A.y + At.y) / 2} fontSize="12" fontWeight="700" fill="#134e4a">
-        {height || "—"}
-      </text>
+          {shelfYs.map((y, i) => (
+            <g key={`shelf-${i}`}>
+              <polygon points={pstr(shelfPolygon(y))} fill={col.fill} stroke={col.rim} strokeWidth={1.2} opacity={0.78} />
+              <line x1={A.x + edge} y1={y} x2={B.x - edge} y2={y} stroke={col.stroke} strokeWidth={1} opacity={0.75} />
+            </g>
+          ))}
 
-      <text x="170" y="228" textAnchor="middle" fontSize="12" fontWeight="700" fill="#0f766e">
-        {boxType === "diamond" ? "اتصال: دیاموند" : "اتصال: لول ۴۵ درجه"}
-      </text>
-    </svg>
+          {hasSlidingDoors && faces.front && (
+            <line x1={(A.x + B.x) / 2} y1={A.y} x2={(A.x + B.x) / 2} y2={At.y} stroke={col.rim} strokeWidth={2} strokeDasharray="5 4" opacity={0.9} />
+          )}
+        </g>
+
+        <g transform="translate(18,18)">
+          <rect x="0" y="0" rx="9" width={isMiter ? 190 : 175} height="31" fill={isMiter ? "rgba(245,158,11,0.10)" : "rgba(13,148,136,0.10)"} stroke={isMiter ? "#d97706" : col.rim} strokeWidth="1" />
+          <text x={isMiter ? 95 : 87.5} y="21" textAnchor="middle" fontSize="13" fontWeight="800" fill={isMiter ? "#b45309" : col.stroke} style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>
+            {isMiter ? "اتصال ۴۵° واقعی — دو لبه برش خورده" : "اتصال دیاموند / گونیا — اتصال ۹۰°"}
+          </text>
+        </g>
+
+        <g stroke={col.rim} strokeWidth={1.05} fill={col.stroke}>
+          <line x1={A.x} y1={y0 + 28} x2={B.x} y2={y0 + 28} />
+          <line x1={A.x} y1={y0 + 22} x2={A.x} y2={y0 + 34} />
+          <line x1={B.x} y1={y0 + 22} x2={B.x} y2={y0 + 34} />
+          <text x={(A.x + B.x) / 2} y={y0 + 51} textAnchor="middle" fontSize="13" fontWeight="700" style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>{length}</text>
+          <line x1={A.x - 19} y1={A.y} x2={A.x - 19} y2={At.y} />
+          <text x={A.x - 33} y={(A.y + At.y) / 2 + 4} textAnchor="middle" fontSize="13" fontWeight="700" style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>{height}</text>
+          <line x1={B.x + 13} y1={B.y - 3} x2={C.x + 13} y2={C.y - 3} />
+          <text x={(B.x + C.x) / 2 + 24} y={(B.y + C.y) / 2} fontSize="13" fontWeight="700" style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>{width}</text>
+        </g>
+      </svg>
+
+      <p className="mt-1 text-sm font-black text-teal-800">
+        {isMiter
+          ? "اتصال ۴۵ درجه: هر دو لبه در گوشه با برش مایتر به هم می‌رسند"
+          : "اتصال دیاموند / گونیا: اتصال عمود ۹۰ درجه با لبه‌ی قابل مشاهده"}
+        {label ? ` — ${label}` : ""}
+      </p>
+    </div>
   )
 }
 
@@ -467,24 +606,22 @@ export default function BoxDesignPage() {
   const [customerName, setCustomerName] = useState("")
   const [customerSearch, setCustomerSearch] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
-
   const [isUniform, setIsUniform] = useState(true)
   const [boxes, setBoxes] = useState<BoxConfig[]>([createDefaultBox("باکس ۱")])
+  const [zoom, setZoom] = useState(1)
 
-  const inputRefs = useRef<(HTMLInputElement | HTMLSelectElement | null)[]>([])
+  const step1Refs = useRef<(HTMLInputElement | HTMLSelectElement | null)[]>([])
+  const step2Refs = useRef<(HTMLInputElement | null)[]>([])
 
   const filteredCustomers = useMemo(() => {
-    const q = customerSearch.trim().toLowerCase()
-    if (!q) return customersList.slice(0, 10)
-
+    const q = normalizeText(customerSearch)
+    if (!q) return customersList.slice(0, 12)
     return customersList
       .filter((c) => {
-        const fullName = c.name.toLowerCase()
-        const code = (c.code || "").toLowerCase()
         return (
-          fullName.includes(q) ||
-          code.includes(q) ||
-          fullName.split(" ").some((part) => part.startsWith(q))
+          c.normalizedName.includes(q) ||
+          c.normalizedCode.includes(q) ||
+          c.normalizedName.split(/\s+/).some((part) => part.startsWith(q))
         )
       })
       .slice(0, 15)
@@ -516,14 +653,35 @@ export default function BoxDesignPage() {
   const nextStep = () => setStep((s) => Math.min(s + 1, 4))
   const prevStep = () => setStep((s) => Math.max(s - 1, 1))
 
-  const handleKeyDown = (e: KeyboardEvent, index: number) => {
+  const handleStep1Key = (e: KeyboardEvent, index: number) => {
     if (e.key === "Enter") {
       e.preventDefault()
-      const next = inputRefs.current[index + 1]
+      const next = step1Refs.current[index + 1]
       if (next) next.focus()
-      else if (canNext) nextStep()
+      else if (customerName.trim()) nextStep()
     }
   }
+
+  const handleStep2Key = (e: KeyboardEvent, index: number) => {
+    if (e.key === "Enter") {
+      e.preventDefault()
+      const next = step2Refs.current[index + 1]
+      if (next) next.focus()
+      else nextStep()
+    }
+  }
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault()
+        if (step > 1) prevStep()
+        else router.push("/")
+      }
+    }
+    window.addEventListener("keydown", onKeyDown as any)
+    return () => window.removeEventListener("keydown", onKeyDown as any)
+  }, [step])
 
   const allResults = useMemo(() => {
     return boxes.map((cfg, idx) => {
@@ -552,9 +710,15 @@ export default function BoxDesignPage() {
         ? boxes.every((b) => b.dimensions.length > 0 && b.dimensions.width > 0 && b.dimensions.height > 0)
         : true
 
+  const isSingleBox = isUniform || boxes.length === 1
+
+  // نکته‌ی مهم: قبلاً این تابع خودِ کادر data-schematic (یک div) را سریالایز می‌کرد،
+  // نه خودِ svg داخلش — چون ریشه‌ی سند برای image/svg+xml باید یک تگ <svg> معتبر باشد،
+  // آن حالت همیشه بارگذاری تصویر را با خطا (img.onerror) مواجه می‌کرد و هیچ عکسی هیچ‌وقت
+  // به پیش‌فاکتور/نقشه منتقل نمی‌شد. اصلاح شد: مستقیم svg داخل هر data-schematic گرفته می‌شود.
   const captureAllSchematics = async (): Promise<{ png: string | null; svg: string | null }> => {
     try {
-      const svgs = document.querySelectorAll("[data-schematic]")
+      const svgs = document.querySelectorAll("[data-schematic] svg")
       if (svgs.length === 0) return { png: null, svg: null }
 
       const serializer = new XMLSerializer()
@@ -563,11 +727,14 @@ export default function BoxDesignPage() {
       if (svgs.length === 1) {
         svgStr = serializer.serializeToString(svgs[0])
       } else {
-        const width = 360 * svgs.length
-        let combined = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="250" viewBox="0 0 ${width} 250">`
+        const width = 480 * svgs.length
+        let combined = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="300" viewBox="0 0 ${width} 300">`
         svgs.forEach((s, i) => {
-          const content = serializer.serializeToString(s).replace(/<svg[^>]*>/, "").replace("</svg>", "")
-          combined += `<g transform="translate(${i * 360},0)">${content}</g>`
+          const content = serializer
+            .serializeToString(s)
+            .replace(/<svg[^>]*>/, "")
+            .replace("</svg>", "")
+          combined += `<g transform="translate(${i * 480},0)">${content}</g>`
         })
         combined += "</svg>"
         svgStr = combined
@@ -634,7 +801,7 @@ export default function BoxDesignPage() {
         meterage: p.areaM2.toFixed(4),
         perimeter: String(perimeter),
         description: "",
-        services: p.edgeNote, // ← خدمات (لول ۴۵ درجه و ...)
+        services: p.edgeNote || "",
       }
     })
 
@@ -715,7 +882,6 @@ export default function BoxDesignPage() {
         </div>
 
         <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-6 shadow-lg border border-teal-500/20">
-          {/* مرحله ۱ */}
           {step === 1 && (
             <div className="space-y-5">
               <h2 className="text-lg font-bold text-blue-950">اطلاعات کلی</h2>
@@ -724,7 +890,7 @@ export default function BoxDesignPage() {
                 <label className="block text-sm font-bold mb-1 text-blue-900">نام مشتری</label>
                 <input
                   ref={(el) => {
-                    inputRefs.current[0] = el
+                    step1Refs.current[0] = el
                   }}
                   type="text"
                   value={customerSearch}
@@ -735,7 +901,7 @@ export default function BoxDesignPage() {
                   }}
                   onFocus={() => setShowCustomerDropdown(true)}
                   onBlur={() => setTimeout(() => setShowCustomerDropdown(false), 150)}
-                  onKeyDown={(e) => handleKeyDown(e, 0)}
+                  onKeyDown={(e) => handleStep1Key(e, 0)}
                   className={`w-full rounded-xl border border-teal-500/30 bg-white/70 px-3 py-2.5 font-semibold ${focusClass}`}
                   placeholder="جستجوی مشتری (نام یا کد)..."
                   autoComplete="off"
@@ -763,15 +929,16 @@ export default function BoxDesignPage() {
                     تعداد باکس (یکسان)
                   </label>
                   <input
+                    ref={(el) => {
+                      step1Refs.current[1] = el
+                    }}
                     type="number"
                     min={1}
                     value={boxes[0].qty}
                     onChange={(e) => updateBox(0, { qty: Number(e.target.value) || 1 })}
+                    onKeyDown={(e) => handleStep1Key(e, 1)}
                     className={`w-32 rounded-xl border border-teal-500/30 bg-white/70 px-3 py-2.5 font-bold ${focusClass}`}
                   />
-                  <p className="text-xs text-gray-600 mt-1">
-                    اگر چند باکس کاملاً یکسان می‌خواهید، اینجا تعداد را وارد کنید.
-                  </p>
                 </div>
               )}
 
@@ -788,11 +955,8 @@ export default function BoxDesignPage() {
                       }
                     }}
                   />
-                  باکس‌ها متفاوت هستند (ابعاد / شیشه / ضخامت جداگانه)
+                  باکس‌ها متفاوت هستند
                 </label>
-                <p className="text-xs text-gray-600 mt-1">
-                  اگر تیک نزنید → همه باکس‌ها یکسان هستند و فقط تعداد بالا را تنظیم کنید.
-                </p>
               </div>
 
               {!isUniform && (
@@ -826,7 +990,6 @@ export default function BoxDesignPage() {
             </div>
           )}
 
-          {/* مرحله ۲ و ۳ */}
           {(step === 2 || step === 3) && (
             <div className="space-y-8">
               {boxes.map((cfg, boxIdx) => (
@@ -848,12 +1011,15 @@ export default function BoxDesignPage() {
                           ["width", "عرض"],
                           ["height", "ارتفاع"],
                         ] as const
-                      ).map(([key, label]) => (
+                      ).map(([key, label], idx) => (
                         <div key={key}>
                           <label className="block text-sm font-bold mb-1 text-blue-900">
                             {label}
                           </label>
                           <input
+                            ref={(el) => {
+                              step2Refs.current[idx] = el
+                            }}
                             type="number"
                             min={0}
                             step="0.1"
@@ -866,6 +1032,7 @@ export default function BoxDesignPage() {
                                 },
                               })
                             }
+                            onKeyDown={(e) => handleStep2Key(e, idx)}
                             className={`w-full rounded-xl border border-teal-500/30 bg-white/70 px-3 py-2.5 ${focusClass}`}
                           />
                         </div>
@@ -1037,18 +1204,41 @@ export default function BoxDesignPage() {
             </div>
           )}
 
-          {/* مرحله ۴ */}
           {step === 4 && (
             <div className="space-y-6">
-              <h2 className="text-lg font-bold text-blue-950">نتیجه طراحی</h2>
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-blue-950">نتیجه طراحی</h2>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setZoom((z) => Math.max(0.7, z - 0.1))}
+                    className="px-3 py-1 rounded-lg bg-white/70 border font-bold"
+                  >
+                    −
+                  </button>
+                  <span className="text-sm font-bold">{Math.round(zoom * 100)}%</span>
+                  <button
+                    onClick={() => setZoom((z) => Math.min(1.6, z + 0.1))}
+                    className="px-3 py-1 rounded-lg bg-white/70 border font-bold"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* اگر تک باکس باشد کل عرض را می‌گیرد، اگر چند تا باشد دو ستونه */}
+              <div
+                className={
+                  isSingleBox
+                    ? "grid grid-cols-1 gap-4"
+                    : "grid grid-cols-1 md:grid-cols-2 gap-4"
+                }
+              >
                 {allResults.map((res, idx) => (
                   <div
                     key={boxes[idx].id}
-                    className="rounded-xl border border-teal-500/30 bg-white/70 p-3"
+                    className="rounded-xl border border-teal-500/30 bg-white/80 p-4 flex flex-col"
                   >
-                    <div data-schematic>
+                    <div data-schematic className="flex-1 flex items-center justify-center min-h-[300px]">
                       <BoxSchematic
                         faces={res.cfg.faces}
                         length={res.cfg.dimensions.length}
@@ -1060,6 +1250,8 @@ export default function BoxDesignPage() {
                         }
                         hasSlidingDoors={res.cfg.hasSlidingDoors}
                         boxType={res.cfg.boxType}
+                        glassName={res.cfg.glassName}
+                        zoom={zoom}
                         label={
                           isUniform
                             ? res.cfg.qty > 1
@@ -1069,8 +1261,10 @@ export default function BoxDesignPage() {
                         }
                       />
                     </div>
-                    <div className="text-sm mt-2 text-right space-y-0.5">
-                      <p className="font-bold">
+
+                    {/* نوشته‌ها فقط در پایین */}
+                    <div className="text-sm mt-3 text-right space-y-1 border-t border-teal-100 pt-3">
+                      <p className="font-bold text-base">
                         {res.cfg.glassName} {res.cfg.thickness} میل
                       </p>
                       <p>
@@ -1140,14 +1334,6 @@ export default function BoxDesignPage() {
               قبلی
             </button>
             <div className="flex gap-3">
-              {step < 4 && (
-                <button
-                  onClick={nextStep}
-                  className="px-5 py-2.5 rounded-xl border border-teal-500/50 bg-white/60 font-bold text-teal-800"
-                >
-                  Skip
-                </button>
-              )}
               {step < 4 ? (
                 <button
                   onClick={nextStep}

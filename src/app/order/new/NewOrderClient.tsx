@@ -108,8 +108,10 @@ const calcServiceUnitQty = (item: OrderItem, s: ServiceItem): string => {
 const inputClass = "w-full rounded-xl border border-teal-500/30 bg-white/40 px-3 py-2 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:ring-2 focus:ring-teal-300 focus:outline-none hover:bg-yellow-100 transition-colors duration-150"
 const labelClass = "mb-1 block text-sm font-bold text-blue-900"
 const selectClass = inputClass
-// کلاس مخصوص فیلدهای قیمت (واحد)، با فونت بزرگ‌تر تا عدد کامل دیده شود و جا نیفتد
+// کلاس مخصوص فیلدهای قیمت (واحد/کل)، با فونت بزرگ‌تر و یکسان تا عدد کامل دیده شود و جا نیفتد
 const priceInputClass = "w-full rounded-xl border border-teal-500/30 bg-white/40 px-3 py-2.5 text-lg font-bold text-blue-950 focus:border-teal-500 focus:ring-2 focus:ring-teal-300 focus:outline-none hover:bg-yellow-100 transition-colors duration-150"
+// همان اندازه‌ی priceInputClass ولی برای فیلد فقط‌خواندنیِ «قیمت کل» (هم‌اندازه با قیمت واحد)
+const priceReadOnlyClass = "w-full rounded-xl border border-teal-200 bg-teal-50 px-3 py-2.5 text-lg font-bold text-teal-800"
 // کلاس اختصاصی اینپوت تاریخ‌ها: چون کتابخانه تاریخ‌شمار استایل پیش‌فرض خودش را روی اینپوت اعمال می‌کند،
 // همان اندازه‌ی سایر فیلدها (ارتفاع، پدینگ، فونت) را با !important روی آن اعمال می‌کنیم تا هم‌اندازه شوند
 const dateInputClass = `${inputClass} !h-[42px] !min-h-[42px] !box-border !py-2 !px-3 !text-sm !leading-normal`
@@ -133,6 +135,46 @@ const normalizeText = (value: string) => {
     .replace(/[۰۱۲۳۴۵۶۷۸۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d))) // ارقام فارسی
     .toLowerCase()
     .trim()
+}
+
+// عدد را به حروف فارسی تبدیل می‌کند (برای نمایش «مبلغ به حروف» در پیش‌فاکتور)
+const persianOnes = ["", "یک", "دو", "سه", "چهار", "پنج", "شش", "هفت", "هشت", "نه"]
+const persianTens = ["", "ده", "بیست", "سی", "چهل", "پنجاه", "شصت", "هفتاد", "هشتاد", "نود"]
+const persianTeens = ["ده", "یازده", "دوازده", "سیزده", "چهارده", "پانزده", "شانزده", "هفده", "هجده", "نوزده"]
+const persianHundreds = ["", "صد", "دویست", "سیصد", "چهارصد", "پانصد", "ششصد", "هفتصد", "هشتصد", "نهصد"]
+const persianScale = ["", "هزار", "میلیون", "میلیارد", "بیلیون", "تریلیون"]
+
+const threeDigitToPersianWords = (num: number): string => {
+  const parts: string[] = []
+  const h = Math.floor(num / 100)
+  const rem = num % 100
+  if (h) parts.push(persianHundreds[h])
+  if (rem >= 10 && rem < 20) {
+    parts.push(persianTeens[rem - 10])
+  } else {
+    const t = Math.floor(rem / 10)
+    const o = rem % 10
+    if (t) parts.push(persianTens[t])
+    if (o) parts.push(persianOnes[o])
+  }
+  return parts.join(" و ")
+}
+
+const numberToPersianWords = (input: number): string => {
+  let num = Math.round(Math.abs(input || 0))
+  if (num === 0) return "صفر"
+  const groups: number[] = []
+  while (num > 0) {
+    groups.push(num % 1000)
+    num = Math.floor(num / 1000)
+  }
+  const words: string[] = []
+  for (let i = groups.length - 1; i >= 0; i--) {
+    if (groups[i] === 0) continue
+    const groupWords = threeDigitToPersianWords(groups[i])
+    words.push(i > 0 ? `${groupWords} ${persianScale[i]}` : groupWords)
+  }
+  return words.join(" و ")
 }
 
 // ===== کمک‌توابع پیش‌نویس خودکار سفارش =====
@@ -325,6 +367,8 @@ export default function NewOrderClient() {
   const [svcLengthCount, setSvcLengthCount] = useState("1")
   const [svcWidthCount, setSvcWidthCount] = useState("1")
   const [serviceSearch, setServiceSearch] = useState("")
+  // ایندکس خدمتِ هایلایت‌شده در لیست نتایج جستجو (برای انتخاب با کیبورد، بدون نیاز به موس)
+  const [serviceActiveIndex, setServiceActiveIndex] = useState(0)
   const [editingServiceId, setEditingServiceId] = useState<number | null>(null)
   const [showInvoice, setShowInvoice] = useState(false)
   const [invoiceMode, setInvoiceMode] = useState<"detailed" | "summary" | "breakdown">("detailed")
@@ -648,43 +692,75 @@ export default function NewOrderClient() {
     })()
   }, [editId])
 
-  // دریافت مشتری و اقلام ارسال‌شده از صفحه‌ی «طراحی باکس» (وقتی از آنجا روی
-  // «ارسال به پیش‌فاکتور» کلیک شده باشد). فقط زمانی اجرا می‌شود که پارامتر
-  // fromBoxDesign=1 در آدرس باشد و داده‌ای در localStorage ذخیره شده باشد.
+  // دریافت مشتری، اقلام، خدمات (توضیحات لبه) و عکس طرح از صفحه‌ی «طراحی باکس»
+  // (وقتی از آنجا روی «ارسال به پیش‌فاکتور» کلیک شده باشد). فقط زمانی اجرا می‌شود
+  // که پارامتر fromBoxDesign=1 در آدرس باشد و داده‌ای در localStorage ذخیره شده باشد.
   useEffect(() => {
-    if (searchParams.get("fromBoxDesign") !== "1") return
+    const fromBox = searchParams.get("fromBoxDesign")
+    if (fromBox !== "1") return
+
+    const raw = localStorage.getItem("boxDesignTransfer")
+    if (!raw) return
+
     try {
-      const raw = localStorage.getItem("boxDesignTransfer")
-      if (!raw) return
       const data = JSON.parse(raw)
+
+      // نام مشتری
       if (data.customerName) {
         setCustomerName(data.customerName)
         setCustomerSearch(data.customerName)
       }
-      if (Array.isArray(data.items) && data.items.length) {
-        setItems(
-          data.items.map((it: any, idx: number) => ({
-            id: Date.now() + idx,
-            productName: it.productName || "",
-            productCode: it.productCode || "",
-            installCode: it.installCode || "",
-            unit: it.unit || "مترمربع",
-            length: it.length || "",
-            width: it.width || "",
-            quantity: it.quantity || "1",
-            meterage: it.meterage || "",
-            perimeter: it.perimeter || "",
-            unitPrice: "",
-            totalPrice: "",
-            description: it.description || "",
-            services: [],
-            flagged: false,
-          }))
-        )
+
+      // آیتم‌ها + خدمات (لبه)
+      if (Array.isArray(data.items) && data.items.length > 0) {
+        const newItems = data.items.map((it: any, idx: number) => ({
+          id: Date.now() + idx,
+          productName: it.productName || "",
+          productCode: "",
+          installCode: it.installCode || "",
+          unit: it.unit || "مترمربع",
+          length: it.length || "",
+          width: it.width || "",
+          quantity: it.quantity || "1",
+          meterage: it.meterage || "0",
+          perimeter: it.perimeter || "",
+          unitPrice: "",
+          totalPrice: "0",
+          description: it.description || "",
+          services: it.services
+            ? [
+                {
+                  id: Date.now() + idx + 1000,
+                  title: it.services, // دیاموند یا لول ۴۵ درجه
+                  unit: "مترطول",
+                  count: "1",
+                  unitQuantity: "1",
+                  unitPrice: "",
+                  totalPrice: "0",
+                },
+              ]
+            : [],
+          flagged: false,
+        }))
+        setItems(newItems)
       }
+
+      // عکس طراحی باکس
+      if (data.schematicImage) {
+        setMapImages([
+          {
+            id: Date.now(),
+            name: "طرح باکس",
+            url: data.schematicImage,
+            type: "image",
+          },
+        ])
+      }
+
+      // پاک کردن تا دوباره لود نشه
       localStorage.removeItem("boxDesignTransfer")
-    } catch (err) {
-      console.error(err)
+    } catch (e) {
+      console.error("خطا در خواندن boxDesignTransfer", e)
     }
   }, [searchParams])
 
@@ -1313,6 +1389,7 @@ export default function NewOrderClient() {
     setSvcLengthCount("1")
     setSvcWidthCount("1")
     setServiceSearch("")
+    setServiceActiveIndex(0)
     setEditingServiceId(null)
     setShowServices(true)
     setSvcDiameter("")
@@ -1358,6 +1435,7 @@ export default function NewOrderClient() {
     // بعد از ثبت هر خدمت، فوکوس به کادر جستجو برمی‌گردد تا بدون نیاز به موس
     // بشود بلافاصله «سختی کار» بعدی را جستجو کرد
     setServiceSearch("")
+    setServiceActiveIndex(0)
     serviceSearchRef.current?.focus()
   }
 
@@ -1681,9 +1759,10 @@ export default function NewOrderClient() {
 
     // ========== حالت جزئی: مثل چاپ نرم‌افزار قبلی ==========
     // برای هر کالا (هم‌نام + هم‌واحد + هم‌قیمت) یک بلوک ساخته می‌شود:
-    //   ۱) خدمات آن کالا: سطر «مجموع» هر خدمت (فقط اگر آن خدمت بیش از یک واریانت/سطر داشته باشد)
-    //      + سطر(های) خود خدمت (جمع تعداد و متراژ همه‌ی قطعات)
-    //   ۲) سطر «مجموع» کالا (متراژ کل، فقط اگر بیش از یک قطعه باشد) + هر قطعه در یک سطر جدا
+    //   ۱) خدمات آن کالا: سطر(های) خود خدمت (جمع تعداد و متراژ همه‌ی قطعات) + در انتها
+    //      سطر «مجموع» هر خدمت (فقط اگر آن خدمت بیش از یک واریانت/سطر داشته باشد)
+    //   ۲) قطعاتِ کاملاً یکسان (طول/عرض/توضیحات/خدمات یکسان) در یک سطر با «تعداد» تجمیع‌شده
+    //      نمایش داده می‌شوند + در انتها سطر «مجموع» کالا (فقط اگر بیش از یک سطر باقی مانده باشد)
     // نکته: اگر کل بلوک فقط یک قطعه/یک واریانت باشد، ردیف «مجموع» اضافی نمایش داده نمی‌شود
     // چون با خود همان یک سطر یکی است.
     type DetailVariant = {
@@ -1767,20 +1846,10 @@ export default function NewOrderClient() {
     const detailRows: DetailRow[] = []
     let detailNo = 0
     detailBlocks.forEach((b) => {
-      // ۱) خدمات این کالا
+      // ۱) خدمات این کالا — ابتدا خود ردیف‌های خدمت، سپس (اگر لازم بود) سطر «مجموع» در انتها
       b.services.forEach((svc) => {
         const svcName = `${svc.title} ${b.productName}`
         const prices = new Set(svc.variants.map((v) => v.unitPrice))
-        // سطر «مجموع» فقط وقتی لازم است که این خدمت بیش از یک ردیف (واریانت) داشته باشد؛
-        // اگر فقط یک ردیف باشد، مجموع همان یک سطر است و نیازی به تکرار نیست
-        if (svc.variants.length > 1) {
-          detailRows.push({
-            kind: "svc-total",
-            title: svcName,
-            unitPrice: prices.size === 1 ? svc.variants[0].unitPrice : null,
-            total: svc.variants.reduce((sum, v) => sum + v.total, 0),
-          })
-        }
         svc.variants.forEach((v) => {
           detailRows.push({
             kind: "service",
@@ -1796,10 +1865,56 @@ export default function NewOrderClient() {
             total: v.total,
           })
         })
+        // سطر «مجموع» فقط وقتی لازم است که این خدمت بیش از یک ردیف (واریانت) داشته باشد؛
+        // اگر فقط یک ردیف باشد، مجموع همان یک سطر است و نیازی به تکرار نیست
+        if (svc.variants.length > 1) {
+          detailRows.push({
+            kind: "svc-total",
+            title: svcName,
+            unitPrice: prices.size === 1 ? svc.variants[0].unitPrice : null,
+            total: svc.variants.reduce((sum, v) => sum + v.total, 0),
+          })
+        }
       })
 
-      // ۲) خود کالا: سطر «مجموع» فقط وقتی این کالا بیش از یک قطعه دارد + هر قطعه در یک سطر
-      if (b.items.length > 1) {
+      // ۲) خود کالا: قطعاتِ کاملاً یکسان (طول/عرض/توضیحات/خدمات یکسان) در یک سطر ادغام
+      // می‌شوند و «تعداد» به‌صورت جمع نشان داده می‌شود (مثلاً ۲ عدد به‌جای دو سطر جدا)
+      const mergedItems: { it: OrderItem; count: number }[] = []
+      b.items.forEach((it) => {
+        const key = `${it.length}|${it.width}|${it.description || ""}|${JSON.stringify(it.services)}`
+        const existing = mergedItems.find(
+          (m) => `${m.it.length}|${m.it.width}|${m.it.description || ""}|${JSON.stringify(m.it.services)}` === key
+        )
+        if (existing) {
+          existing.count += parseFloat(it.quantity) || 0
+        } else {
+          mergedItems.push({ it, count: parseFloat(it.quantity) || 0 })
+        }
+      })
+
+      mergedItems.forEach(({ it, count }) => {
+        const unitMeterage = (parseFloat(it.meterage) || 0) / (parseFloat(it.quantity) || 1)
+        const totalMeterage = unitMeterage * count
+        const unitPrice = parsePrice(it.unitPrice)
+        detailRows.push({
+          kind: "product",
+          no: ++detailNo,
+          title: it.productName,
+          code: it.productCode,
+          length: it.length,
+          width: it.width,
+          quantity: count,
+          amount: totalMeterage,
+          unit: it.unit,
+          unitPrice,
+          total: unitPrice * totalMeterage,
+          description: it.description,
+        })
+      })
+
+      // سطر «مجموع» کالا فقط وقتی لازم است که بعد از ادغام هنوز بیش از یک سطر باقی مانده
+      // باشد؛ این سطر در انتهای بلوک (بعد از تمام ردیف‌های کالا) نوشته می‌شود
+      if (mergedItems.length > 1) {
         detailRows.push({
           kind: "prod-total",
           title: b.productName,
@@ -1808,22 +1923,6 @@ export default function NewOrderClient() {
           total: b.items.reduce((sum, it) => sum + getProductOnlyPrice(it), 0),
         })
       }
-      b.items.forEach((it) => {
-        detailRows.push({
-          kind: "product",
-          no: ++detailNo,
-          title: it.productName,
-          code: it.productCode,
-          length: it.length,
-          width: it.width,
-          quantity: parseFloat(it.quantity) || 0,
-          amount: parseFloat(it.meterage) || 0,
-          unit: it.unit,
-          unitPrice: parsePrice(it.unitPrice),
-          total: getProductOnlyPrice(it),
-          description: it.description,
-        })
-      })
     })
 
     return (
@@ -2198,6 +2297,11 @@ export default function NewOrderClient() {
             </table>
           )}
 
+          {/* مبلغ به حروف — برای هر سه حالت نمایش پیش‌فاکتور (جزئی/کلی/ریز فاکتور) */}
+          <p className="text-sm font-bold text-teal-800 mb-4 bg-teal-50/60 rounded-lg px-3 py-2 border border-teal-100">
+            مبلغ به حروف: {numberToPersianWords(finalTotal)} ریال
+          </p>
+
           {/* خلاصه تعداد و متراژ */}
           <div className="text-sm text-gray-600 space-y-1 mt-4">
             <p>تعداد کل اقلام: <strong>{items.length}</strong></p>
@@ -2291,9 +2395,9 @@ export default function NewOrderClient() {
               <div className="relative z-50 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
                 <h2 className="mb-3 text-lg font-bold text-blue-950">اطلاعات سفارش</h2>
 
-                {/* ردیف ۱: نام مشتری + شماره سفارش + شماره سفارش مشتری + گروه مشتری */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-2.5">
-                  <div className="relative min-w-[180px]" onClick={(e) => e.stopPropagation()}>
+                {/* ردیف ۱: نام مشتری (بزرگ‌تر) + شماره سفارش + شماره سفارش مشتری + گروه مشتری (کوچک‌تر) */}
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-2.5 mb-2.5">
+                  <div className="relative min-w-[180px] col-span-2 md:col-span-3" onClick={(e) => e.stopPropagation()}>
                     <label className={labelClass}>نام مشتری</label>
                     <div className="flex gap-1.5">
                       <div className="relative flex-1">
@@ -2323,8 +2427,16 @@ export default function NewOrderClient() {
                                 selectCustomer(filteredCustomers[Math.min(customerActiveIndex, filteredCustomers.length - 1)])
                               }
                               setShowCustomerDropdown(false)
-                              // با تأخیر صفر، بعد از بسته‌شدن دراپ‌داون و رندر مجدد، فوکوس مطمئناً جابه‌جا شود
-                              setTimeout(() => focusRef(customerGroupRef), 0)
+                              // با تأخیر صفر، بعد از بسته‌شدن دراپ‌داون و رندر مجدد، مستقیم فوکوس روی «نصب» می‌رود
+                              // (سریع‌ترین مسیر برای ثبت سفارش، بدون نیاز به عبور دستی از فیلدهای کم‌تغییر)
+                              setTimeout(() => focusRef(hasInstallationRef), 0)
+                            } else if (e.key === "Tab" && !e.shiftKey) {
+                              e.preventDefault()
+                              if (listOpen && customerSearch.trim()) {
+                                selectCustomer(filteredCustomers[Math.min(customerActiveIndex, filteredCustomers.length - 1)])
+                              }
+                              setShowCustomerDropdown(false)
+                              setTimeout(() => focusRef(hasInstallationRef), 0)
                             }
                           }}
                           placeholder="جستجوی مشتری..."
@@ -2362,7 +2474,7 @@ export default function NewOrderClient() {
                     </div>
                   </div>
 
-                  <div>
+                  <div className="md:col-span-1">
                     <label className={labelClass}>شماره سفارش</label>
                     <input
                       type="text"
@@ -2372,7 +2484,7 @@ export default function NewOrderClient() {
                     />
                   </div>
 
-                  <div>
+                  <div className="md:col-span-1">
                     <label className={labelClass}>شماره سفارش مشتری</label>
                     <input
                       type="text"
@@ -2382,7 +2494,7 @@ export default function NewOrderClient() {
                     />
                   </div>
 
-                  <div>
+                  <div className="md:col-span-1">
                     <label className={labelClass}>گروه مشتری</label>
                     <select
                       ref={customerGroupRef}
@@ -2589,8 +2701,8 @@ export default function NewOrderClient() {
                 <h2 className="mb-3 text-xl font-bold text-blue-950">
                   {editingItemId ? "ویرایش کالا" : "افزودن کالا جدید"}
                 </h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-11 gap-3 items-end">
-                  <div className="col-span-2 md:col-span-4 lg:col-span-3 relative min-w-0" onClick={(e) => e.stopPropagation()}>
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-[2.4fr_1.7fr_1.2fr_1fr_1fr_1fr_1fr_1.7fr] gap-3 items-end">
+                  <div className="col-span-2 md:col-span-4 lg:col-span-1 relative min-w-0" onClick={(e) => e.stopPropagation()}>
                     <label className={labelClass}>نام کالا</label>
                     <input
                       ref={productRef}
@@ -2620,6 +2732,8 @@ export default function NewOrderClient() {
                               setDebouncedProductQuery(p.name)
                               setNewUnitPrice("")
                               setShowProductDropdown(false)
+                              // فوکوس خودکار به «قیمت واحد» تا بدون کلیک اضافی با موس، بشود مستقیم قیمت را تایپ کرد
+                              setTimeout(() => unitPriceRef.current?.focus(), 0)
                             }}
                             className="flex w-full items-center gap-2 text-right px-4 py-2 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50"
                           >
@@ -2637,7 +2751,7 @@ export default function NewOrderClient() {
                       </div>
                     )}
                   </div>
-                  <div className="col-span-2 md:col-span-2 lg:col-span-2">
+                  <div className="col-span-2 md:col-span-2 lg:col-span-1">
                     <label className={labelClass}>قیمت واحد</label>
                     <input
                       ref={unitPriceRef}
@@ -2729,7 +2843,7 @@ export default function NewOrderClient() {
                       value={newItemPreviewTotal}
                       readOnly
                       tabIndex={-1}
-                      className="w-full rounded-xl border border-teal-200 bg-teal-50 px-3 py-2.5 text-base font-bold text-teal-800"
+                      className={priceReadOnlyClass}
                     />
                   </div>
                 </div>
@@ -2918,8 +3032,12 @@ export default function NewOrderClient() {
               <div className="w-1.5 h-20 rounded-full bg-teal-500/30 group-hover:bg-teal-500/60 transition-colors" />
             </div>
 
-            {/* بخش آپلود نقشه */}
-            <div className="w-full lg:flex-1 min-w-0">
+            {/* بخش آپلود نقشه — با اسکرول صفحه ثابت می‌ماند (sticky) تا هنگام وارد کردن اقلام
+                زیاد، تصویر نقشه از جلوی چشم خارج نشود و بشود همزمان با آن چک کرد. lg:self-start
+                کشش عمودیِ items-stretch والد را برای همین ستون خنثی می‌کند تا sticky کار کند،
+                و lg:max-h با overflow-y-auto داخلیِ لیست عکس‌ها ترکیب می‌شود تا اگر عکس‌ها
+                زیاد شدند، خودِ همان قسمت اسکرول شود نه کل صفحه. */}
+            <div className="w-full lg:flex-1 min-w-0 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)]">
               <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 h-full flex flex-col">
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                   <h2 className="text-xl font-bold text-blue-950">تصویر نقشه</h2>
@@ -3339,8 +3457,32 @@ export default function NewOrderClient() {
                       ref={serviceSearchRef}
                       type="text"
                       value={serviceSearch}
-                      onChange={(e) => setServiceSearch(e.target.value)}
-                      onKeyDown={(e) => handleEnter(e, svcTitleRef)}
+                      onChange={(e) => {
+                        setServiceSearch(e.target.value)
+                        setServiceActiveIndex(0)
+                      }}
+                      onKeyDown={(e) => {
+                        const listOpen = serviceSearch.trim() !== "" && allFilteredServices.length > 0
+                        if (e.key === "ArrowDown" && listOpen) {
+                          e.preventDefault()
+                          setServiceActiveIndex((i) => Math.min(i + 1, allFilteredServices.length - 1))
+                        } else if (e.key === "ArrowUp" && listOpen) {
+                          e.preventDefault()
+                          setServiceActiveIndex((i) => Math.max(i - 1, 0))
+                        } else if (e.key === "Enter") {
+                          e.preventDefault()
+                          if (listOpen) {
+                            // خدمتِ هایلایت‌شده (با کیبورد) بدون نیاز به موس انتخاب می‌شود
+                            const picked = allFilteredServices[Math.min(serviceActiveIndex, allFilteredServices.length - 1)]
+                            setSvcTitle(picked.name)
+                            setServiceSearch("")
+                            setServiceActiveIndex(0)
+                            setTimeout(() => focusRef(svcUnitRef), 0)
+                          } else {
+                            focusRef(svcTitleRef)
+                          }
+                        }
+                      }}
                       placeholder="جستجوی خدمت... (مثلاً یک حرف مثل «د» برای دیاموند)"
                       autoFocus
                       className="w-full rounded-xl border border-teal-500/40 px-4 py-3.5 text-lg font-semibold text-blue-950 focus:border-teal-500 focus:outline-none hover:bg-yellow-100 transition-colors"
@@ -3351,15 +3493,21 @@ export default function NewOrderClient() {
                     <div className="mb-4 max-h-52 overflow-y-auto rounded-xl border border-teal-200 bg-teal-50 p-3">
                       <div className="flex flex-col gap-1.5">
                         {allFilteredServices.length > 0 ? (
-                          allFilteredServices.map((s) => (
+                          allFilteredServices.map((s, idx) => (
                             <button
                               key={s.code + s.name}
                               type="button"
+                              ref={(el) => {
+                                if (el && idx === serviceActiveIndex) el.scrollIntoView({ block: "nearest" })
+                              }}
                               onClick={() => {
                                 setSvcTitle(s.name)
                                 setServiceSearch("")
+                                setServiceActiveIndex(0)
                               }}
-                              className="flex w-full items-center gap-2 text-right rounded-lg bg-white border border-teal-300 px-3 py-2.5 text-base font-bold text-blue-900 hover:bg-yellow-100 transition"
+                              className={`flex w-full items-center gap-2 text-right rounded-lg bg-white border px-3 py-2.5 text-base font-bold text-blue-900 hover:bg-yellow-100 transition ${
+                                idx === serviceActiveIndex ? "border-teal-500 bg-yellow-50 ring-2 ring-teal-300" : "border-teal-300"
+                              }`}
                             >
                               {s.code && (
                                 <bdi className="shrink-0 rounded-md bg-teal-50 px-1.5 py-0.5 text-teal-700 font-mono text-xs">{s.code}</bdi>

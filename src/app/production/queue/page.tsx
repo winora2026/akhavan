@@ -36,15 +36,39 @@ type ProductionOrder = {
   }[]
 }
 
+/** یک ردیف = یک نوع کالا داخل یک سفارش */
+type WorkflowRow = {
+  rowKey: string
+  productionOrderId: string
+  itemId: string
+  productName: string
+  itemQuantity: number
+  orderTotalQuantity: number
+  itemMeterage: number | null
+  orderTotalMeterage: number | null
+  status: string
+  itemStatus: string
+  priority: string
+  orderNumber: string
+  customerOrderNumber: string
+  customerName: string
+  orderDate: string | null
+  deliveryDate: string | null
+  createdAt: string
+}
+
 type SortKey =
   | "orderNumber"
   | "customerName"
   | "customerOrderNumber"
+  | "productName"
+  | "itemQuantity"
+  | "orderTotalQuantity"
+  | "itemMeterage"
+  | "orderTotalMeterage"
   | "orderDate"
   | "deliveryDate"
   | "priority"
-  | "itemsCount"
-  | "totalMeterage"
   | "status"
   | "createdAt"
 
@@ -63,6 +87,17 @@ export default function ProductionWorkflowPage() {
   useEffect(() => {
     fetchOrders()
   }, [])
+
+  // Escape → بازگشت به داشبورد
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        router.push("/")
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [router])
 
   const fetchOrders = async () => {
     try {
@@ -94,7 +129,7 @@ export default function ProductionWorkflowPage() {
     }
   }
 
-  const getTotalMeterage = (order: ProductionOrder) => {
+  const getOrderTotalMeterage = (order: ProductionOrder) => {
     if (order.totalMeterage != null) return order.totalMeterage
     if (order.order?.totalMeterage != null) return order.order.totalMeterage
     if (!order.items?.length) return null
@@ -102,12 +137,9 @@ export default function ProductionWorkflowPage() {
     return sum > 0 ? sum : null
   }
 
-  // خلاصه اقلام سفارش
-  const getItemsSummary = (order: ProductionOrder) => {
-    if (!order.items?.length) return "—"
-    const names = order.items.map((i) => i.productName)
-    if (names.length <= 2) return names.join("، ")
-    return `${names.slice(0, 2).join("، ")} + ${names.length - 2} قلم دیگر`
+  const getOrderTotalQuantity = (order: ProductionOrder) => {
+    if (!order.items?.length) return 0
+    return order.items.reduce((acc, item) => acc + (item.quantity || 0), 0)
   }
 
   const isOverdue = (deliveryDate: string | null | undefined) => {
@@ -123,41 +155,81 @@ export default function ProductionWorkflowPage() {
     if (!d) return false
     const today = new Date()
     today.setHours(0, 0, 0, 0)
-    const diffDays = Math.ceil((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+    const diffDays = Math.ceil(
+      (d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
+    )
     return diffDays >= 0 && diffDays <= 7
   }
 
+  /** تبدیل سفارش‌ها به ردیف‌های سطح کالا */
+  const allRows = useMemo((): WorkflowRow[] => {
+    const rows: WorkflowRow[] = []
+    for (const order of orders) {
+      const orderTotalQty = getOrderTotalQuantity(order)
+      const orderTotalM = getOrderTotalMeterage(order)
+      const items = order.items?.length
+        ? order.items
+        : [
+            {
+              id: `${order.id}-empty`,
+              productName: "—",
+              quantity: 0,
+              status: order.status,
+              meterage: null as number | null,
+            },
+          ]
+
+      for (const item of items) {
+        rows.push({
+          rowKey: `${order.id}-${item.id}`,
+          productionOrderId: order.id,
+          itemId: item.id,
+          productName: item.productName || "—",
+          itemQuantity: item.quantity || 0,
+          orderTotalQuantity: orderTotalQty,
+          itemMeterage: item.meterage != null ? item.meterage : null,
+          orderTotalMeterage: orderTotalM,
+          status: order.status,
+          itemStatus: item.status || order.status,
+          priority: order.priority || "عادی",
+          orderNumber: order.order?.orderNumber || "",
+          customerOrderNumber: order.order?.customerOrderNumber || "",
+          customerName: order.order?.customer?.name || "",
+          orderDate: order.order?.orderDate || null,
+          deliveryDate: order.order?.deliveryDate || null,
+          createdAt: order.createdAt,
+        })
+      }
+    }
+    return rows
+  }, [orders])
+
   const filteredSorted = useMemo(() => {
-    let result = [...orders]
+    let result = [...allRows]
 
     const q = search.trim().toLowerCase()
     if (q) {
-      result = result.filter((o) => {
-        const customerMatch = o.order?.customer?.name?.toLowerCase().includes(q)
-        const orderNumMatch = o.order?.orderNumber?.toLowerCase().includes(q)
-        const customerOrderNumMatch = (o.order?.customerOrderNumber || "")
-          .toLowerCase()
-          .includes(q)
-        const productMatch = o.items?.some((item) =>
-          item.productName?.toLowerCase().includes(q)
+      result = result.filter((r) => {
+        return (
+          r.customerName.toLowerCase().includes(q) ||
+          r.orderNumber.toLowerCase().includes(q) ||
+          r.customerOrderNumber.toLowerCase().includes(q) ||
+          r.productName.toLowerCase().includes(q)
         )
-        return customerMatch || orderNumMatch || customerOrderNumMatch || productMatch
       })
     }
 
     if (statusFilter !== "همه") {
-      result = result.filter((o) => o.status === statusFilter)
+      result = result.filter((r) => r.status === statusFilter)
     }
 
-    // فیلتر موعد تحویل
     if (deadlineFilter === "overdue") {
-      result = result.filter((o) => isOverdue(o.order?.deliveryDate))
+      result = result.filter((r) => isOverdue(r.deliveryDate))
     } else if (deadlineFilter === "near") {
-      result = result.filter((o) => isNearDeadline(o.order?.deliveryDate))
+      result = result.filter((r) => isNearDeadline(r.deliveryDate))
     } else if (deadlineFilter === "overdue_and_near") {
       result = result.filter(
-        (o) =>
-          isOverdue(o.order?.deliveryDate) || isNearDeadline(o.order?.deliveryDate)
+        (r) => isOverdue(r.deliveryDate) || isNearDeadline(r.deliveryDate)
       )
     }
 
@@ -167,40 +239,54 @@ export default function ProductionWorkflowPage() {
 
       switch (sortKey) {
         case "orderNumber":
-          av = a.order?.orderNumber || ""
-          bv = b.order?.orderNumber || ""
+          av = a.orderNumber
+          bv = b.orderNumber
           break
         case "customerName":
-          av = a.order?.customer?.name || ""
-          bv = b.order?.customer?.name || ""
+          av = a.customerName
+          bv = b.customerName
           break
         case "customerOrderNumber":
-          av = a.order?.customerOrderNumber || ""
-          bv = b.order?.customerOrderNumber || ""
+          av = a.customerOrderNumber
+          bv = b.customerOrderNumber
+          break
+        case "productName":
+          av = a.productName
+          bv = b.productName
+          break
+        case "itemQuantity":
+          av = a.itemQuantity
+          bv = b.itemQuantity
+          break
+        case "orderTotalQuantity":
+          av = a.orderTotalQuantity
+          bv = b.orderTotalQuantity
+          break
+        case "itemMeterage":
+          av = a.itemMeterage ?? 0
+          bv = b.itemMeterage ?? 0
+          break
+        case "orderTotalMeterage":
+          av = a.orderTotalMeterage ?? 0
+          bv = b.orderTotalMeterage ?? 0
           break
         case "orderDate":
-          av = parseDate(a.order?.orderDate)?.getTime() || 0
-          bv = parseDate(b.order?.orderDate)?.getTime() || 0
+          av = parseDate(a.orderDate)?.getTime() || 0
+          bv = parseDate(b.orderDate)?.getTime() || 0
           break
         case "deliveryDate":
-          av = parseDate(a.order?.deliveryDate)?.getTime() || Number.MAX_SAFE_INTEGER
-          bv = parseDate(b.order?.deliveryDate)?.getTime() || Number.MAX_SAFE_INTEGER
+          av =
+            parseDate(a.deliveryDate)?.getTime() || Number.MAX_SAFE_INTEGER
+          bv =
+            parseDate(b.deliveryDate)?.getTime() || Number.MAX_SAFE_INTEGER
           break
         case "priority":
-          av = a.priority || ""
-          bv = b.priority || ""
-          break
-        case "itemsCount":
-          av = a.items?.length || 0
-          bv = b.items?.length || 0
-          break
-        case "totalMeterage":
-          av = getTotalMeterage(a) ?? 0
-          bv = getTotalMeterage(b) ?? 0
+          av = a.priority
+          bv = b.priority
           break
         case "status":
-          av = a.status || ""
-          bv = b.status || ""
+          av = a.status
+          bv = b.status
           break
         case "createdAt":
         default:
@@ -209,20 +295,24 @@ export default function ProductionWorkflowPage() {
           break
       }
 
+      if (typeof av === "string" && typeof bv === "string") {
+        const cmp = av.localeCompare(bv, "fa", { numeric: true })
+        return sortDir === "asc" ? cmp : -cmp
+      }
       if (av < bv) return sortDir === "asc" ? -1 : 1
       if (av > bv) return sortDir === "asc" ? 1 : -1
       return 0
     })
 
     return result
-  }, [orders, search, statusFilter, deadlineFilter, sortKey, sortDir])
+  }, [allRows, search, statusFilter, deadlineFilter, sortKey, sortDir])
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"))
     } else {
       setSortKey(key)
-      setSortDir(key === "deliveryDate" ? "asc" : "asc")
+      setSortDir("asc")
     }
   }
 
@@ -246,11 +336,11 @@ export default function ProductionWorkflowPage() {
     }
   }
 
-  const getRowClass = (order: ProductionOrder) => {
-    if (isOverdue(order.order?.deliveryDate)) {
+  const getRowClass = (row: WorkflowRow) => {
+    if (isOverdue(row.deliveryDate)) {
       return "border-b border-red-200 bg-red-50/60 hover:bg-red-100/70"
     }
-    if (isNearDeadline(order.order?.deliveryDate)) {
+    if (isNearDeadline(row.deliveryDate)) {
       return "border-b border-orange-200 bg-orange-50/50 hover:bg-orange-100/60"
     }
     return "border-b border-teal-500/10 bg-white/30 hover:bg-teal-400/30"
@@ -269,19 +359,15 @@ export default function ProductionWorkflowPage() {
       }}
       dir="rtl"
     >
-      <link
-        href="https://cdn.jsdelivr.net/npm/vazirmatn@33.003/Vazirmatn-font-face.css"
-        rel="stylesheet"
-      />
       <div className="pointer-events-none fixed inset-0 bg-black/5" />
 
-      <div className="relative z-10 max-w-7xl mx-auto">
-        {/* هدر */}
+      <div className="relative z-10 max-w-[1600px] mx-auto">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
           <div>
             <h1 className="text-2xl font-bold text-blue-950">مشاهده روند کاری</h1>
             <p className="text-sm text-blue-800 mt-1">
-              لیست سفارش‌های تولید — برای جزئیات روی ردیف کلیک کنید
+              هر ردیف = یک نوع کالا در سفارش — برای جزئیات روی ردیف کلیک کنید · Esc =
+              بازگشت
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -312,7 +398,6 @@ export default function ProductionWorkflowPage() {
           </div>
         </div>
 
-        {/* فیلترها */}
         <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
             <div className="md:col-span-4">
@@ -329,7 +414,9 @@ export default function ProductionWorkflowPage() {
             </div>
 
             <div className="md:col-span-2">
-              <label className="mb-1.5 block text-sm font-bold text-blue-900">وضعیت</label>
+              <label className="mb-1.5 block text-sm font-bold text-blue-900">
+                وضعیت
+              </label>
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
@@ -349,7 +436,9 @@ export default function ProductionWorkflowPage() {
               </label>
               <select
                 value={deadlineFilter}
-                onChange={(e) => setDeadlineFilter(e.target.value as DeadlineFilter)}
+                onChange={(e) =>
+                  setDeadlineFilter(e.target.value as DeadlineFilter)
+                }
                 className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
               >
                 <option value="all">همه سفارش‌ها</option>
@@ -379,7 +468,6 @@ export default function ProductionWorkflowPage() {
           </div>
         </div>
 
-        {/* جدول */}
         <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-x-auto">
           {loading ? (
             <p className="text-center text-blue-700 py-16 text-xl font-bold">
@@ -394,29 +482,67 @@ export default function ProductionWorkflowPage() {
               <thead>
                 <tr className="border-b border-teal-500/30 bg-teal-500/15 text-right">
                   <th className="p-3 font-bold text-center">ردیف</th>
-                  <th className={thClass} onClick={() => toggleSort("customerName")}>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("customerName")}
+                  >
                     مشتری{sortIcon("customerName")}
                   </th>
-                  <th className={thClass} onClick={() => toggleSort("customerOrderNumber")}>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("customerOrderNumber")}
+                  >
                     ش سفارش مشتری{sortIcon("customerOrderNumber")}
                   </th>
-                  <th className={thClass} onClick={() => toggleSort("orderNumber")}>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("orderNumber")}
+                  >
                     ش سفارش{sortIcon("orderNumber")}
                   </th>
-                  <th className="p-3 font-bold text-center">اقلام</th>
-                  <th className={thClass} onClick={() => toggleSort("itemsCount")}>
-                    تعداد اقلام{sortIcon("itemsCount")}
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("productName")}
+                  >
+                    نام کالا{sortIcon("productName")}
                   </th>
-                  <th className={thClass} onClick={() => toggleSort("totalMeterage")}>
-                    متراژ کل{sortIcon("totalMeterage")}
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("itemQuantity")}
+                  >
+                    تعداد کالا{sortIcon("itemQuantity")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("orderTotalQuantity")}
+                  >
+                    تعداد کل{sortIcon("orderTotalQuantity")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("itemMeterage")}
+                  >
+                    متراژ{sortIcon("itemMeterage")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("orderTotalMeterage")}
+                  >
+                    متراژ کل{sortIcon("orderTotalMeterage")}
                   </th>
                   <th className={thClass} onClick={() => toggleSort("priority")}>
                     اولویت{sortIcon("priority")}
                   </th>
-                  <th className={thClass} onClick={() => toggleSort("orderDate")}>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("orderDate")}
+                  >
                     تاریخ سفارش{sortIcon("orderDate")}
                   </th>
-                  <th className={thClass} onClick={() => toggleSort("deliveryDate")}>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("deliveryDate")}
+                  >
                     تاریخ تحویل{sortIcon("deliveryDate")}
                   </th>
                   <th className={thClass} onClick={() => toggleSort("status")}>
@@ -425,67 +551,60 @@ export default function ProductionWorkflowPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredSorted.map((order, index) => {
-                  const meterage = getTotalMeterage(order)
-                  return (
-                    <tr
-                      key={order.id}
-                      onClick={() => router.push(`/production/orders/${order.id}`)}
-                      className={`transition cursor-pointer ${getRowClass(order)}`}
-                    >
-                      <td className="p-3 text-center font-bold">{index + 1}</td>
-                      <td className="p-3 font-bold">
-                        {order.order?.customer?.name || "—"}
-                      </td>
-                      <td className="p-3 text-center font-semibold">
-                        {order.order?.customerOrderNumber || "—"}
-                      </td>
-                      <td className="p-3 text-center font-bold text-teal-800">
-                        {order.order?.orderNumber || "—"}
-                      </td>
-                      <td className="p-3 text-xs max-w-[220px]">
-                        {getItemsSummary(order)}
-                      </td>
-                      <td className="p-3 text-center font-semibold">
-                        {order.items?.length || 0}
-                      </td>
-                      <td className="p-3 text-center font-semibold">
-                        {meterage != null ? Number(meterage).toLocaleString("fa-IR") : "—"}
-                      </td>
-                      <td className="p-3 text-center">{order.priority || "عادی"}</td>
-                      <td className="p-3 text-center">
-                        {formatDate(order.order?.orderDate)}
-                      </td>
-                      <td className="p-3 text-center font-semibold">
-                        {formatDate(order.order?.deliveryDate)}
-                      </td>
-                      <td className="p-3 text-center">
-                        <span
-                          className={`rounded-full px-3 py-1 text-xs font-bold ${getStatusColor(
-                            order.status
-                          )}`}
-                        >
-                          {order.status}
-                        </span>
-                      </td>
-                    </tr>
-                  )
-                })}
+                {filteredSorted.map((row, index) => (
+                  <tr
+                    key={row.rowKey}
+                    onClick={() =>
+                      router.push(`/production/orders/${row.productionOrderId}`)
+                    }
+                    className={`transition cursor-pointer ${getRowClass(row)}`}
+                  >
+                    <td className="p-3 text-center font-bold">{index + 1}</td>
+                    <td className="p-3 font-bold">{row.customerName || "—"}</td>
+                    <td className="p-3 text-center font-semibold">
+                      {row.customerOrderNumber || "—"}
+                    </td>
+                    <td className="p-3 text-center font-bold text-teal-800">
+                      {row.orderNumber || "—"}
+                    </td>
+                    <td className="p-3 font-bold">{row.productName}</td>
+                    <td className="p-3 text-center font-semibold">
+                      {row.itemQuantity}
+                    </td>
+                    <td className="p-3 text-center font-semibold">
+                      {row.orderTotalQuantity}
+                    </td>
+                    <td className="p-3 text-center font-semibold">
+                      {row.itemMeterage != null
+                        ? Number(row.itemMeterage).toLocaleString("fa-IR")
+                        : "—"}
+                    </td>
+                    <td className="p-3 text-center font-semibold">
+                      {row.orderTotalMeterage != null
+                        ? Number(row.orderTotalMeterage).toLocaleString("fa-IR")
+                        : "—"}
+                    </td>
+                    <td className="p-3 text-center">{row.priority}</td>
+                    <td className="p-3 text-center">
+                      {formatDate(row.orderDate)}
+                    </td>
+                    <td className="p-3 text-center font-semibold">
+                      {formatDate(row.deliveryDate)}
+                    </td>
+                    <td className="p-3 text-center">
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-bold ${getStatusColor(
+                          row.status
+                        )}`}
+                      >
+                        {row.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           )}
-        </div>
-
-        {/* راهنمای رنگ */}
-        <div className="mt-3 flex flex-wrap gap-4 text-xs text-blue-800">
-          <div className="flex items-center gap-2">
-            <span className="w-4 h-4 rounded bg-red-100 border border-red-300"></span>
-            <span>عقب‌افتاده از موعد</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-4 h-4 rounded bg-orange-100 border border-orange-300"></span>
-            <span>موعد نزدیک (تا ۷ روز آینده)</span>
-          </div>
         </div>
       </div>
     </div>
