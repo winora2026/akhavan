@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import Link from "next/link"
 
 type CuttingItem = {
@@ -92,6 +92,9 @@ export default function CuttingPlanningPage() {
   const [actionLoading, setActionLoading] = useState(false)
 
   const [productName, setProductName] = useState("")
+  const [showProductDrop, setShowProductDrop] = useState(false)
+  const productBoxRef = useRef<HTMLDivElement>(null)
+
   const [labelStatus, setLabelStatus] = useState("همه")
   const [priority, setPriority] = useState("همه")
   const [search, setSearch] = useState("")
@@ -116,6 +119,16 @@ export default function CuttingPlanningPage() {
   }, [])
 
   useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (!productBoxRef.current?.contains(e.target as Node)) {
+        setShowProductDrop(false)
+      }
+    }
+    document.addEventListener("mousedown", onDoc)
+    return () => document.removeEventListener("mousedown", onDoc)
+  }, [])
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return
       if (showReprintModal) {
@@ -130,6 +143,7 @@ export default function CuttingPlanningPage() {
         setShowReportPreview(false)
         return
       }
+      setShowProductDrop(false)
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
@@ -175,11 +189,11 @@ export default function CuttingPlanningPage() {
           el.innerHTML = ""
           JsBarcode(el, String(label.barcode), {
             format: "CODE128",
-            width: 1.5,
-            height: 34,
+            width: 1.3,
+            height: 28,
             displayValue: true,
-            fontSize: 13,
-            textMargin: 2,
+            fontSize: 11,
+            textMargin: 1,
             margin: 0,
             background: "#F0E000",
             lineColor: "#000000",
@@ -201,6 +215,15 @@ export default function CuttingPlanningPage() {
     }
   }, [showLabelPreview, labels])
 
+  const productSuggestions = useMemo(() => {
+    const q = normalizeText(productName)
+    const all = [...productNames].sort((a, b) => a.localeCompare(b, "fa"))
+    if (!q) return all.slice(0, 40)
+    return all
+      .filter((n) => matchProductFilter(n, productName))
+      .slice(0, 40)
+  }, [productNames, productName])
+
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"))
@@ -217,12 +240,11 @@ export default function CuttingPlanningPage() {
 
   const filtered = useMemo(() => {
     let list = [...items]
-    const qProduct = productName
     const qSearch = normalizeText(search)
 
-    if (qProduct.trim()) {
+    if (productName.trim()) {
       list = list.filter((i) =>
-        matchProductFilter(i.productName || "", qProduct)
+        matchProductFilter(i.productName || "", productName)
       )
     }
     if (labelStatus !== "همه") {
@@ -299,6 +321,16 @@ export default function CuttingPlanningPage() {
     () => filtered.filter((i) => selectedIds.includes(i.productionItemId)),
     [filtered, selectedIds]
   )
+
+  const reportTotals = useMemo(() => {
+    let totalQty = 0
+    let totalMeterage = 0
+    for (const r of reportRows) {
+      totalQty += Number(r.quantity) || 0
+      totalMeterage += Number(r.meterage) || 0
+    }
+    return { totalQty, totalMeterage }
+  }, [reportRows])
 
   const reportTitleProduct =
     productName.trim() || (reportRows[0]?.productName ?? "همه کالاها")
@@ -512,6 +544,25 @@ export default function CuttingPlanningPage() {
         (row.notes || "").replace(/,/g, "،"),
       ].join(",")
     )
+    lines.push(
+      [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "جمع",
+        "",
+        "",
+        reportTotals.totalQty,
+        reportTotals.totalMeterage.toFixed(4),
+        "",
+        "",
+      ].join(",")
+    )
     const csv = "\uFEFF" + [headers.join(","), ...lines].join("\n")
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
     const url = URL.createObjectURL(blob)
@@ -549,7 +600,7 @@ export default function CuttingPlanningPage() {
 
   return (
     <div
-      className="min-h-screen p-4 bg-cover bg-center bg-fixed"
+      className="min-h-screen p-4 bg-cover bg-center bg-fixed print:bg-none print:p-0"
       style={{
         backgroundImage:
           "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
@@ -561,11 +612,38 @@ export default function CuttingPlanningPage() {
         @media print {
           @page {
             size: A4 portrait;
-            margin: 6mm;
+            margin: 8mm;
           }
+          html,
           body {
+            background: #fff !important;
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
+          }
+          body * {
+            visibility: hidden;
+          }
+          .print-area,
+          .print-area * {
+            visibility: visible;
+          }
+          .print-area {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            background: #fff !important;
+          }
+          .print-label-area,
+          .print-label-area * {
+            visibility: visible;
+          }
+          .print-label-area {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            background: #fff !important;
           }
         }
       `}</style>
@@ -604,27 +682,46 @@ export default function CuttingPlanningPage() {
 
         <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-            <div className="md:col-span-3">
+            <div className="md:col-span-3 relative" ref={productBoxRef}>
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
                 نام کالا / ضخامت
               </label>
               <input
-                list="product-list"
                 value={productName}
-                onChange={(e) => setProductName(e.target.value)}
+                onChange={(e) => {
+                  setProductName(e.target.value)
+                  setShowProductDrop(true)
+                }}
+                onFocus={() => setShowProductDrop(true)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") fetchData()
+                  if (e.key === "Enter") {
+                    setShowProductDrop(false)
+                    fetchData()
+                  }
                 }}
                 placeholder="مثلاً ۴ یا آینه ۴ میل..."
                 className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
+                autoComplete="off"
               />
-              <datalist id="product-list">
-                {productNames.map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
+              {showProductDrop && productSuggestions.length > 0 && (
+                <div className="absolute z-30 mt-1 w-full max-h-56 overflow-auto rounded-xl border border-teal-300 bg-white shadow-xl">
+                  {productSuggestions.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      className="block w-full text-right px-3 py-2 text-sm font-bold text-blue-950 hover:bg-teal-50 border-b border-teal-50 last:border-0"
+                      onClick={() => {
+                        setProductName(name)
+                        setShowProductDrop(false)
+                      }}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
               <p className="text-[11px] text-blue-700 mt-1">
-                با زدن فقط عدد ضخامت (مثل ۴) همه کالاهای همان ضخامت می‌آید
+                با زدن عدد ضخامت یا انتخاب از لیست، نام کامل کالا می‌آید
               </p>
             </div>
             <div className="md:col-span-2">
@@ -839,7 +936,6 @@ export default function CuttingPlanningPage() {
             <h2 className="text-xl font-bold text-blue-950 mb-4">
               اجازه چاپ مجدد
             </h2>
-
             <div className="flex gap-2 mb-4">
               <button
                 type="button"
@@ -851,9 +947,6 @@ export default function CuttingPlanningPage() {
                 }`}
               >
                 چاپ مجدد ساده
-                <span className="block text-[11px] font-semibold opacity-90 mt-0.5">
-                  پارگی لیبل — بدون علت
-                </span>
               </button>
               <button
                 type="button"
@@ -865,12 +958,8 @@ export default function CuttingPlanningPage() {
                 }`}
               >
                 با ثبت ضایعات
-                <span className="block text-[11px] font-semibold opacity-90 mt-0.5">
-                  علت + بخش + شخص
-                </span>
               </button>
             </div>
-
             {reprintMode === "waste" ? (
               <div className="space-y-4">
                 <div>
@@ -882,7 +971,6 @@ export default function CuttingPlanningPage() {
                     onChange={(e) => setWasteReason(e.target.value)}
                     rows={3}
                     className="w-full rounded-xl border border-teal-500/30 px-4 py-2.5 text-sm font-semibold focus:border-teal-500 focus:outline-none"
-                    placeholder="علت را بنویسید..."
                   />
                 </div>
                 <div>
@@ -909,22 +997,19 @@ export default function CuttingPlanningPage() {
                     value={wastePerson}
                     onChange={(e) => setWastePerson(e.target.value)}
                     className="w-full rounded-xl border border-teal-500/30 px-4 py-2.5 text-sm font-semibold focus:border-teal-500 focus:outline-none"
-                    placeholder="نام شخص"
                   />
                 </div>
               </div>
             ) : (
               <p className="text-sm text-blue-800 bg-teal-50 border border-teal-100 rounded-xl p-3 font-semibold">
-                فقط اجازه چاپ مجدد ثبت می‌شود؛ نیازی به علت ضایعات نیست (مثلاً
-                پارگی لیبل یا چاپ ناخوانا).
+                فقط اجازه چاپ مجدد ثبت می‌شود (پارگی لیبل و …).
               </p>
             )}
-
             <div className="mt-6 flex gap-3 justify-end">
               <button
                 type="button"
                 onClick={() => setShowReprintModal(false)}
-                className="rounded-xl border border-gray-300 px-5 py-2.5 font-bold text-gray-700 hover:bg-gray-50"
+                className="rounded-xl border border-gray-300 px-5 py-2.5 font-bold text-gray-700"
               >
                 انصراف
               </button>
@@ -938,23 +1023,20 @@ export default function CuttingPlanningPage() {
                     : "bg-teal-500 hover:bg-teal-600"
                 }`}
               >
-                {actionLoading
-                  ? "در حال ثبت..."
-                  : reprintMode === "waste"
-                    ? "تأیید ضایعات و چاپ مجدد"
-                    : "تأیید چاپ مجدد ساده"}
+                {actionLoading ? "..." : "تأیید"}
               </button>
             </div>
           </div>
         </div>
       )}
 
+      {/* لیبل ۹×۶ سانتی‌متر */}
       {showLabelPreview && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-auto print:static print:bg-white print:p-0">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-0">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-0 print-label-area">
             <div className="flex justify-between items-center mb-4 print:hidden">
               <h2 className="text-xl font-bold text-blue-950">
-                پیش‌نمایش لیبل‌ها ({labels.length} قطعه)
+                پیش‌نمایش لیبل‌ها ({labels.length} قطعه) — ۹×۶ سانتی‌متر
               </h2>
               <div className="flex gap-2">
                 <button
@@ -972,41 +1054,45 @@ export default function CuttingPlanningPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 print:grid-cols-2 print:gap-2">
+            <div className="flex flex-wrap gap-3 print:gap-0 justify-center print:justify-start">
               {labels.map((label, idx) => {
                 const services = splitServices(label.servicesText)
                 return (
                   <div
                     key={`${label.productionItemId}-${idx}`}
-                    className="relative overflow-hidden text-black"
+                    className="relative overflow-hidden text-black print:break-inside-avoid"
                     style={{
                       backgroundColor: "#F0E000",
-                      width: 360,
-                      minHeight: 220,
-                      padding: 10,
-                      borderRadius: 6,
+                      width: "9cm",
+                      height: "6cm",
+                      padding: "4mm",
+                      boxSizing: "border-box",
+                      borderRadius: 4,
                       border: "1px solid #c4a000",
                       display: "flex",
                       flexDirection: "column",
                     }}
                     dir="rtl"
                   >
-                    <div className="flex justify-between items-start gap-2">
+                    <div className="flex justify-between items-start gap-1">
                       <img
                         src="https://i.postimg.cc/PrV3wWPS/Whats-App-Image-2026-09-04-at-10-25-58-PM.jpg"
                         alt="Akhavan"
                         style={{
-                          height: 44,
+                          height: 32,
                           width: "auto",
                           mixBlendMode: "multiply",
                         }}
                       />
-                      <div className="text-[11px] leading-5 text-right font-bold">
-                        <p>تاریخ سفارش: {formatFaDate(label.orderDate)}</p>
-                        <p>تاریخ تحویل: {formatFaDate(label.deliveryDate)}</p>
+                      <div
+                        className="text-right font-bold"
+                        style={{ fontSize: 9, lineHeight: 1.35 }}
+                      >
+                        <p>سفارش: {formatFaDate(label.orderDate)}</p>
+                        <p>تحویل: {formatFaDate(label.deliveryDate)}</p>
                         <p>
-                          شماره سفارش:{" "}
-                          <span className="text-sm font-black">
+                          ش:{" "}
+                          <span style={{ fontSize: 11, fontWeight: 900 }}>
                             {label.orderNumber || "—"}
                           </span>
                         </p>
@@ -1015,28 +1101,31 @@ export default function CuttingPlanningPage() {
 
                     <div
                       style={{
-                        borderTop: "1.5px solid rgba(0,0,0,0.35)",
-                        margin: "6px 0 8px",
+                        borderTop: "1px solid rgba(0,0,0,0.35)",
+                        margin: "3px 0 4px",
                       }}
                     />
 
                     <div
-                      className="flex justify-between items-start gap-3 flex-1"
-                      style={{ direction: "rtl" }}
+                      className="flex justify-between items-start gap-2 flex-1"
+                      style={{ minHeight: 0 }}
                     >
-                      <div style={{ width: "42%", textAlign: "right" }}>
-                        <p className="font-black text-[15px] leading-5">
+                      <div style={{ width: "40%", textAlign: "right" }}>
+                        <p
+                          className="font-black"
+                          style={{ fontSize: 12, lineHeight: 1.25 }}
+                        >
                           {label.customerName || "—"}
                         </p>
                         {services.length > 0 && (
-                          <ul className="mt-2 space-y-1 list-none p-0 m-0">
+                          <ul className="mt-1 space-y-0.5 list-none p-0 m-0">
                             {services.map((s, i) => (
                               <li
                                 key={i}
                                 style={{
-                                  fontSize: 16,
+                                  fontSize: 12,
                                   fontWeight: 900,
-                                  lineHeight: 1.35,
+                                  lineHeight: 1.2,
                                 }}
                               >
                                 {s}
@@ -1045,10 +1134,9 @@ export default function CuttingPlanningPage() {
                           </ul>
                         )}
                       </div>
-
                       <div
                         style={{
-                          width: "55%",
+                          width: "58%",
                           textAlign: "left",
                           direction: "ltr",
                         }}
@@ -1056,8 +1144,8 @@ export default function CuttingPlanningPage() {
                         <p
                           style={{
                             fontWeight: 700,
-                            fontSize: 15,
-                            lineHeight: 1.35,
+                            fontSize: 12,
+                            lineHeight: 1.25,
                             textAlign: "left",
                             direction: "rtl",
                             unicodeBidi: "plaintext",
@@ -1068,12 +1156,10 @@ export default function CuttingPlanningPage() {
                         <p
                           style={{
                             fontWeight: 900,
-                            fontSize: 22,
-                            marginTop: 4,
-                            letterSpacing: "0.02em",
+                            fontSize: 16,
+                            marginTop: 2,
                             textAlign: "left",
                             direction: "ltr",
-                            unicodeBidi: "isolate",
                           }}
                         >
                           {label.length ?? "—"}*{label.width ?? "—"}=
@@ -1082,12 +1168,11 @@ export default function CuttingPlanningPage() {
                         {label.notes ? (
                           <p
                             style={{
-                              fontSize: 12,
+                              fontSize: 9,
                               fontWeight: 600,
-                              marginTop: 4,
-                              lineHeight: 1.3,
-                              textAlign: "left",
+                              marginTop: 2,
                               direction: "rtl",
+                              textAlign: "left",
                               unicodeBidi: "plaintext",
                             }}
                           >
@@ -1097,19 +1182,17 @@ export default function CuttingPlanningPage() {
                       </div>
                     </div>
 
-                    {/* بارکد پایین چپ — عدد داخل JsBarcode، وسط و هم‌عرض میله‌ها */}
                     <div
-                      className="mt-2"
                       style={{
+                        direction: "ltr",
                         display: "flex",
                         justifyContent: "flex-start",
-                        width: "100%",
-                        direction: "ltr",
+                        marginTop: 2,
                       }}
                     >
                       <svg
                         id={`barcode-${label.productionItemId}-${idx}`}
-                        style={{ display: "block" }}
+                        style={{ display: "block", maxWidth: "100%" }}
                       />
                     </div>
                   </div>
@@ -1120,9 +1203,10 @@ export default function CuttingPlanningPage() {
         </div>
       )}
 
+      {/* برگه برنامه‌ریزی — بدون بک‌گراند در پرینت + جمع */}
       {showReportPreview && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-auto print:static print:bg-white print:p-0">
-          <div className="bg-white rounded-2xl p-4 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-1">
+          <div className="bg-white rounded-2xl p-4 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-0 print-area">
             <div className="flex justify-between items-center mb-3 print:hidden">
               <h2 className="text-xl font-bold text-blue-950">
                 برگه برنامه‌ریزی برش
@@ -1149,7 +1233,7 @@ export default function CuttingPlanningPage() {
               </div>
             </div>
 
-            <div className="text-black" dir="rtl">
+            <div className="text-black bg-white" dir="rtl">
               <div className="text-center mb-2">
                 <h3 className="text-xl font-black tracking-wide">
                   لیست برش CNC
@@ -1197,7 +1281,6 @@ export default function CuttingPlanningPage() {
                       <td className="border border-black p-1 text-center">
                         <svg
                           id={`report-barcode-${row.productionItemId}`}
-                          className="mx-auto"
                           style={{ display: "block", margin: "0 auto" }}
                         />
                       </td>
@@ -1238,6 +1321,21 @@ export default function CuttingPlanningPage() {
                       </td>
                     </tr>
                   ))}
+                  <tr className="bg-gray-50">
+                    <td
+                      colSpan={9}
+                      className="border border-black p-1.5 text-left font-black"
+                    >
+                      جمع کل
+                    </td>
+                    <td className="border border-black p-1.5 text-center font-black">
+                      {reportTotals.totalQty}
+                    </td>
+                    <td className="border border-black p-1.5 text-center font-black">
+                      {reportTotals.totalMeterage.toFixed(2)}
+                    </td>
+                    <td className="border border-black p-1.5" />
+                  </tr>
                 </tbody>
               </table>
             </div>

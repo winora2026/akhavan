@@ -46,7 +46,9 @@ export default function AppTabs() {
     setTabs((prev) => {
       if (prev.some((t) => t.href === pathname)) return prev
       const next = [...prev, { href: pathname, title }]
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      } catch {}
       return next
     })
   }, [pathname])
@@ -54,20 +56,23 @@ export default function AppTabs() {
   if (pathname === "/login" || tabs.length === 0) return null
 
   const closeTab = (href: string) => {
-    setTabs((prev) => {
-      const next = prev.filter((t) => t.href !== href)
+    const next = tabs.filter((t) => t.href !== href)
+    setTabs(next)
+    try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-      if (href === pathname) {
-        const fallback = next[next.length - 1]?.href || "/"
-        router.push(fallback)
-      }
-      return next
-    })
+    } catch {}
+
+    // مهم: router.push بیرون از setState
+    if (href === pathname) {
+      const fallback = next[next.length - 1]?.href || "/"
+      // انتقال را برای بعد از render بگذار
+      setTimeout(() => router.push(fallback), 0)
+    }
   }
 
   return (
     <div
-      className="sticky top-0 z-[40] border-b border-teal-500/25 bg-teal-900/25 backdrop-blur-xl px-2 py-1.5 flex gap-1 overflow-x-auto print:hidden"
+      className="sticky top-0 z-[40] bg-white/90 backdrop-blur border-b border-teal-200 px-2 py-1.5 flex gap-1 overflow-x-auto print:hidden"
       dir="rtl"
       role="tablist"
       aria-label="صفحات باز"
@@ -77,17 +82,17 @@ export default function AppTabs() {
         return (
           <div
             key={tab.href}
-            className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-sm font-bold whitespace-nowrap shadow-sm ${
+            className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-sm font-bold whitespace-nowrap ${
               active
-                ? "bg-teal-500 text-white border-teal-400"
-                : "bg-white/40 text-blue-950 border-white/30 hover:bg-white/60"
+                ? "bg-teal-500 text-white border-teal-600"
+                : "bg-white text-blue-900 border-teal-200 hover:bg-teal-50"
             }`}
           >
             <Link
               href={tab.href}
               role="tab"
               aria-selected={active}
-              className="focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-teal-300 rounded"
+              className="focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-teal-400 rounded"
             >
               {tab.title}
             </Link>
@@ -95,7 +100,7 @@ export default function AppTabs() {
               type="button"
               aria-label={`بستن ${tab.title}`}
               onClick={() => closeTab(tab.href)}
-              className="leading-none px-1 rounded hover:bg-black/10 focus:outline-none focus:ring-2 focus:ring-teal-300"
+              className="leading-none px-1 rounded hover:bg-black/10 focus:outline-none focus:ring-2 focus:ring-teal-400"
             >
               ×
             </button>
