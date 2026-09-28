@@ -238,7 +238,7 @@ function buildPartsForOne(cfg: BoxConfig, boxIndex: number): { parts: Part[]; uv
     const shelfL = L - leftT - rightT
     const shelfW = (shelfWidthCm ?? W - backT - frontT) - shelfRecess
     for (let i = 0; i < shelfCount; i++) {
-      add("shelf", `طبقه ${i + 1}`, shelfL, Math.max(shelfW, 1), 1)
+      add("shelf", `طبقه ${i + 1}`, shelfL, Math.max(shelfW, 1), 1, thickness)
     }
   } else {
     if (faces.top) add("top", "سقف", L - miter, W, 1)
@@ -251,7 +251,7 @@ function buildPartsForOne(cfg: BoxConfig, boxIndex: number): { parts: Part[]; uv
     const shelfL = L - miter - leftT - rightT
     const shelfW = (shelfWidthCm ?? W) - shelfRecess
     for (let i = 0; i < shelfCount; i++) {
-      add("shelf", `طبقه ${i + 1}`, shelfL, Math.max(shelfW, 1), 1)
+      add("shelf", `طبقه ${i + 1}`, shelfL, Math.max(shelfW, 1), 1, thickness)
     }
   }
 
@@ -334,6 +334,7 @@ function BoxSchematic({
   height,
   shelfCount,
   shelfOffsetFromTop,
+  thickness,
   hasSlidingDoors,
   boxType,
   label,
@@ -346,6 +347,7 @@ function BoxSchematic({
   height: number
   shelfCount: number
   shelfOffsetFromTop: number | null
+  thickness: number
   hasSlidingDoors: boolean
   boxType: BoxType
   label?: string
@@ -354,20 +356,25 @@ function BoxSchematic({
 }) {
   const col = getGlassColors(glassName)
   const isMiter = boxType === "miter"
-
   const L = Math.max(length, 1)
   const W = Math.max(width, 1)
   const H = Math.max(height, 1)
-  const maxDim = Math.max(L, W * 0.72, H)
-  const scale = 195 / maxDim
-  const lx = L * scale
-  const depth = W * scale * 0.48
-  const hz = H * scale
 
-  // 10mm glass is deliberately visible as a real edge strip in the illustration.
-  const edge = Math.max(5, Math.min(10, scale * 0.72))
-  const x0 = 118
-  const y0 = 275
+  // IMPORTANT: this is a clean glass model, not a set of decorative "bars".
+  // The visible glass edge is drawn INSIDE the glass opening, so it never sticks
+  // outside the nominal 100 x 60 x 40 box.  The two joint types differ in the
+  // actual corner construction below.
+  const maxDim = Math.max(L, W * 0.78, H)
+  const scale = 245 / maxDim
+  const lx = L * scale
+  const depth = W * scale * 0.50
+  const hz = H * scale
+  // thickness is supplied in millimetres (6, 8, 10, 12, 15, 19, ...).
+  // Convert it to the same SVG scale used by the box dimensions.
+  const glassThicknessCm = Math.max(thickness / 10, 0.1)
+  const glassT = Math.max(1.2, Math.min(5.5, (glassThicknessCm / Math.max(maxDim, 1)) * 245))
+  const x0 = 92
+  const y0 = 292
 
   type P = { x: number; y: number }
   const A: P = { x: x0, y: y0 }
@@ -379,204 +386,315 @@ function BoxSchematic({
   const Ct: P = { x: C.x, y: C.y - hz }
   const Dt: P = { x: D.x, y: D.y - hz }
 
-  const svgId = `box-${boxType}-${glassName}-${L}-${W}-${H}-${label || "box"}`.replace(/[^a-zA-Z0-9_-]/g, "-")
-  const pstr = (pts: P[]) => pts.map((p) => `${p.x},${p.y}`).join(" ")
+  const svgId = `glass-${boxType}-${glassName}-${L}-${W}-${H}-${label || "box"}`.replace(/[^a-zA-Z0-9_-]/g, "-")
+  const pstr = (pts: P[]) => pts.map(p => `${p.x},${p.y}`).join(" ")
   const add = (p: P, dx: number, dy: number): P => ({ x: p.x + dx, y: p.y + dy })
 
-  // A strip is the visible 10mm glass edge. It is not just a stroke.
-  const edgeStrip = (a: P, b: P, nx: number, ny: number, key: string, opacity = 0.95) => {
-    const a2 = add(a, nx, ny)
-    const b2 = add(b, nx, ny)
-    return (
-      <g key={key} opacity={opacity}>
-        <polygon points={pstr([a, b, b2, a2])} fill={col.rim} />
-        <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={col.stroke} strokeWidth={1.15} />
-        <line x1={a2.x} y1={a2.y} x2={b2.x} y2={b2.y} stroke="#ffffff" strokeWidth={0.8} opacity={0.65} />
-      </g>
-    )
-  }
+  const surface = (pts: P[], fill: string, opacity: number, key: string) => (
+    <polygon key={key} points={pstr(pts)} fill={fill} fillOpacity={opacity} stroke={col.stroke} strokeWidth="0.85" />
+  )
 
-  // Miter cap: a real-looking diagonal cut face at a glass/glass corner.
-  // The cap is a small quadrilateral, not a decorative diagonal line.
-  const miterCap = (p: P, ux: number, uy: number, vx: number, vy: number, key: string) => {
-    const u = { x: ux * edge, y: uy * edge }
-    const v = { x: vx * edge, y: vy * edge }
-    const q1 = add(p, u.x, u.y)
-    const q2 = add(p, v.x, v.y)
-    const q3 = add(p, u.x + v.x, u.y + v.y)
-    return (
-      <g key={key}>
-        <polygon points={pstr([p, q1, q3, q2])} fill={col.rim} opacity={0.96} />
-        <line x1={q1.x} y1={q1.y} x2={q2.x} y2={q2.y} stroke="#ffffff" strokeWidth={1.05} opacity={0.75} />
-      </g>
-    )
-  }
+  // Exposed 10 mm edge of an open front. The offset is toward the INSIDE,
+  // never outward. This prevents the common fake "frame" appearance.
+  const edgeBand = (a: P, b: P, dx: number, dy: number, key: string) => (
+    <polygon
+      key={key}
+      points={pstr([a, b, add(b, dx, dy), add(a, dx, dy)])}
+      fill={col.rim}
+      fillOpacity="0.72"
+      stroke={col.stroke}
+      strokeWidth="0.65"
+    />
+  )
 
-  // Diamond/90° corner: one edge visibly overlaps the other.
-  const diamondJoint = (p: P, a: P, b: P, key: string) => (
+  // For a miter joint the two glass panes meet on the same diagonal cut plane.
+  // We show only the seam/cut surface INSIDE the corner; there is no added block.
+  const miterSeam = (outer: P, topInner: P, sideInner: P, key: string) => (
     <g key={key}>
-      <line x1={a.x} y1={a.y} x2={p.x} y2={p.y} stroke={col.stroke} strokeWidth={1.7} opacity={0.95} />
-      <line x1={b.x} y1={b.y} x2={p.x} y2={p.y} stroke={col.rim} strokeWidth={2.6} opacity={0.92} />
+      <polygon points={pstr([outer, topInner, sideInner])} fill={col.rim} fillOpacity="0.48" />
+      <line x1={topInner.x} y1={topInner.y} x2={sideInner.x} y2={sideInner.y} stroke="#174f52" strokeWidth="1" opacity="0.9" />
     </g>
   )
 
-  const panel = (pts: P[], fill: string, opacity: number, key: string) => (
-    <polygon key={key} points={pstr(pts)} fill={fill} stroke={col.stroke} strokeWidth={1.05} opacity={opacity} />
+  // For a diamond/butt joint one pane runs continuously to the corner and the
+  // other terminates against its exposed glass edge. The exposed edge is shown
+  // as a narrow face, not as a protruding frame.
+  const buttSeam = (outer: P, inner: P, key: string) => (
+    <line key={key} x1={outer.x} y1={outer.y} x2={inner.x} y2={inner.y} stroke={col.stroke} strokeWidth="1.2" opacity="0.9" />
   )
 
-  const drawPanels = () => (
-    <>
-      {faces.back && panel([D, C, Ct, Dt], col.fillSide, 0.40, "back")}
-      {faces.bottom && panel([A, B, C, D], col.fillSide, 0.32, "bottom")}
-      {faces.left && panel([A, D, Dt, At], col.fillSide, 0.48, "left")}
-      {faces.right && panel([B, C, Ct, Bt], `url(#glass-side-${svgId})`, 0.50, "right")}
-      {faces.front && panel([A, B, Bt, At], `url(#glass-front-${svgId})`, 0.56, "front")}
-      {faces.top && panel([At, Bt, Ct, Dt], `url(#glass-top-${svgId})`, 0.60, "top")}
-    </>
-  )
+  const shadowRx = Math.max(lx * 0.46, 70)
+  const shadowCx = (A.x + C.x) / 2
 
-  // All four edges around the FRONT OPENING remain visible even when front=false.
-  // This is the important correction for the user's "four front lines have no depth" issue.
-  const frontRim = (
-    <g>
-      {(faces.left || faces.front) && edgeStrip(A, At, -edge * 0.78, edge * 0.78, "front-left-rim")}
-      {(faces.right || faces.front) && edgeStrip(B, Bt, edge * 0.78, edge * 0.78, "front-right-rim")}
-      {(faces.top || faces.front) && edgeStrip(At, Bt, 0, -edge, "front-top-rim")}
-      {(faces.bottom || faces.front) && edgeStrip(A, B, 0, edge, "front-bottom-rim")}
-    </g>
-  )
+  // Shelf geometry uses the same glass-thickness logic as the box walls.
+  // The clear vertical gaps are calculated from the internal height after
+  // subtracting top/bottom glass and the thickness of every shelf.
+  // Shelves use the EXACT selected glass thickness, just like the other glass parts.
+  // thickness is in millimetres, while the box dimensions are in centimetres.
+  const shelfThicknessCm = Math.max(thickness / 10, 0.1)
+  const topGlassCm = faces.top ? shelfThicknessCm : 0
+  const bottomGlassCm = faces.bottom ? shelfThicknessCm : 0
+  const internalHeightCm = Math.max(H - topGlassCm - bottomGlassCm, 0)
+  const clearHeightCm = Math.max(internalHeightCm - shelfCount * shelfThicknessCm, 0)
 
-  const sideRims = (
-    <g>
-      {faces.right && edgeStrip(B, C, 0, -edge * 0.68, "right-bottom-rim")}
-      {faces.right && edgeStrip(C, Ct, -edge * 0.72, -edge * 0.72, "right-back-rim")}
-      {faces.right && edgeStrip(Bt, Ct, edge * 0.45, edge * 0.45, "right-top-rim")}
-      {faces.left && edgeStrip(A, D, 0, edge * 0.68, "left-bottom-rim")}
-      {faces.left && edgeStrip(D, Dt, edge * 0.72, -edge * 0.72, "left-back-rim")}
-      {faces.left && edgeStrip(At, Dt, -edge * 0.45, -edge * 0.45, "left-top-rim")}
-      {faces.back && edgeStrip(D, C, 0, edge * 0.62, "back-bottom-rim")}
-      {faces.back && edgeStrip(Dt, Ct, 0, -edge * 0.55, "back-top-rim")}
-    </g>
-  )
+  // If a custom top offset is enabled, it is the CLEAR gap from the underside
+  // of the top glass to the top face of shelf #1. The remaining clear space is
+  // distributed equally among the remaining gaps. Otherwise all clear gaps are equal.
+  const defaultGapCm = shelfCount > 0 ? clearHeightCm / (shelfCount + 1) : 0
+  let firstGapCm = defaultGapCm
+  if (shelfCount > 0 && shelfOffsetFromTop !== null && shelfOffsetFromTop > 0) {
+    firstGapCm = Math.min(shelfOffsetFromTop, clearHeightCm)
+  }
+  // clearHeightCm already excludes the thickness of every shelf. Therefore
+  // NEVER subtract shelfThicknessCm again when distributing the clear gaps.
+  // With N shelves there are N+1 clear openings: top, between shelves, bottom.
+  // If a custom first gap is supplied, the remaining free height is divided
+  // equally among the N remaining openings.
+  const remainingGapCm = shelfCount > 0
+    ? Math.max((clearHeightCm - firstGapCm) / Math.max(shelfCount, 1), 0)
+    : 0
 
-  const joints = isMiter ? (
-    <g>
-      {/* Visible 45° cut faces at every exposed corner. */}
-      {(faces.left || faces.front) && miterCap(A, 1, -1, -1, 1, "miter-A")}
-      {(faces.right || faces.front) && miterCap(B, -1, -1, 1, 1, "miter-B")}
-      {(faces.left || faces.top) && miterCap(At, 1, 1, -1, -1, "miter-At")}
-      {(faces.right || faces.top) && miterCap(Bt, -1, 1, 1, -1, "miter-Bt")}
-      {(faces.back || faces.right) && miterCap(C, -1, 1, 1, -1, "miter-C")}
-      {(faces.back || faces.left) && miterCap(D, 1, 1, -1, -1, "miter-D")}
-      {(faces.back || faces.top) && miterCap(Ct, -1, -1, 1, 1, "miter-Ct")}
-      {(faces.back || faces.top) && miterCap(Dt, 1, -1, -1, 1, "miter-Dt")}
-    </g>
-  ) : (
-    <g>
-      {(faces.left || faces.front) && diamondJoint(A, add(A, 0, -edge), add(A, -edge, 0), "diamond-A")}
-      {(faces.right || faces.front) && diamondJoint(B, add(B, 0, -edge), add(B, edge, 0), "diamond-B")}
-      {(faces.left || faces.top) && diamondJoint(At, add(At, 0, edge), add(At, -edge, 0), "diamond-At")}
-      {(faces.right || faces.top) && diamondJoint(Bt, add(Bt, 0, edge), add(Bt, edge, 0), "diamond-Bt")}
-      {(faces.back || faces.right) && diamondJoint(C, add(C, 0, edge), add(C, edge, 0), "diamond-C")}
-      {(faces.back || faces.left) && diamondJoint(D, add(D, 0, edge), add(D, -edge, 0), "diamond-D")}
-    </g>
-  )
+  const shelfThicknessPx = Math.max(1.5, (shelfThicknessCm / Math.max(H, 1)) * hz)
+  const topInsetPx = (topGlassCm / Math.max(H, 1)) * hz
+  const bottomInsetPx = (bottomGlassCm / Math.max(H, 1)) * hz
+  const cmToPxY = hz / Math.max(H, 1)
 
   const shelfYs: number[] = []
   if (shelfCount > 0 && hz > 40) {
-    const usable = Math.max(hz - 30, 1)
-    const step = usable / (shelfCount + 1)
-    for (let i = 1; i <= shelfCount; i++) shelfYs.push(At.y + 15 + step * i)
+    let y = At.y + topInsetPx + firstGapCm * cmToPxY
+    for (let i = 0; i < shelfCount; i++) {
+      shelfYs.push(y)
+      y += shelfThicknessPx + (i < shelfCount - 1 ? remainingGapCm * cmToPxY : 0)
+    }
   }
 
   const shelfPolygon = (y: number) => [
-    { x: A.x + edge, y },
-    { x: B.x - edge, y },
-    { x: C.x - edge, y: y - depth * 0.9 },
-    { x: D.x + edge, y: y - depth * 0.9 },
+    { x: A.x + glassT, y },
+    { x: B.x - glassT, y },
+    { x: C.x - glassT, y: y - depth * 0.88 },
+    { x: D.x + glassT, y: y - depth * 0.88 },
   ]
+  const shelfFrontEdge = (y: number) => [
+    { x: A.x + glassT, y },
+    { x: B.x - glassT, y },
+    { x: B.x - glassT, y: y + shelfThicknessPx },
+    { x: A.x + glassT, y: y + shelfThicknessPx },
+  ]
+  const shelfRightEdge = (y: number) => [
+    { x: B.x - glassT, y },
+    { x: C.x - glassT, y: y - depth * 0.88 },
+    { x: C.x - glassT, y: y - depth * 0.88 + shelfThicknessPx },
+    { x: B.x - glassT, y: y + shelfThicknessPx },
+  ]
+
+  // Clear opening dimensions, measured between actual glass faces rather than
+  // between their centerlines. This is the value shown to the customer.
+  const shelfGapCm = shelfYs.map((_, i) => i === 0 ? round1(firstGapCm) : round1(remainingGapCm))
+  // clearHeightCm already has ALL shelf thicknesses removed. Therefore the
+  // bottom clear opening is simply what remains after the first gap and the
+  // (N-1) gaps between shelves. Do not subtract shelf thickness again here.
+  const bottomGapCm = shelfYs.length
+    ? round1(Math.max(clearHeightCm - firstGapCm - Math.max(shelfCount - 1, 0) * remainingGapCm, 0))
+    : 0
+
+  const jointTitle = isMiter ? "اتصال ۴۵ درجه (فارسی‌بُر / Miter)" : "اتصال دیاموند / گونیا (۹۰ درجه)"
+  const jointNote = isMiter
+    ? "دو لبه شیشه با برش ۴۵° روی یک خط مشترک به هم می‌رسند؛ هیچ لبه‌ای از ابعاد باکس بیرون نمی‌زند."
+    : "یک شیشه تا گوشه ادامه دارد و شیشه دوم به لبه ۱۰ میلی‌متری آن می‌رسد؛ اتصال کاملاً گونیا است."
 
   return (
     <div className="w-full flex flex-col items-center">
       <svg
-        viewBox="0 0 500 390"
-        width={500 * zoom}
-        height={390 * zoom}
+        viewBox="0 0 760 520"
+        width={760 * zoom}
+        height={520 * zoom}
         className="max-w-full"
         role="img"
-        aria-label={`${isMiter ? "باکس شیشه‌ای با اتصال مایتر ۴۵ درجه" : "باکس شیشه‌ای با اتصال دیاموند / گونیا"} ${L}×${W}×${H}`}
+        aria-label={`${jointTitle} - ${L}×${W}×${H} سانتی‌متر`}
       >
         <defs>
-          <linearGradient id={`glass-front-${svgId}`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="rgba(255,255,255,0.44)" />
-            <stop offset="55%" stopColor={col.fill} />
-            <stop offset="100%" stopColor={col.fillSide} />
+          <linearGradient id={`front-${svgId}`} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.34" />
+            <stop offset="55%" stopColor={col.fill} stopOpacity="0.30" />
+            <stop offset="100%" stopColor={col.fillSide} stopOpacity="0.24" />
           </linearGradient>
-          <linearGradient id={`glass-side-${svgId}`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor={col.fillSide} />
-            <stop offset="100%" stopColor={col.fill} />
+          <linearGradient id={`side-${svgId}`} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor={col.fillSide} stopOpacity="0.28" />
+            <stop offset="100%" stopColor={col.fill} stopOpacity="0.36" />
           </linearGradient>
-          <linearGradient id={`glass-top-${svgId}`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="rgba(255,255,255,0.48)" />
-            <stop offset="100%" stopColor={col.fill} />
+          <linearGradient id={`top-${svgId}`} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.40" />
+            <stop offset="100%" stopColor={col.fill} stopOpacity="0.32" />
           </linearGradient>
-          <filter id={`glass-shadow-${svgId}`} x="-20%" y="-20%" width="140%" height="160%">
-            <feDropShadow dx="0" dy="7" stdDeviation="6" floodOpacity="0.13" />
+          <filter id={`shadow-${svgId}`} x="-30%" y="-30%" width="160%" height="180%">
+            <feDropShadow dx="0" dy="8" stdDeviation="7" floodColor="#0f172a" floodOpacity="0.12" />
           </filter>
         </defs>
 
-        <ellipse cx={(A.x + C.x) / 2} cy={y0 + 17} rx={Math.max(lx * 0.43, 58)} ry={13} fill="#000" opacity={0.08} />
+        <rect x="8" y="8" width="744" height="504" rx="20" fill="#ffffff" opacity="0.56" />
+        <rect x="28" y="25" width={isMiter ? 275 : 270} height="38" rx="12" fill={isMiter ? "#fff7ed" : "#ecfeff"} stroke={isMiter ? "#d97706" : col.rim} strokeWidth="1.2" />
+        <text x={isMiter ? 165 : 163} y="50" textAnchor="middle" fontSize="16" fontWeight="800" fill={isMiter ? "#9a3412" : col.stroke} style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>
+          {jointTitle}
+        </text>
 
-        <g filter={`url(#glass-shadow-${svgId})`}>
-          {drawPanels()}
-          {sideRims}
-          {frontRim}
-          {joints}
+        <ellipse cx={shadowCx} cy={y0 + 24} rx={shadowRx} ry="15" fill="#0f172a" opacity="0.10" />
 
-          {faces.front && (
-            <>
-              <line x1={A.x + lx * 0.15} y1={A.y - hz * 0.1} x2={A.x + lx * 0.39} y2={A.y - hz * 0.88} stroke="#fff" strokeWidth={2.2} opacity={0.20} />
-              <line x1={A.x + lx * 0.56} y1={A.y - hz * 0.2} x2={A.x + lx * 0.66} y2={A.y - hz * 0.62} stroke="#fff" strokeWidth={1.2} opacity={0.12} />
-            </>
+        <g filter={`url(#shadow-${svgId})`}>
+          {/* Glass sheets themselves */}
+          {faces.back && surface([D, C, Ct, Dt], `url(#side-${svgId})`, 0.72, "back")}
+          {faces.bottom && surface([A, B, C, D], `url(#side-${svgId})`, 0.24, "bottom")}
+          {faces.left && surface([A, D, Dt, At], `url(#front-${svgId})`, 0.72, "left")}
+          {faces.right && surface([B, C, Ct, Bt], `url(#side-${svgId})`, 0.72, "right")}
+          {faces.front && surface([A, B, Bt, At], `url(#front-${svgId})`, 0.28, "front")}
+          {faces.top && surface([At, Bt, Ct, Dt], `url(#top-${svgId})`, 0.34, "top")}
+
+          {/* Exposed edges of the front opening: all bands point inward. */}
+          {faces.left && !faces.front && edgeBand(A, At, glassT * 0.95, 0, "edge-left")}
+          {faces.right && !faces.front && edgeBand(Bt, B, -glassT * 0.95, 0, "edge-right")}
+          {faces.top && !faces.front && edgeBand(At, Bt, 0, glassT * 0.95, "edge-top")}
+          {faces.bottom && !faces.front && edgeBand(B, A, 0, -glassT * 0.95, "edge-bottom")}
+
+          {/* Back and side exposed edges remain subtle, never bulky. */}
+          {faces.back && edgeBand(Dt, Ct, 0, glassT * 0.55, "back-top-edge")}
+          {faces.back && edgeBand(D, C, 0, -glassT * 0.55, "back-bottom-edge")}
+
+          {/* Actual corner construction. The seam is kept within the nominal box. */}
+          {isMiter ? (
+            <g>
+              {miterSeam(Bt, add(Bt, -glassT, glassT), add(Bt, -glassT, 0), "miter-top-right")}
+              {miterSeam(At, add(At, glassT, glassT), add(At, glassT, 0), "miter-top-left")}
+              {miterSeam(B, add(B, -glassT, -glassT), add(B, -glassT, 0), "miter-bottom-right")}
+              {miterSeam(A, add(A, glassT, -glassT), add(A, glassT, 0), "miter-bottom-left")}
+            </g>
+          ) : (
+            <g>
+              {buttSeam(Bt, add(Bt, -glassT, 0), "butt-top-right")}
+              {buttSeam(B, add(B, -glassT, 0), "butt-bottom-right")}
+              {buttSeam(At, add(At, glassT, 0), "butt-top-left")}
+              {buttSeam(A, add(A, glassT, 0), "butt-bottom-left")}
+            </g>
           )}
+
+          {/* restrained glass reflections */}
+          <path d={`M ${A.x + lx * 0.14} ${At.y + hz * 0.20} L ${A.x + lx * 0.31} ${At.y + hz * 0.05}`} stroke="#ffffff" strokeWidth="3" opacity="0.20" strokeLinecap="round" />
+          <path d={`M ${B.x - lx * 0.26} ${Bt.y + hz * 0.14} L ${B.x - lx * 0.10} ${Bt.y + hz * 0.02}`} stroke="#ffffff" strokeWidth="2" opacity="0.17" strokeLinecap="round" />
 
           {shelfYs.map((y, i) => (
             <g key={`shelf-${i}`}>
-              <polygon points={pstr(shelfPolygon(y))} fill={col.fill} stroke={col.rim} strokeWidth={1.2} opacity={0.78} />
-              <line x1={A.x + edge} y1={y} x2={B.x - edge} y2={y} stroke={col.stroke} strokeWidth={1} opacity={0.75} />
+              {/* Shelf is transparent glass, not a dark/shadowed slab. The 10 mm
+                  thickness is represented only by a very narrow translucent edge. */}
+              <polygon points={pstr(shelfPolygon(y))} fill={col.fill} fillOpacity="0.12" stroke={col.rim} strokeWidth="0.65" />
+              <polygon points={pstr(shelfFrontEdge(y))} fill={col.fill} fillOpacity="0.16" stroke={col.rim} strokeWidth="0.55" />
+              <polygon points={pstr(shelfRightEdge(y))} fill={col.fill} fillOpacity="0.13" stroke={col.rim} strokeWidth="0.45" />
+              <line
+                x1={A.x + 8}
+                y1={y}
+                x2={B.x - 8}
+                y2={y}
+                stroke="#ffffff"
+                strokeWidth="0.65"
+                opacity="0.28"
+              />
             </g>
           ))}
 
+          {/* Shelf spacing dimensions: shown only when shelves exist. */}
+          {shelfYs.length > 0 && (
+            <g style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>
+              {shelfGapCm.map((gap, i) => {
+                const yTop = i === 0 ? At.y + topInsetPx + 2 : shelfYs[i - 1] + shelfThicknessPx + 2
+                const yBottom = shelfYs[i] - 2
+                const xDim = B.x - 22
+                const yMid = (yTop + yBottom) / 2
+                return (
+                  <g key={`shelf-gap-${i}`}>
+                    {yBottom - yTop > 16 && (
+                      <>
+                        <line x1={xDim} y1={yTop} x2={xDim} y2={yBottom} stroke={col.rim} strokeWidth="1" />
+                        <path d={`M ${xDim - 3} ${yTop + 5} L ${xDim} ${yTop} L ${xDim + 3} ${yTop + 5}`} fill="none" stroke={col.rim} strokeWidth="1" />
+                        <path d={`M ${xDim - 3} ${yBottom - 5} L ${xDim} ${yBottom} L ${xDim + 3} ${yBottom - 5}`} fill="none" stroke={col.rim} strokeWidth="1" />
+                        <rect x={xDim - 27} y={yMid - 9} width="54" height="18" rx="5" fill="#ffffff" opacity="0.88" />
+                        <text x={xDim} y={yMid + 4} textAnchor="middle" fontSize="11" fontWeight="800" fill={col.stroke}>
+                          {gap} cm
+                        </text>
+                      </>
+                    )}
+                  </g>
+                )
+              })}
+
+              {shelfYs.length > 0 && A.y - shelfYs[shelfYs.length - 1] > 16 && (
+                <g>
+                  {(() => {
+                    const yTop = shelfYs[shelfYs.length - 1] + shelfThicknessPx + 2
+                    const yBottom = A.y - bottomInsetPx - 2
+                    const xDim = B.x - 22
+                    const yMid = (yTop + yBottom) / 2
+                    return (
+                      <>
+                        <line x1={xDim} y1={yTop} x2={xDim} y2={yBottom} stroke={col.rim} strokeWidth="1" />
+                        <path d={`M ${xDim - 3} ${yTop + 5} L ${xDim} ${yTop} L ${xDim + 3} ${yTop + 5}`} fill="none" stroke={col.rim} strokeWidth="1" />
+                        <path d={`M ${xDim - 3} ${yBottom - 5} L ${xDim} ${yBottom} L ${xDim + 3} ${yBottom - 5}`} fill="none" stroke={col.rim} strokeWidth="1" />
+                        <rect x={xDim - 27} y={yMid - 9} width="54" height="18" rx="5" fill="#ffffff" opacity="0.88" />
+                        <text x={xDim} y={yMid + 4} textAnchor="middle" fontSize="11" fontWeight="800" fill={col.stroke}>
+                          {bottomGapCm} cm
+                        </text>
+                      </>
+                    )
+                  })()}
+                </g>
+              )}
+
+              <text x={B.x - 58} y={At.y + 12} fontSize="10" fontWeight="800" fill={col.stroke}>فاصله طبقات</text>
+            </g>
+          )}
+
           {hasSlidingDoors && faces.front && (
-            <line x1={(A.x + B.x) / 2} y1={A.y} x2={(A.x + B.x) / 2} y2={At.y} stroke={col.rim} strokeWidth={2} strokeDasharray="5 4" opacity={0.9} />
+            <line x1={(A.x + B.x) / 2} y1={A.y} x2={(A.x + B.x) / 2} y2={At.y} stroke={col.rim} strokeWidth="1.5" strokeDasharray="5 4" opacity="0.70" />
           )}
         </g>
 
-        <g transform="translate(18,18)">
-          <rect x="0" y="0" rx="9" width={isMiter ? 190 : 175} height="31" fill={isMiter ? "rgba(245,158,11,0.10)" : "rgba(13,148,136,0.10)"} stroke={isMiter ? "#d97706" : col.rim} strokeWidth="1" />
-          <text x={isMiter ? 95 : 87.5} y="21" textAnchor="middle" fontSize="13" fontWeight="800" fill={isMiter ? "#b45309" : col.stroke} style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>
-            {isMiter ? "اتصال ۴۵° واقعی — دو لبه برش خورده" : "اتصال دیاموند / گونیا — اتصال ۹۰°"}
-          </text>
+        {/* Dimensions */}
+        <g stroke={col.rim} strokeWidth="1.15" fill={col.stroke} style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>
+          <line x1={A.x} y1={y0 + 31} x2={B.x} y2={y0 + 31} />
+          <line x1={A.x} y1={y0 + 25} x2={A.x} y2={y0 + 37} />
+          <line x1={B.x} y1={y0 + 25} x2={B.x} y2={y0 + 37} />
+          <text x={(A.x + B.x) / 2} y={y0 + 56} textAnchor="middle" fontSize="15" fontWeight="800">{L} cm</text>
+          <line x1={A.x - 25} y1={A.y} x2={A.x - 25} y2={At.y} />
+          <line x1={A.x - 31} y1={A.y} x2={A.x - 19} y2={A.y} />
+          <line x1={A.x - 31} y1={At.y} x2={A.x - 19} y2={At.y} />
+          <text x={A.x - 42} y={(A.y + At.y) / 2 + 5} textAnchor="middle" fontSize="15" fontWeight="800">{H} cm</text>
+          <line x1={B.x + 17} y1={B.y - 3} x2={C.x + 17} y2={C.y - 3} />
+          <text x={(B.x + C.x) / 2 + 28} y={(B.y + C.y) / 2 - 1} fontSize="15" fontWeight="800">{W} cm</text>
         </g>
 
-        <g stroke={col.rim} strokeWidth={1.05} fill={col.stroke}>
-          <line x1={A.x} y1={y0 + 28} x2={B.x} y2={y0 + 28} />
-          <line x1={A.x} y1={y0 + 22} x2={A.x} y2={y0 + 34} />
-          <line x1={B.x} y1={y0 + 22} x2={B.x} y2={y0 + 34} />
-          <text x={(A.x + B.x) / 2} y={y0 + 51} textAnchor="middle" fontSize="13" fontWeight="700" style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>{length}</text>
-          <line x1={A.x - 19} y1={A.y} x2={A.x - 19} y2={At.y} />
-          <text x={A.x - 33} y={(A.y + At.y) / 2 + 4} textAnchor="middle" fontSize="13" fontWeight="700" style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>{height}</text>
-          <line x1={B.x + 13} y1={B.y - 3} x2={C.x + 13} y2={C.y - 3} />
-          <text x={(B.x + C.x) / 2 + 24} y={(B.y + C.y) / 2} fontSize="13" fontWeight="700" style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>{width}</text>
+        <g transform="translate(515,330)">
+          <rect x="0" y="0" width="215" height="105" rx="14" fill="#ffffff" opacity="0.90" stroke={col.rim} strokeWidth="1" />
+          <text x="107" y="24" textAnchor="middle" fontSize="13" fontWeight="800" fill="#183b43" style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>
+            {isMiter ? "نمای نزدیک فارسی‌بُر ۴۵°" : "نمای نزدیک دیاموند / گونیا"}
+          </text>
+          {isMiter ? (
+            <g transform="translate(46,44)">
+              {/* two 10 mm panes meeting flush on a true 45° seam */}
+              <polygon points="0,0 92,0 72,17 20,17" fill={col.rim} fillOpacity="0.82" />
+              <polygon points="72,17 92,0 92,54 72,70" fill={col.rim} fillOpacity="0.66" />
+              <line x1="20" y1="17" x2="72" y2="17" stroke="#123f44" strokeWidth="1" />
+              <line x1="72" y1="17" x2="72" y2="70" stroke="#123f44" strokeWidth="1" />
+              <line x1="72" y1="17" x2="92" y2="0" stroke="#ffffff" strokeWidth="1.2" opacity="0.9" />
+            </g>
+          ) : (
+            <g transform="translate(57,43)">
+              <polygon points="0,0 92,0 92,18 0,18" fill={col.rim} fillOpacity="0.82" />
+              <polygon points="74,18 92,18 92,72 74,72" fill={col.rim} fillOpacity="0.66" />
+              <line x1="74" y1="18" x2="74" y2="72" stroke="#123f44" strokeWidth="1" />
+            </g>
+          )}
         </g>
       </svg>
 
-      <p className="mt-1 text-sm font-black text-teal-800">
-        {isMiter
-          ? "اتصال ۴۵ درجه: هر دو لبه در گوشه با برش مایتر به هم می‌رسند"
-          : "اتصال دیاموند / گونیا: اتصال عمود ۹۰ درجه با لبه‌ی قابل مشاهده"}
-        {label ? ` — ${label}` : ""}
-      </p>
+      <div className="mt-1 text-center text-sm font-bold" style={{ color: isMiter ? "#0f766e" : "#155e75" }}>
+        {jointNote}
+      </div>
     </div>
   )
 }
@@ -1245,6 +1363,7 @@ export default function BoxDesignPage() {
                         width={res.cfg.dimensions.width}
                         height={res.cfg.dimensions.height}
                         shelfCount={res.cfg.shelfCount}
+                        thickness={res.cfg.thickness}
                         shelfOffsetFromTop={
                           res.cfg.useCustomShelfOffset ? res.cfg.shelfOffsetFromTop : null
                         }

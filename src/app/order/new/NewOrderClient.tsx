@@ -340,6 +340,8 @@ export default function NewOrderClient() {
   const [newProduct, setNewProduct] = useState("")
   const [newProductCode, setNewProductCode] = useState("")
   const [showProductDropdown, setShowProductDropdown] = useState(false)
+  // ایندکس کالای هایلایت‌شده در نتایج جستجو (برای انتخاب با کیبورد، بدون نیاز به موس)
+  const [productActiveIndex, setProductActiveIndex] = useState(0)
   const [newInstallCode, setNewInstallCode] = useState("")
   const [newUnit, setNewUnit] = useState("مترمربع")
   const [newLength, setNewLength] = useState("")
@@ -1105,6 +1107,18 @@ export default function NewOrderClient() {
     setShowCustomerDropdown(false)
   }
 
+  // انتخاب یک کالا از نتایج جستجو (چه با کلیک موس، چه با اینتر از کیبورد) — در هر
+  // دو حالت بلافاصله فوکوس به «قیمت واحد» می‌رود تا بدون نیاز به موس، مستقیم قیمت تایپ شود
+  const selectProduct = (p: { name: string; code: string }) => {
+    setNewProduct(p.name)
+    setNewProductCode(p.code)
+    setDebouncedProductQuery(p.name)
+    setNewUnitPrice("")
+    setShowProductDropdown(false)
+    setProductActiveIndex(0)
+    setTimeout(() => unitPriceRef.current?.focus(), 0)
+  }
+
   // شروع ویرایش یک قلم موجود (کلیک روی ردیف جدول، مشابه رفتار ویرایش خدمات)
   const startEditItem = (item: OrderItem) => {
     setEditingItemId(item.id)
@@ -1195,6 +1209,15 @@ export default function NewOrderClient() {
         cancelEditItem()
         return
       }
+      // هیچ مودال/دراپ‌داونی باز نیست و ویرایش قلمی هم در جریان نیست:
+      // اگر فوکوس روی یکی از فیلدهای فرم (مثلاً بخش «اطلاعات سفارش») است، ابتدا فقط از آن خارج شود؛
+      // و اگر از قبل هیچ فیلدی فوکوس ندارد (یعنی اسکیپ دوباره زده شده)، از کل صفحه خارج شویم
+      const active = document.activeElement as HTMLElement | null
+      if (active && active !== document.body && typeof active.blur === "function") {
+        active.blur()
+        return
+      }
+      router.push("/order")
     }
     window.addEventListener("keydown", handleEscape)
     return () => window.removeEventListener("keydown", handleEscape)
@@ -1213,6 +1236,7 @@ export default function NewOrderClient() {
     editingItemId,
     items,
     currentItemId,
+    router,
   ])
 
   const saveItem = () => {
@@ -2350,7 +2374,7 @@ export default function NewOrderClient() {
   return (
     <>
       <div
-        className="min-h-screen p-3 relative overflow-hidden bg-cover bg-center bg-no-repeat bg-fixed print:hidden"
+        className="min-h-screen p-3 relative bg-cover bg-center bg-no-repeat bg-fixed print:hidden"
         style={{
           backgroundImage: "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
           fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif",
@@ -2701,7 +2725,7 @@ export default function NewOrderClient() {
                 <h2 className="mb-3 text-xl font-bold text-blue-950">
                   {editingItemId ? "ویرایش کالا" : "افزودن کالا جدید"}
                 </h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-[2.4fr_1.7fr_1.2fr_1fr_1fr_1fr_1fr_1.7fr] gap-3 items-end">
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-[3.4fr_1.7fr_1.2fr_1fr_1fr_1fr_1fr_1.7fr] gap-3 items-end">
                   <div className="col-span-2 md:col-span-4 lg:col-span-1 relative min-w-0" onClick={(e) => e.stopPropagation()}>
                     <label className={labelClass}>نام کالا</label>
                     <input
@@ -2712,35 +2736,53 @@ export default function NewOrderClient() {
                         setNewProduct(e.target.value)
                         setNewProductCode("")
                         setNewUnitPrice("")
+                        setProductActiveIndex(0)
                         setShowProductDropdown(true)
                       }}
                       onFocus={() => setShowProductDropdown(true)}
-                      onKeyDown={(e) => handleEnter(e, unitPriceRef)}
+                      onKeyDown={(e) => {
+                        const listOpen = showProductDropdown && filteredProducts.length > 0
+                        if (e.key === "ArrowDown" && listOpen) {
+                          e.preventDefault()
+                          setProductActiveIndex((i) => Math.min(i + 1, filteredProducts.length - 1))
+                        } else if (e.key === "ArrowUp" && listOpen) {
+                          e.preventDefault()
+                          setProductActiveIndex((i) => Math.max(i - 1, 0))
+                        } else if (e.key === "Enter") {
+                          e.preventDefault()
+                          // کالایِ هایلایت‌شده (پیش‌فرض: اولین نتیجه) با اینتر انتخاب می‌شود، بدون نیاز به موس
+                          if (listOpen && newProduct.trim()) {
+                            selectProduct(filteredProducts[Math.min(productActiveIndex, filteredProducts.length - 1)])
+                          } else {
+                            focusRef(unitPriceRef)
+                          }
+                        } else if (e.key === "Tab" && !e.shiftKey && listOpen && newProduct.trim()) {
+                          e.preventDefault()
+                          selectProduct(filteredProducts[Math.min(productActiveIndex, filteredProducts.length - 1)])
+                        }
+                      }}
                       placeholder="جستجوی کالا... (مثلاً «4» برای همه‌ی ۴ میلی‌ها)"
                       className={inputClass}
                       autoComplete="off"
                     />
                     {showProductDropdown && filteredProducts.length > 0 && (
-                      <div className="absolute z-50 mt-1 w-full max-h-72 overflow-y-auto rounded-xl border border-teal-200 bg-white shadow-2xl">
-                        {filteredProducts.map((p) => (
+                      <div className="absolute z-50 mt-1 right-0 w-max min-w-full sm:min-w-[30rem] max-w-[95vw] max-h-[28rem] overflow-y-auto rounded-xl border border-teal-200 bg-white shadow-2xl">
+                        {filteredProducts.map((p, idx) => (
                           <button
                             key={p.code || p.name}
                             type="button"
-                            onClick={() => {
-                              setNewProduct(p.name)
-                              setNewProductCode(p.code)
-                              setDebouncedProductQuery(p.name)
-                              setNewUnitPrice("")
-                              setShowProductDropdown(false)
-                              // فوکوس خودکار به «قیمت واحد» تا بدون کلیک اضافی با موس، بشود مستقیم قیمت را تایپ کرد
-                              setTimeout(() => unitPriceRef.current?.focus(), 0)
+                            ref={(el) => {
+                              if (el && idx === productActiveIndex) el.scrollIntoView({ block: "nearest" })
                             }}
-                            className="flex w-full items-center gap-2 text-right px-4 py-2 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50"
+                            onClick={() => selectProduct(p)}
+                            className={`flex w-full items-center gap-2 text-right px-4 py-2 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50 ${
+                              idx === productActiveIndex ? "bg-yellow-100" : ""
+                            }`}
                           >
                             <bdi className="shrink-0 rounded-md bg-teal-50 px-1.5 py-0.5 text-teal-700 font-mono text-xs">
                               {p.code}
                             </bdi>
-                            <bdi className="truncate">{p.name}</bdi>
+                            <bdi>{p.name}</bdi>
                           </button>
                         ))}
                         {(filteredProducts.length === 20 || filteredProducts.length === 40) && (
@@ -2759,7 +2801,7 @@ export default function NewOrderClient() {
                       value={newUnitPrice}
                       onChange={(e) => setNewUnitPrice(formatWithCommas(e.target.value))}
                       onKeyDown={(e) => handleEnter(e, unitRef)}
-                      className={priceInputClass}
+                      className={`${inputClass} font-bold`}
                       placeholder=""
                       autoComplete="off"
                     />
@@ -2843,7 +2885,7 @@ export default function NewOrderClient() {
                       value={newItemPreviewTotal}
                       readOnly
                       tabIndex={-1}
-                      className={priceReadOnlyClass}
+                      className="w-full rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-bold text-teal-800"
                     />
                   </div>
                 </div>
@@ -3490,31 +3532,43 @@ export default function NewOrderClient() {
                   </div>
 
                   {serviceSearch.trim() !== "" && (
-                    <div className="mb-4 max-h-52 overflow-y-auto rounded-xl border border-teal-200 bg-teal-50 p-3">
+                    <div className="mb-4 max-h-[28rem] overflow-y-auto rounded-xl border border-teal-200 bg-teal-50 p-3">
                       <div className="flex flex-col gap-1.5">
                         {allFilteredServices.length > 0 ? (
-                          allFilteredServices.map((s, idx) => (
-                            <button
-                              key={s.code + s.name}
-                              type="button"
-                              ref={(el) => {
-                                if (el && idx === serviceActiveIndex) el.scrollIntoView({ block: "nearest" })
-                              }}
-                              onClick={() => {
-                                setSvcTitle(s.name)
-                                setServiceSearch("")
-                                setServiceActiveIndex(0)
-                              }}
-                              className={`flex w-full items-center gap-2 text-right rounded-lg bg-white border px-3 py-2.5 text-base font-bold text-blue-900 hover:bg-yellow-100 transition ${
-                                idx === serviceActiveIndex ? "border-teal-500 bg-yellow-50 ring-2 ring-teal-300" : "border-teal-300"
-                              }`}
-                            >
-                              {s.code && (
-                                <bdi className="shrink-0 rounded-md bg-teal-50 px-1.5 py-0.5 text-teal-700 font-mono text-xs">{s.code}</bdi>
-                              )}
-                              <bdi className="truncate">{s.name}</bdi>
-                            </button>
-                          ))
+                          (() => {
+                            let lastCategory = ""
+                            return allFilteredServices.map((s, idx) => {
+                              const category = categorizeService(s.name)
+                              const showHeader = category !== lastCategory
+                              lastCategory = category
+                              return (
+                                <Fragment key={s.code + s.name}>
+                                  {showHeader && (
+                                    <div className="mt-2 first:mt-0 px-1 text-xs font-bold text-teal-700">{category}</div>
+                                  )}
+                                  <button
+                                    type="button"
+                                    ref={(el) => {
+                                      if (el && idx === serviceActiveIndex) el.scrollIntoView({ block: "nearest" })
+                                    }}
+                                    onClick={() => {
+                                      setSvcTitle(s.name)
+                                      setServiceSearch("")
+                                      setServiceActiveIndex(0)
+                                    }}
+                                    className={`flex w-full items-center gap-2 text-right rounded-lg bg-white border px-3 py-2.5 text-base font-bold text-blue-900 hover:bg-yellow-100 transition ${
+                                      idx === serviceActiveIndex ? "border-teal-500 bg-yellow-50 ring-2 ring-teal-300" : "border-teal-300"
+                                    }`}
+                                  >
+                                    {s.code && (
+                                      <bdi className="shrink-0 rounded-md bg-teal-50 px-1.5 py-0.5 text-teal-700 font-mono text-xs">{s.code}</bdi>
+                                    )}
+                                    <bdi>{s.name}</bdi>
+                                  </button>
+                                </Fragment>
+                              )
+                            })
+                          })()
                         ) : (
                           <span className="text-blue-600 text-base">موردی پیدا نشد</span>
                         )}

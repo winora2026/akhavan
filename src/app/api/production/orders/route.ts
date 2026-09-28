@@ -7,6 +7,15 @@ function mapServiceToStation(serviceName: string): string | null {
 
   if (!name) return null
 
+  // بسته‌بندی فقط وقتی صراحتاً در خدمات باشد
+  if (
+    name.includes("بسته") ||
+    name.includes("پکیج") ||
+    name.includes("pack")
+  ) {
+    return "بسته‌بندی"
+  }
+
   if (name.includes("تراش الگویی") || name.includes("الگویی")) return "تراش الگویی"
   if (name.includes("تراش")) return "تراش"
   if (name.includes("دیاموند زاویه") || name.includes("زاویه")) return "دیاموند زاویه"
@@ -30,8 +39,103 @@ function mapServiceToStation(serviceName: string): string | null {
   if (name.includes("سوراخ")) return "سوراخکاری"
   if (name.includes("سکوریت") || name.includes("تمپر")) return "سکوریت"
   if (name.includes("چاپ")) return "چاپ"
+  if (name.includes("شست")) return "شست و شو"
+  if (name.includes("بارگیری") || name.includes("بار گيری")) return "بارگیری"
 
   return null
+}
+
+function collectServiceNames(salesItem: any): string[] {
+  const names: string[] = []
+
+  for (const itemService of salesItem?.services || []) {
+    const n = itemService?.service?.name
+    if (n) names.push(String(n))
+  }
+
+  if (salesItem?.servicesData) {
+    try {
+      const parsed =
+        typeof salesItem.servicesData === "string"
+          ? JSON.parse(salesItem.servicesData)
+          : salesItem.servicesData
+      if (Array.isArray(parsed)) {
+        for (const s of parsed) {
+          const n = s.title || s.name || ""
+          if (n) names.push(String(n))
+        }
+      }
+    } catch (e) {
+      console.error("خطا در خواندن servicesData:", e)
+    }
+  }
+
+  return names
+}
+
+/** ساخت مسیر ایستگاه برای یک قلم */
+function buildRouteStationNames(salesItem: any): string[] {
+  const route: string[] = []
+
+  // 1) همیشه اول: برش
+  route.push("برش")
+
+  // 2) ایستگاه‌های تخصصی فقط از خدمات سفارش
+  const serviceStationSet = new Set<string>()
+  let hasPackaging = false
+
+  for (const serviceName of collectServiceNames(salesItem)) {
+    const mapped = mapServiceToStation(serviceName)
+    if (!mapped) continue
+    if (mapped === "بسته‌بندی") {
+      hasPackaging = true
+      continue
+    }
+    // شست و شو / بارگیری را از خدمات جدا می‌گیریم تا ترتیب ثابت بماند
+    if (mapped === "شست و شو" || mapped === "بارگیری") continue
+    serviceStationSet.add(mapped)
+  }
+
+  const preferredOrder = [
+    "تراش",
+    "تراش الگویی",
+    "دیاموند",
+    "دیاموند زاویه",
+    "لول معمولی",
+    "لول براق",
+    "CNC",
+    "سوراخکاری",
+    "سندبلاست",
+    "چاپ",
+    "LED",
+    "MDF",
+    "لیمینت",
+    "دوجداره",
+    "سکوریت",
+  ]
+
+  for (const name of preferredOrder) {
+    if (serviceStationSet.has(name)) route.push(name)
+  }
+
+  // 3) همیشه: شست و شو
+  route.push("شست و شو")
+
+  // 4) بسته‌بندی فقط در صورت وجود خدمت/اجرت بسته‌بندی
+  if (hasPackaging) {
+    route.push("بسته‌بندی")
+  }
+
+  // 5) انبار محصول یک → انبار محصول دو
+  // (تا وقتی ایستگاه‌های میانی در جریان‌اند، کار در انبار ۱ دیده می‌شود؛
+  // بعد از اتمام مسیر میانی به انبار ۲ و در نهایت بارگیری می‌رود)
+  route.push("انبار محصول یک")
+  route.push("انبار محصول دو")
+
+  // 6) همیشه آخر: بارگیری
+  route.push("بارگیری")
+
+  return route
 }
 
 // تولید بارکد عددی یکتا شبیه سپهر
@@ -77,7 +181,10 @@ export async function GET() {
     return NextResponse.json(productionOrders)
   } catch (error) {
     console.error(error)
-    return NextResponse.json({ error: "خطا در دریافت لیست تولید" }, { status: 500 })
+    return NextResponse.json(
+      { error: "خطا در دریافت لیست تولید" },
+      { status: 500 }
+    )
   }
 }
 
@@ -87,7 +194,10 @@ export async function POST(req: Request) {
     const { orderId } = body
 
     if (!orderId) {
-      return NextResponse.json({ error: "شناسه سفارش الزامی است" }, { status: 400 })
+      return NextResponse.json(
+        { error: "شناسه سفارش الزامی است" },
+        { status: 400 }
+      )
     }
 
     const order = await prisma.order.findUnique({
@@ -132,10 +242,29 @@ export async function POST(req: Request) {
     const stationByName = new Map(allStations.map((s) => [s.name, s]))
     const getStationId = (name: string) => stationByName.get(name)?.id
 
+    // اطمینان از وجود ایستگاه‌های ضروری مسیر
+    const requiredStations = [
+      "برش",
+      "شست و شو",
+      "بسته‌بندی",
+      "انبار محصول یک",
+      "انبار محصول دو",
+      "بارگیری",
+    ]
+    for (const name of requiredStations) {
+      if (!stationByName.has(name)) {
+        return NextResponse.json(
+          {
+            error: `ایستگاه «${name}» در سیستم تعریف نشده است. ابتدا seed ایستگاه‌ها را اجرا کنید.`,
+          },
+          { status: 400 }
+        )
+      }
+    }
+
     const count = await prisma.productionOrder.count()
     const productionNumber = `PROD-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`
 
-    // ساخت سفارش تولید
     const productionOrder = await prisma.productionOrder.create({
       data: {
         orderId: order.id,
@@ -146,7 +275,6 @@ export async function POST(req: Request) {
       },
     })
 
-    // ساخت اقلام + بارکد یکتا برای هر قلم
     for (const item of order.items) {
       const barcode = await getNextBarcode()
 
@@ -169,68 +297,11 @@ export async function POST(req: Request) {
       where: { productionOrderId: productionOrder.id },
     })
 
-    // تعیین مسیر خودکار برای هر قلم
     for (const prodItem of productionItems) {
       const salesItem = order.items.find((i) => i.id === prodItem.orderItemId)
       if (!salesItem) continue
 
-      const routeStationNames: string[] = []
-
-      // 1. همیشه اول: برش
-      routeStationNames.push("برش")
-
-      // 2. ایستگاه‌های تخصصی
-      const serviceStationSet = new Set<string>()
-
-      for (const itemService of (salesItem as any).services || []) {
-        const serviceName = itemService.service?.name || ""
-        const mapped = mapServiceToStation(serviceName)
-        if (mapped) serviceStationSet.add(mapped)
-      }
-
-      if ((salesItem as any).servicesData) {
-        try {
-          const parsed = JSON.parse((salesItem as any).servicesData)
-          if (Array.isArray(parsed)) {
-            for (const s of parsed) {
-              const serviceName = s.title || s.name || ""
-              const mapped = mapServiceToStation(serviceName)
-              if (mapped) serviceStationSet.add(mapped)
-            }
-          }
-        } catch (e) {
-          console.error("خطا در خواندن servicesData:", e)
-        }
-      }
-
-      const preferredOrder = [
-        "تراش",
-        "تراش الگویی",
-        "دیاموند",
-        "دیاموند زاویه",
-        "لول معمولی",
-        "لول براق",
-        "CNC",
-        "سوراخکاری",
-        "سندبلاست",
-        "چاپ",
-        "LED",
-        "MDF",
-        "لیمینت",
-        "دوجداره",
-        "سکوریت",
-      ]
-
-      for (const name of preferredOrder) {
-        if (serviceStationSet.has(name)) {
-          routeStationNames.push(name)
-        }
-      }
-
-      // 3. ایستگاه‌های ثابت انتهایی
-      routeStationNames.push("شست و شو")
-      routeStationNames.push("بسته‌بندی")
-      routeStationNames.push("بارگیری")
+      const routeStationNames = buildRouteStationNames(salesItem)
 
       let sequence = 1
       for (const stationName of routeStationNames) {
@@ -254,7 +325,7 @@ export async function POST(req: Request) {
       data: {
         productionOrderId: productionOrder.id,
         action: "ایجاد سفارش تولید",
-        description: `سفارش تولید ${productionNumber} از فاکتور ${order.orderNumber} ایجاد شد، بارکد و مسیر ایستگاه‌ها خودکار تعیین گردید`,
+        description: `سفارش تولید ${productionNumber} از فاکتور ${order.orderNumber} ایجاد شد؛ مسیر: برش → خدمات سفارش → شست‌وشو → [بسته‌بندی در صورت نیاز] → انبار۱ → انبار۲ → بارگیری`,
         newStatus: "در انتظار",
       },
     })
@@ -276,6 +347,9 @@ export async function POST(req: Request) {
     return NextResponse.json(result)
   } catch (error) {
     console.error(error)
-    return NextResponse.json({ error: "خطا در ایجاد سفارش تولید" }, { status: 500 })
+    return NextResponse.json(
+      { error: "خطا در ایجاد سفارش تولید" },
+      { status: 500 }
+    )
   }
 }

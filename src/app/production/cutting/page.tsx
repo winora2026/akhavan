@@ -48,8 +48,40 @@ const normalizeText = (value: string) => {
     .replace(/ي/g, "ی")
     .replace(/ك/g, "ک")
     .replace(/ة/g, "ه")
+    .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
     .toLowerCase()
     .trim()
+}
+
+const matchProductFilter = (productName: string, query: string) => {
+  const name = normalizeText(productName || "")
+  const q = normalizeText(query)
+  if (!q) return true
+  if (/^\d+(\.\d+)?$/.test(q)) {
+    const patterns = [
+      q + " میل",
+      q + "ميل",
+      q + "mm",
+      q + " mm",
+      " " + q + " ",
+      q + "میل",
+    ]
+    if (patterns.some((p) => name.includes(p))) return true
+    if (name.includes(q) && (name.includes("میل") || name.includes("mm"))) {
+      return true
+    }
+    return false
+  }
+  return name.includes(q)
+}
+
+const splitServices = (text?: string | null): string[] => {
+  if (!text) return []
+  return text
+    .split(/\s*[+_،,|/]\s*|\s+و\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
 }
 
 export default function CuttingPlanningPage() {
@@ -69,8 +101,11 @@ export default function CuttingPlanningPage() {
   const [showReportPreview, setShowReportPreview] = useState(false)
 
   const [showReprintModal, setShowReprintModal] = useState(false)
+  const [reprintMode, setReprintMode] = useState<"simple" | "waste">("simple")
   const [wasteReason, setWasteReason] = useState("")
-  const [wasteDepartment, setWasteDepartment] = useState<"تولید" | "اداری">("تولید")
+  const [wasteDepartment, setWasteDepartment] = useState<"تولید" | "اداری">(
+    "تولید"
+  )
   const [wastePerson, setWastePerson] = useState("")
 
   const [sortKey, setSortKey] = useState<SortKey>("orderNumber")
@@ -80,7 +115,6 @@ export default function CuttingPlanningPage() {
     fetchData()
   }, [])
 
-  // Escape: بستن مودال‌ها
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return
@@ -141,12 +175,15 @@ export default function CuttingPlanningPage() {
           el.innerHTML = ""
           JsBarcode(el, String(label.barcode), {
             format: "CODE128",
-            width: 1.6,
-            height: 36,
-            displayValue: false,
+            width: 1.5,
+            height: 34,
+            displayValue: true,
+            fontSize: 13,
+            textMargin: 2,
             margin: 0,
             background: "#F0E000",
             lineColor: "#000000",
+            fontOptions: "bold",
           })
         } catch (e) {
           console.error("barcode error", e)
@@ -180,12 +217,12 @@ export default function CuttingPlanningPage() {
 
   const filtered = useMemo(() => {
     let list = [...items]
-    const qProduct = normalizeText(productName)
+    const qProduct = productName
     const qSearch = normalizeText(search)
 
-    if (qProduct) {
+    if (qProduct.trim()) {
       list = list.filter((i) =>
-        normalizeText(i.productName || "").includes(qProduct)
+        matchProductFilter(i.productName || "", qProduct)
       )
     }
     if (labelStatus !== "همه") {
@@ -200,7 +237,7 @@ export default function CuttingPlanningPage() {
           normalizeText(i.customerName || "").includes(qSearch) ||
           normalizeText(i.orderNumber || "").includes(qSearch) ||
           normalizeText(i.barcode || "").includes(qSearch) ||
-          normalizeText(i.productName || "").includes(qSearch)
+          matchProductFilter(i.productName || "", search)
       )
     }
 
@@ -287,9 +324,11 @@ export default function CuttingPlanningPage() {
           el.innerHTML = ""
           JsBarcode(el, String(row.barcode), {
             format: "CODE128",
-            width: 1.1,
+            width: 1.2,
             height: 26,
-            displayValue: false,
+            displayValue: true,
+            fontSize: 10,
+            textMargin: 1,
             margin: 0,
           })
         } catch {}
@@ -310,7 +349,6 @@ export default function CuttingPlanningPage() {
     try {
       setLoading(true)
       const params = new URLSearchParams()
-      if (productName) params.set("productName", productName)
       if (labelStatus) params.set("labelStatus", labelStatus)
       if (priority) params.set("priority", priority)
       if (search) params.set("search", search)
@@ -376,6 +414,7 @@ export default function CuttingPlanningPage() {
       alert("حداقل یک مورد را انتخاب کنید")
       return
     }
+    setReprintMode("simple")
     setWasteReason("")
     setWasteDepartment("تولید")
     setWastePerson("")
@@ -383,26 +422,36 @@ export default function CuttingPlanningPage() {
   }
 
   const submitReprint = async () => {
-    if (!wasteReason.trim()) {
-      alert("علت ضایعات را وارد کنید")
-      return
-    }
-    if (!wastePerson.trim()) {
-      alert("شخص مسبب را وارد کنید")
-      return
+    if (reprintMode === "waste") {
+      if (!wasteReason.trim()) {
+        alert("علت ضایعات را وارد کنید")
+        return
+      }
+      if (!wastePerson.trim()) {
+        alert("شخص مسبب را وارد کنید")
+        return
+      }
     }
     try {
       setActionLoading(true)
+      const body: Record<string, unknown> = {
+        productionItemIds: selectedIds,
+        action: "allow-reprint",
+      }
+      if (reprintMode === "waste") {
+        body.reason = wasteReason.trim()
+        body.department = wasteDepartment
+        body.responsiblePerson = wastePerson.trim()
+      } else {
+        body.reason = "چاپ مجدد بدون ضایعات (پارگی لیبل / نیاز اداری)"
+        body.department = "اداری"
+        body.responsiblePerson = "—"
+        body.simpleReprint = true
+      }
       const res = await fetch("/api/production/cutting/labels", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productionItemIds: selectedIds,
-          action: "allow-reprint",
-          reason: wasteReason.trim(),
-          department: wasteDepartment,
-          responsiblePerson: wastePerson.trim(),
-        }),
+        body: JSON.stringify(body),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -422,7 +471,6 @@ export default function CuttingPlanningPage() {
 
   const handlePrintBrowser = () => window.print()
 
-  /** خروجی اکسل از برگه برنامه‌ریزی (CSV با BOM برای Excel فارسی) */
   const exportReportExcel = () => {
     if (reportRows.length === 0) {
       alert("ردیفی برای خروجی نیست")
@@ -438,8 +486,8 @@ export default function CuttingPlanningPage() {
       "اولویت",
       "نام مشتری",
       "نام کالا",
-      "طول",
       "عرض",
+      "طول",
       "تعداد",
       "متراژ",
       "خدمات",
@@ -456,8 +504,8 @@ export default function CuttingPlanningPage() {
         row.priority || "عادی",
         row.customerName || "",
         row.productName || "",
-        row.length ?? "",
         row.width ?? "",
+        row.length ?? "",
         row.quantity,
         row.meterage != null ? Number(row.meterage).toFixed(4) : "",
         (row.servicesText || "").replace(/,/g, "،"),
@@ -469,7 +517,7 @@ export default function CuttingPlanningPage() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = `برنامه-برش-${reportTitleProduct.replace(/\s+/g, "-")}-${todayFa.replace(/\//g, "-")}.csv`
+    a.download = `لیست-برش-CNC-${reportTitleProduct.replace(/\s+/g, "-")}-${todayFa.replace(/\//g, "-")}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -509,12 +557,15 @@ export default function CuttingPlanningPage() {
       }}
       dir="rtl"
     >
-      {/* Portrait A4 برای برگه برنامه‌ریزی */}
       <style jsx global>{`
         @media print {
           @page {
             size: A4 portrait;
-            margin: 8mm;
+            margin: 6mm;
+          }
+          body {
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
           }
         }
       `}</style>
@@ -526,7 +577,7 @@ export default function CuttingPlanningPage() {
           <div>
             <h1 className="text-2xl font-bold text-blue-950">برنامه‌ریزی برش</h1>
             <p className="text-sm text-blue-800 mt-1">
-              سرچ بر اساس نام کالا، چاپ برگه برنامه‌ریزی و لیبل هر قطعه
+              سرچ با ضخامت (مثلاً ۴)، چاپ برگه و لیبل
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -555,7 +606,7 @@ export default function CuttingPlanningPage() {
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
             <div className="md:col-span-3">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
-                نام کالا
+                نام کالا / ضخامت
               </label>
               <input
                 list="product-list"
@@ -564,7 +615,7 @@ export default function CuttingPlanningPage() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter") fetchData()
                 }}
-                placeholder="مثلاً آینه ۴ میل..."
+                placeholder="مثلاً ۴ یا آینه ۴ میل..."
                 className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
               />
               <datalist id="product-list">
@@ -572,6 +623,9 @@ export default function CuttingPlanningPage() {
                   <option key={name} value={name} />
                 ))}
               </datalist>
+              <p className="text-[11px] text-blue-700 mt-1">
+                با زدن فقط عدد ضخامت (مثل ۴) همه کالاهای همان ضخامت می‌آید
+              </p>
             </div>
             <div className="md:col-span-2">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
@@ -595,7 +649,7 @@ export default function CuttingPlanningPage() {
               <select
                 value={priority}
                 onChange={(e) => setPriority(e.target.value)}
-                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
+                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-sm font-semibold focus:border-teal-500 focus:outline-none"
               >
                 <option value="همه">همه</option>
                 <option value="عادی">عادی</option>
@@ -695,11 +749,11 @@ export default function CuttingPlanningPage() {
                   >
                     نام کالا{sortIndicator("productName")}
                   </th>
-                  <th className={thClass} onClick={() => toggleSort("length")}>
-                    طول{sortIndicator("length")}
-                  </th>
                   <th className={thClass} onClick={() => toggleSort("width")}>
                     عرض{sortIndicator("width")}
+                  </th>
+                  <th className={thClass} onClick={() => toggleSort("length")}>
+                    طول{sortIndicator("length")}
                   </th>
                   <th className={thClass} onClick={() => toggleSort("quantity")}>
                     تعداد{sortIndicator("quantity")}
@@ -751,8 +805,8 @@ export default function CuttingPlanningPage() {
                       {item.barcode || "—"}
                     </td>
                     <td className="p-3 font-bold">{item.productName}</td>
-                    <td className="p-3 text-center">{item.length ?? "—"}</td>
                     <td className="p-3 text-center">{item.width ?? "—"}</td>
+                    <td className="p-3 text-center">{item.length ?? "—"}</td>
                     <td className="p-3 text-center font-semibold">
                       {item.quantity}
                     </td>
@@ -783,49 +837,89 @@ export default function CuttingPlanningPage() {
         <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4 print:hidden">
           <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl">
             <h2 className="text-xl font-bold text-blue-950 mb-4">
-              اجازه چاپ مجدد / ثبت ضایعات
+              اجازه چاپ مجدد
             </h2>
-            <div className="space-y-4">
-              <div>
-                <label className="mb-1 block text-sm font-bold text-blue-900">
-                  علت ضایعات
-                </label>
-                <textarea
-                  value={wasteReason}
-                  onChange={(e) => setWasteReason(e.target.value)}
-                  rows={3}
-                  className="w-full rounded-xl border border-teal-500/30 px-4 py-2.5 text-sm font-semibold focus:border-teal-500 focus:outline-none"
-                  placeholder="علت را بنویسید..."
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-sm font-bold text-blue-900">
-                  بخش مسبب
-                </label>
-                <select
-                  value={wasteDepartment}
-                  onChange={(e) =>
-                    setWasteDepartment(e.target.value as "تولید" | "اداری")
-                  }
-                  className="w-full rounded-xl border border-teal-500/30 px-4 py-2.5 text-sm font-semibold focus:border-teal-500 focus:outline-none"
-                >
-                  <option value="تولید">تولید</option>
-                  <option value="اداری">اداری</option>
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-sm font-bold text-blue-900">
-                  شخص مسبب
-                </label>
-                <input
-                  type="text"
-                  value={wastePerson}
-                  onChange={(e) => setWastePerson(e.target.value)}
-                  className="w-full rounded-xl border border-teal-500/30 px-4 py-2.5 text-sm font-semibold focus:border-teal-500 focus:outline-none"
-                  placeholder="نام شخص"
-                />
-              </div>
+
+            <div className="flex gap-2 mb-4">
+              <button
+                type="button"
+                onClick={() => setReprintMode("simple")}
+                className={`flex-1 rounded-xl px-3 py-2.5 text-sm font-bold border ${
+                  reprintMode === "simple"
+                    ? "bg-teal-500 text-white border-teal-600"
+                    : "bg-white text-blue-900 border-teal-200"
+                }`}
+              >
+                چاپ مجدد ساده
+                <span className="block text-[11px] font-semibold opacity-90 mt-0.5">
+                  پارگی لیبل — بدون علت
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setReprintMode("waste")}
+                className={`flex-1 rounded-xl px-3 py-2.5 text-sm font-bold border ${
+                  reprintMode === "waste"
+                    ? "bg-orange-500 text-white border-orange-600"
+                    : "bg-white text-blue-900 border-teal-200"
+                }`}
+              >
+                با ثبت ضایعات
+                <span className="block text-[11px] font-semibold opacity-90 mt-0.5">
+                  علت + بخش + شخص
+                </span>
+              </button>
             </div>
+
+            {reprintMode === "waste" ? (
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-1 block text-sm font-bold text-blue-900">
+                    علت ضایعات
+                  </label>
+                  <textarea
+                    value={wasteReason}
+                    onChange={(e) => setWasteReason(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-xl border border-teal-500/30 px-4 py-2.5 text-sm font-semibold focus:border-teal-500 focus:outline-none"
+                    placeholder="علت را بنویسید..."
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-bold text-blue-900">
+                    بخش مسبب
+                  </label>
+                  <select
+                    value={wasteDepartment}
+                    onChange={(e) =>
+                      setWasteDepartment(e.target.value as "تولید" | "اداری")
+                    }
+                    className="w-full rounded-xl border border-teal-500/30 px-4 py-2.5 text-sm font-semibold focus:border-teal-500 focus:outline-none"
+                  >
+                    <option value="تولید">تولید</option>
+                    <option value="اداری">اداری</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-bold text-blue-900">
+                    شخص مسبب
+                  </label>
+                  <input
+                    type="text"
+                    value={wastePerson}
+                    onChange={(e) => setWastePerson(e.target.value)}
+                    className="w-full rounded-xl border border-teal-500/30 px-4 py-2.5 text-sm font-semibold focus:border-teal-500 focus:outline-none"
+                    placeholder="نام شخص"
+                  />
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-blue-800 bg-teal-50 border border-teal-100 rounded-xl p-3 font-semibold">
+                فقط اجازه چاپ مجدد ثبت می‌شود؛ نیازی به علت ضایعات نیست (مثلاً
+                پارگی لیبل یا چاپ ناخوانا).
+              </p>
+            )}
+
             <div className="mt-6 flex gap-3 justify-end">
               <button
                 type="button"
@@ -838,16 +932,23 @@ export default function CuttingPlanningPage() {
                 type="button"
                 onClick={submitReprint}
                 disabled={actionLoading}
-                className="rounded-xl bg-orange-500 hover:bg-orange-600 px-5 py-2.5 font-bold text-white disabled:opacity-50"
+                className={`rounded-xl px-5 py-2.5 font-bold text-white disabled:opacity-50 ${
+                  reprintMode === "waste"
+                    ? "bg-orange-500 hover:bg-orange-600"
+                    : "bg-teal-500 hover:bg-teal-600"
+                }`}
               >
-                {actionLoading ? "در حال ثبت..." : "تأیید و اجازه چاپ مجدد"}
+                {actionLoading
+                  ? "در حال ثبت..."
+                  : reprintMode === "waste"
+                    ? "تأیید ضایعات و چاپ مجدد"
+                    : "تأیید چاپ مجدد ساده"}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* لیبل — چیدمان شبیه سپهر، مرتب‌تر */}
       {showLabelPreview && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-auto print:static print:bg-white print:p-0">
           <div className="bg-white rounded-2xl p-6 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-0">
@@ -872,144 +973,157 @@ export default function CuttingPlanningPage() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 print:grid-cols-2 print:gap-2">
-              {labels.map((label, idx) => (
-                <div
-                  key={`${label.productionItemId}-${idx}`}
-                  className="relative overflow-hidden text-black"
-                  style={{
-                    backgroundColor: "#F0E000",
-                    width: 360,
-                    minHeight: 210,
-                    padding: 10,
-                    borderRadius: 6,
-                    border: "1px solid #c4a000",
-                  }}
-                  dir="rtl"
-                >
-                  {/* بالا: لوگو چپ | تاریخ و شماره سفارش راست */}
-                  <div className="flex justify-between items-start gap-2">
-                    <img
-                      src="https://i.postimg.cc/PrV3wWPS/Whats-App-Image-2026-09-04-at-10-25-58-PM.jpg"
-                      alt="Akhavan"
-                      style={{
-                        height: 44,
-                        width: "auto",
-                        mixBlendMode: "multiply",
-                      }}
-                    />
-                    <div className="text-[11px] leading-5 text-right font-bold">
-                      <p>تاریخ سفارش: {formatFaDate(label.orderDate)}</p>
-                      <p>تاریخ تحویل: {formatFaDate(label.deliveryDate)}</p>
-                      <p>
-                        شماره سفارش:{" "}
-                        <span className="text-sm font-black">
-                          {label.orderNumber || "—"}
-                        </span>
-                      </p>
-                    </div>
-                  </div>
-
+              {labels.map((label, idx) => {
+                const services = splitServices(label.servicesText)
+                return (
                   <div
+                    key={`${label.productionItemId}-${idx}`}
+                    className="relative overflow-hidden text-black"
                     style={{
-                      borderTop: "1.5px solid rgba(0,0,0,0.35)",
-                      margin: "6px 0 8px",
-                    }}
-                  />
-
-                  {/* وسط: راست = مشتری + خدمات | چپ = کالا + ابعاد (LTR) + توضیحات */}
-<div
-  className="flex justify-between items-start gap-3"
-  style={{ direction: "rtl" }}
->
-  {/* راست: مشتری + خدمات */}
-  <div style={{ width: "42%", textAlign: "right" }}>
-    <p className="font-black text-[15px] leading-5">
-      {label.customerName || "—"}
-    </p>
-    {label.servicesText ? (
-      <p className="text-[15px] font-black mt-2 leading-5">
-        {label.servicesText}
-      </p>
-    ) : null}
-  </div>
-
-  {/* چپ: نام کالا + ابعاد + توضیحات — همه از چپ */}
-  <div style={{ width: "55%", textAlign: "left", direction: "ltr" }}>
-    <p
-      style={{
-        fontWeight: 700,
-        fontSize: 15,
-        lineHeight: 1.35,
-        textAlign: "left",
-        direction: "rtl",
-        unicodeBidi: "plaintext",
-      }}
-    >
-      {label.productName}
-    </p>
-    <p
-      style={{
-        fontWeight: 900,
-        fontSize: 22,
-        marginTop: 4,
-        letterSpacing: "0.02em",
-        textAlign: "left",
-        direction: "ltr",
-        unicodeBidi: "isolate",
-      }}
-    >
-      {label.length ?? "—"} * {label.width ?? "—"} = {label.quantity ?? 1}
-    </p>
-    {label.notes ? (
-      <p
-        style={{
-          fontSize: 12,
-          fontWeight: 600,
-          marginTop: 4,
-          lineHeight: 1.3,
-          textAlign: "left",
-          direction: "rtl",
-          unicodeBidi: "plaintext",
-        }}
-      >
-        {label.notes}
-      </p>
-    ) : null}
-  </div>
-</div>
-
-                  {/* پایین: بارکد جمع‌وجور */}
-                  <div
-                    className="mt-2"
-                    style={{
+                      backgroundColor: "#F0E000",
+                      width: 360,
+                      minHeight: 220,
+                      padding: 10,
+                      borderRadius: 6,
+                      border: "1px solid #c4a000",
                       display: "flex",
                       flexDirection: "column",
-                      alignItems: "center",
-                      width: "100%",
                     }}
+                    dir="rtl"
                   >
-                    <svg
-                      id={`barcode-${label.productionItemId}-${idx}`}
-                      width="180"
-                      height="36"
-                      style={{ display: "block" }}
+                    <div className="flex justify-between items-start gap-2">
+                      <img
+                        src="https://i.postimg.cc/PrV3wWPS/Whats-App-Image-2026-09-04-at-10-25-58-PM.jpg"
+                        alt="Akhavan"
+                        style={{
+                          height: 44,
+                          width: "auto",
+                          mixBlendMode: "multiply",
+                        }}
+                      />
+                      <div className="text-[11px] leading-5 text-right font-bold">
+                        <p>تاریخ سفارش: {formatFaDate(label.orderDate)}</p>
+                        <p>تاریخ تحویل: {formatFaDate(label.deliveryDate)}</p>
+                        <p>
+                          شماره سفارش:{" "}
+                          <span className="text-sm font-black">
+                            {label.orderNumber || "—"}
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        borderTop: "1.5px solid rgba(0,0,0,0.35)",
+                        margin: "6px 0 8px",
+                      }}
                     />
-                    <p className="font-bold text-xs mt-0.5 tracking-wider">
-                      {label.barcode}
-                    </p>
+
+                    <div
+                      className="flex justify-between items-start gap-3 flex-1"
+                      style={{ direction: "rtl" }}
+                    >
+                      <div style={{ width: "42%", textAlign: "right" }}>
+                        <p className="font-black text-[15px] leading-5">
+                          {label.customerName || "—"}
+                        </p>
+                        {services.length > 0 && (
+                          <ul className="mt-2 space-y-1 list-none p-0 m-0">
+                            {services.map((s, i) => (
+                              <li
+                                key={i}
+                                style={{
+                                  fontSize: 16,
+                                  fontWeight: 900,
+                                  lineHeight: 1.35,
+                                }}
+                              >
+                                {s}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+
+                      <div
+                        style={{
+                          width: "55%",
+                          textAlign: "left",
+                          direction: "ltr",
+                        }}
+                      >
+                        <p
+                          style={{
+                            fontWeight: 700,
+                            fontSize: 15,
+                            lineHeight: 1.35,
+                            textAlign: "left",
+                            direction: "rtl",
+                            unicodeBidi: "plaintext",
+                          }}
+                        >
+                          {label.productName}
+                        </p>
+                        <p
+                          style={{
+                            fontWeight: 900,
+                            fontSize: 22,
+                            marginTop: 4,
+                            letterSpacing: "0.02em",
+                            textAlign: "left",
+                            direction: "ltr",
+                            unicodeBidi: "isolate",
+                          }}
+                        >
+                          {label.length ?? "—"}*{label.width ?? "—"}=
+                          {label.quantity ?? 1}
+                        </p>
+                        {label.notes ? (
+                          <p
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 600,
+                              marginTop: 4,
+                              lineHeight: 1.3,
+                              textAlign: "left",
+                              direction: "rtl",
+                              unicodeBidi: "plaintext",
+                            }}
+                          >
+                            {label.notes}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    {/* بارکد پایین چپ — عدد داخل JsBarcode، وسط و هم‌عرض میله‌ها */}
+                    <div
+                      className="mt-2"
+                      style={{
+                        display: "flex",
+                        justifyContent: "flex-start",
+                        width: "100%",
+                        direction: "ltr",
+                      }}
+                    >
+                      <svg
+                        id={`barcode-${label.productionItemId}-${idx}`}
+                        style={{ display: "block" }}
+                      />
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         </div>
       )}
 
-      {/* برگه برنامه‌ریزی — Portrait + طول قبل از عرض + اکسل */}
       {showReportPreview && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-auto print:static print:bg-white print:p-0">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-4xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-2">
-            <div className="flex justify-between items-center mb-4 print:hidden">
+          <div className="bg-white rounded-2xl p-4 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-1">
+            <div className="flex justify-between items-center mb-3 print:hidden">
               <h2 className="text-xl font-bold text-blue-950">
                 برگه برنامه‌ریزی برش
               </h2>
@@ -1036,9 +1150,11 @@ export default function CuttingPlanningPage() {
             </div>
 
             <div className="text-black" dir="rtl">
-              <div className="text-center mb-3">
-                <h3 className="text-lg font-bold">گزارش مدیریت تولید</h3>
-                <div className="flex justify-between text-sm mt-2 px-1">
+              <div className="text-center mb-2">
+                <h3 className="text-xl font-black tracking-wide">
+                  لیست برش CNC
+                </h3>
+                <div className="flex justify-between text-sm mt-2 px-1 font-bold">
                   <span>
                     نام کالا: <strong>{reportTitleProduct}</strong>
                   </span>
@@ -1046,26 +1162,26 @@ export default function CuttingPlanningPage() {
                 </div>
               </div>
 
-              <table className="w-full border-collapse text-[11px]">
+              <table className="w-full border-collapse text-[12px] font-bold">
                 <thead>
                   <tr>
                     {[
-                      "بارکد",
                       "ردیف",
+                      "بارکد",
                       "کد نصب",
                       "سفارش",
                       "تاریخ سفارش",
                       "تاریخ تحویل",
                       "نام مشتری",
-                      "طول",
                       "عرض",
+                      "طول",
                       "تعداد",
                       "متراژ",
                       "خدمات",
                     ].map((h) => (
                       <th
                         key={h}
-                        className="border border-black p-1 font-bold bg-gray-100"
+                        className="border border-black p-1.5 font-black bg-gray-100 text-[12px]"
                       >
                         {h}
                       </th>
@@ -1075,53 +1191,49 @@ export default function CuttingPlanningPage() {
                 <tbody>
                   {reportRows.map((row, idx) => (
                     <tr key={row.productionItemId}>
+                      <td className="border border-black p-1.5 text-center font-black">
+                        {idx + 1}
+                      </td>
                       <td className="border border-black p-1 text-center">
                         <svg
                           id={`report-barcode-${row.productionItemId}`}
                           className="mx-auto"
-                          style={{ maxWidth: 90, height: 28 }}
+                          style={{ display: "block", margin: "0 auto" }}
                         />
-                        <div className="text-[9px] font-mono mt-0.5">
-                          {row.barcode || "—"}
-                        </div>
                       </td>
-                      <td className="border border-black p-1 text-center">
-                        {idx + 1}
-                      </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1.5 text-center font-bold">
                         {row.installationCode || "—"}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1.5 text-center font-black">
                         {row.orderNumber || "—"}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1.5 text-center font-bold">
                         {formatFaDate(row.orderDate)}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1.5 text-center font-bold">
                         <div>{row.priority || "عادی"}</div>
-                        <div className="text-[10px]">
+                        <div className="text-[11px]">
                           {formatFaDate(row.deliveryDate)}
                         </div>
                       </td>
-                      <td className="border border-black p-1">
+                      <td className="border border-black p-1.5 font-black">
                         {row.customerName || "—"}
                       </td>
-                      {/* طول قبل از عرض */}
-                      <td className="border border-black p-1 text-center">
-                        {row.length ?? "—"}
-                      </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1.5 text-center font-black">
                         {row.width ?? "—"}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1.5 text-center font-black">
+                        {row.length ?? "—"}
+                      </td>
+                      <td className="border border-black p-1.5 text-center font-black">
                         {row.quantity}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1.5 text-center font-bold">
                         {row.meterage != null
                           ? Number(row.meterage).toFixed(2)
                           : "—"}
                       </td>
-                      <td className="border border-black p-1 text-[10px]">
+                      <td className="border border-black p-1.5 text-[11px] font-bold">
                         {row.servicesText || row.notes || "—"}
                       </td>
                     </tr>
