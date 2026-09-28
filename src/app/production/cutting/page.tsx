@@ -356,10 +356,10 @@ export default function CuttingPlanningPage() {
           el.innerHTML = ""
           JsBarcode(el, String(row.barcode), {
             format: "CODE128",
-            width: 1.2,
-            height: 26,
+            width: 1.1,
+            height: 22,
             displayValue: true,
-            fontSize: 10,
+            fontSize: 9,
             textMargin: 1,
             margin: 0,
           })
@@ -612,38 +612,59 @@ export default function CuttingPlanningPage() {
         @media print {
           @page {
             size: A4 portrait;
-            margin: 8mm;
+            margin: 6mm;
           }
           html,
           body {
             background: #fff !important;
+            margin: 0 !important;
+            padding: 0 !important;
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
           }
           body * {
-            visibility: hidden;
+            visibility: hidden !important;
           }
           .print-area,
-          .print-area * {
-            visibility: visible;
-          }
-          .print-area {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-            background: #fff !important;
-          }
+          .print-area *,
           .print-label-area,
           .print-label-area * {
-            visibility: visible;
+            visibility: visible !important;
           }
+          .print-area,
           .print-label-area {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
+            position: fixed !important;
+            inset: 0 !important;
+            width: 100% !important;
+            height: auto !important;
+            max-width: none !important;
+            margin: 0 !important;
+            padding: 4mm !important;
             background: #fff !important;
+            box-shadow: none !important;
+            border-radius: 0 !important;
+            overflow: visible !important;
+            z-index: 99999 !important;
+          }
+          .print-area table {
+            width: 100% !important;
+            table-layout: fixed !important;
+            font-size: 9px !important;
+            border-collapse: collapse !important;
+          }
+          .print-area th,
+          .print-area td {
+            padding: 2px 3px !important;
+            word-wrap: break-word !important;
+            overflow-wrap: anywhere !important;
+          }
+          .print-area svg {
+            max-width: 70px !important;
+            height: auto !important;
+          }
+          .print-hidden {
+            display: none !important;
+            visibility: hidden !important;
           }
         }
       `}</style>
@@ -1030,7 +1051,6 @@ export default function CuttingPlanningPage() {
         </div>
       )}
 
-      {/* لیبل ۹×۶ سانتی‌متر */}
       {showLabelPreview && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-auto print:static print:bg-white print:p-0">
           <div className="bg-white rounded-2xl p-6 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-0 print-label-area">
@@ -1203,10 +1223,9 @@ export default function CuttingPlanningPage() {
         </div>
       )}
 
-      {/* برگه برنامه‌ریزی — بدون بک‌گراند در پرینت + جمع */}
       {showReportPreview && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-auto print:static print:bg-white print:p-0">
-          <div className="bg-white rounded-2xl p-4 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-0 print-area">
+          <div className="bg-white rounded-2xl p-4 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-2 print:w-full print-area">
             <div className="flex justify-between items-center mb-3 print:hidden">
               <h2 className="text-xl font-bold text-blue-950">
                 برگه برنامه‌ریزی برش
@@ -1235,10 +1254,10 @@ export default function CuttingPlanningPage() {
 
             <div className="text-black bg-white" dir="rtl">
               <div className="text-center mb-2">
-                <h3 className="text-xl font-black tracking-wide">
+                <h3 className="text-xl font-black tracking-wide print:text-lg">
                   لیست برش CNC
                 </h3>
-                <div className="flex justify-between text-sm mt-2 px-1 font-bold">
+                <div className="flex justify-between text-sm mt-2 px-1 font-bold print:text-xs">
                   <span>
                     نام کالا: <strong>{reportTitleProduct}</strong>
                   </span>
@@ -1246,7 +1265,7 @@ export default function CuttingPlanningPage() {
                 </div>
               </div>
 
-              <table className="w-full border-collapse text-[12px] font-bold">
+              <table className="w-full border-collapse text-[12px] font-bold print:text-[9px]">
                 <thead>
                   <tr>
                     {[
@@ -1265,7 +1284,7 @@ export default function CuttingPlanningPage() {
                     ].map((h) => (
                       <th
                         key={h}
-                        className="border border-black p-1.5 font-black bg-gray-100 text-[12px]"
+                        className="border border-black p-1.5 font-black bg-gray-100 text-[12px] print:text-[9px] print:p-1"
                       >
                         {h}
                       </th>
@@ -1275,7 +1294,7 @@ export default function CuttingPlanningPage() {
                 <tbody>
                   {reportRows.map((row, idx) => (
                     <tr key={row.productionItemId}>
-                      <td className="border border-black p-1.5 text-center font-black">
+                      <td className="border border-black p-1.5 text-center font-black print:p-1">
                         {idx + 1}
                       </td>
                       <td className="border border-black p-1 text-center">
@@ -1284,39 +1303,39 @@ export default function CuttingPlanningPage() {
                           style={{ display: "block", margin: "0 auto" }}
                         />
                       </td>
-                      <td className="border border-black p-1.5 text-center font-bold">
+                      <td className="border border-black p-1.5 text-center font-bold print:p-1">
                         {row.installationCode || "—"}
                       </td>
-                      <td className="border border-black p-1.5 text-center font-black">
+                      <td className="border border-black p-1.5 text-center font-black print:p-1">
                         {row.orderNumber || "—"}
                       </td>
-                      <td className="border border-black p-1.5 text-center font-bold">
+                      <td className="border border-black p-1.5 text-center font-bold print:p-1">
                         {formatFaDate(row.orderDate)}
                       </td>
-                      <td className="border border-black p-1.5 text-center font-bold">
+                      <td className="border border-black p-1.5 text-center font-bold print:p-1">
                         <div>{row.priority || "عادی"}</div>
-                        <div className="text-[11px]">
+                        <div className="text-[11px] print:text-[8px]">
                           {formatFaDate(row.deliveryDate)}
                         </div>
                       </td>
-                      <td className="border border-black p-1.5 font-black">
+                      <td className="border border-black p-1.5 font-black print:p-1">
                         {row.customerName || "—"}
                       </td>
-                      <td className="border border-black p-1.5 text-center font-black">
+                      <td className="border border-black p-1.5 text-center font-black print:p-1">
                         {row.width ?? "—"}
                       </td>
-                      <td className="border border-black p-1.5 text-center font-black">
+                      <td className="border border-black p-1.5 text-center font-black print:p-1">
                         {row.length ?? "—"}
                       </td>
-                      <td className="border border-black p-1.5 text-center font-black">
+                      <td className="border border-black p-1.5 text-center font-black print:p-1">
                         {row.quantity}
                       </td>
-                      <td className="border border-black p-1.5 text-center font-bold">
+                      <td className="border border-black p-1.5 text-center font-bold print:p-1">
                         {row.meterage != null
                           ? Number(row.meterage).toFixed(2)
                           : "—"}
                       </td>
-                      <td className="border border-black p-1.5 text-[11px] font-bold">
+                      <td className="border border-black p-1.5 text-[11px] font-bold print:text-[8px] print:p-1">
                         {row.servicesText || row.notes || "—"}
                       </td>
                     </tr>
@@ -1324,17 +1343,17 @@ export default function CuttingPlanningPage() {
                   <tr className="bg-gray-50">
                     <td
                       colSpan={9}
-                      className="border border-black p-1.5 text-left font-black"
+                      className="border border-black p-1.5 text-left font-black print:p-1"
                     >
                       جمع کل
                     </td>
-                    <td className="border border-black p-1.5 text-center font-black">
+                    <td className="border border-black p-1.5 text-center font-black print:p-1">
                       {reportTotals.totalQty}
                     </td>
-                    <td className="border border-black p-1.5 text-center font-black">
+                    <td className="border border-black p-1.5 text-center font-black print:p-1">
                       {reportTotals.totalMeterage.toFixed(2)}
                     </td>
-                    <td className="border border-black p-1.5" />
+                    <td className="border border-black p-1.5 print:p-1" />
                   </tr>
                 </tbody>
               </table>
