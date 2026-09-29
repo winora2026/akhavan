@@ -12,7 +12,6 @@ function mapServiceToStation(serviceName: string): string | null {
   const name = norm(serviceName)
   if (!name) return null
 
-  // بسته‌بندی (اجرت بسته بندی / بسته‌بندی / packaging و ...)
   if (
     name.includes("بسته") ||
     name.includes("پکیج") ||
@@ -75,8 +74,6 @@ function buildRouteStationNames(salesItem: any): string[] {
   let hasPackaging = false
 
   const serviceNames = collectServiceNames(salesItem)
-
-  // اگر در توضیحات / نام کالا هم «بسته» آمده باشد
   const extraText = [
     salesItem?.notes,
     salesItem?.description,
@@ -142,6 +139,25 @@ async function getNextBarcode(): Promise<string> {
   return String(Math.max(maxNum + 1, 1050001 + total))
 }
 
+async function getNextProductionNumber(): Promise<string> {
+  const year = new Date().getFullYear()
+  const prefix = `PROD-${year}-`
+
+  const rows = await prisma.productionOrder.findMany({
+    where: { productionNumber: { startsWith: prefix } },
+    select: { productionNumber: true },
+  })
+
+  let max = 0
+  for (const row of rows) {
+    const part = row.productionNumber.split("-").pop() || "0"
+    const n = parseInt(part, 10)
+    if (!isNaN(n) && n > max) max = n
+  }
+
+  return `${prefix}${String(max + 1).padStart(4, "0")}`
+}
+
 function findStationId(
   stations: { id: string; name: string }[],
   name: string
@@ -150,7 +166,6 @@ function findStationId(
   const found = stations.find((s) => norm(s.name) === n)
   if (found) return found.id
 
-  // برای بسته‌بندی چند شکل رایج در دیتابیس
   if (n.includes("بسته")) {
     const pack = stations.find((s) => norm(s.name).includes("بسته"))
     if (pack) return pack.id
@@ -214,8 +229,7 @@ export async function createProductionOrderFromSales(
     }
   }
 
-  const count = await prisma.productionOrder.count()
-  const productionNumber = `PROD-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`
+  const productionNumber = await getNextProductionNumber()
 
   const productionOrder = await prisma.productionOrder.create({
     data: {
