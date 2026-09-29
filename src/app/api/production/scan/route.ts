@@ -109,8 +109,8 @@ export async function POST(req: Request) {
 
     const fullQty = stationRow.quantityIn || item.quantity || 1
 
-    // تعداد بالای ۵ بدون تأیید → پاپ‌آپ
-    if (fullQty > 5 && !confirmed) {
+    // بیش از یک عدد → پاپ‌آپ (تعداد کل یا باقی‌مانده)
+    if (fullQty > 1 && !confirmed) {
       const salesOrderEarly = item.productionOrder.order
       return NextResponse.json({
         needsConfirmation: true,
