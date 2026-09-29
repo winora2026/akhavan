@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { safeDate } from "@/lib/date"
 import { getSession } from "@/lib/auth"
+import { createProductionOrderFromSales } from "@/lib/createProductionOrder"
+
 export async function GET() {
   try {
     const orders = await prisma.order.findMany({
@@ -92,23 +94,23 @@ export async function POST(req: NextRequest) {
     })
     const nextCustomerOrderNumber = String(customerOrdersCount + 1)
 
-    // اولویت: mapImageUrl مستقیم، وگرنه اولین فایل از mapImages
     const resolvedMapImageUrl =
       mapImageUrl ||
       (Array.isArray(mapImages) && mapImages[0]?.url
         ? mapImages[0].url
         : null)
 
-    // آرایه‌ی کامل فایل‌های نقشه (عکس/PDF) به‌صورت JSON ذخیره می‌شود
-    // تا هنگام ویرایش سفارش، همه‌ی فایل‌ها (نه فقط اولی) قابل بازیابی باشند
     const resolvedMapImages =
       Array.isArray(mapImages) && mapImages.length
         ? JSON.stringify(mapImages)
         : null
-const session = await getSession()
-const salesRepName = session?.displayName || null
+
+    const session = await getSession()
+    const salesRepName = session?.displayName || null
+
     const order = await prisma.order.create({
-      data: {salesRep: salesRepName,
+      data: {
+        salesRep: salesRepName,
         orderNumber: String(nextOrderNumber),
         customerId: customer.id,
         customerOrderNumber: nextCustomerOrderNumber,
@@ -253,25 +255,31 @@ export async function PATCH(req: NextRequest) {
     })
 
     let productionOrder = null
+    let productionError: string | null = null
+
     if (status === "فاکتور") {
       const existing = await prisma.productionOrder.findFirst({
         where: { orderId: order.id },
       })
 
       if (!existing) {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/production/orders`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ orderId: order.id }),
-          }
-        )
-        if (res.ok) productionOrder = await res.json()
+        // مستقیم با Prisma — بدون fetch به localhost
+        const result = await createProductionOrderFromSales(order.id)
+        if (result.ok) {
+          productionOrder = result.data
+        } else {
+          productionError = result.error
+          console.error("production create failed:", result.error)
+        }
       }
     }
 
-    return NextResponse.json({ success: true, order, productionOrder })
+    return NextResponse.json({
+      success: true,
+      order,
+      productionOrder,
+      productionError,
+    })
   } catch (error: any) {
     console.error("Error updating order:", error)
     return NextResponse.json(

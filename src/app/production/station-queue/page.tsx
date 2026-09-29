@@ -49,9 +49,16 @@ type Summary = {
   totalMeterage: number
 }
 
+type SessionUser = {
+  displayName?: string
+  role?: string
+  stationName?: string | null
+}
+
 export default function StationQueuePage() {
   const [stations, setStations] = useState<Station[]>([])
   const [selectedStationId, setSelectedStationId] = useState("")
+  const [stationLocked, setStationLocked] = useState(false)
   const [queue, setQueue] = useState<QueueItem[]>([])
   const [summary, setSummary] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(false)
@@ -67,14 +74,26 @@ export default function StationQueuePage() {
   } | null>(null)
 
   const [confirmData, setConfirmData] = useState<any | null>(null)
+  const [partialQty, setPartialQty] = useState<string>("")
   const [detail, setDetail] = useState<any | null>(null)
-  // پیش‌نمایش تمام‌صفحه‌ی نقشه (بدون برش، اندازه‌ی واقعی تصویر حفظ می‌شود)
   const [mapPreviewUrl, setMapPreviewUrl] = useState<string | null>(null)
 
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    fetchStations()
+    ;(async () => {
+      try {
+        const res = await fetch("/api/auth/me")
+        if (!res.ok) return
+        const data = await res.json()
+        const user: SessionUser | null = data.user || null
+        if (user?.displayName) setOperatorName(user.displayName)
+        await fetchStations(user)
+      } catch (e) {
+        console.error(e)
+        await fetchStations(null)
+      }
+    })()
   }, [])
 
   useEffect(() => {
@@ -89,7 +108,6 @@ export default function StationQueuePage() {
     inputRef.current?.focus()
   }, [selectedStationId, scanLoading, confirmData, detail])
 
-  // Escape: بستن مودال
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return
@@ -99,6 +117,7 @@ export default function StationQueuePage() {
       }
       if (confirmData) {
         setConfirmData(null)
+        setPartialQty("")
         setBarcode("")
         setTimeout(() => inputRef.current?.focus(), 50)
         return
@@ -112,15 +131,35 @@ export default function StationQueuePage() {
     return () => window.removeEventListener("keydown", onKey)
   }, [confirmData, detail, mapPreviewUrl])
 
-  const fetchStations = async () => {
+  const fetchStations = async (user: SessionUser | null) => {
     try {
       const res = await fetch("/api/production/stations")
       if (!res.ok) return
       const data = await res.json()
-      const list = Array.isArray(data) ? data : []
-      setStations(list.sort((a: Station, b: Station) => a.sortOrder - b.sortOrder))
+      const list: Station[] = (Array.isArray(data) ? data : []).sort(
+        (a: Station, b: Station) => a.sortOrder - b.sortOrder
+      )
+      setStations(list)
+
+      // اگر کاربر ایستگاه دارد → فقط همان ایستگاه
+      const userStation = (user?.stationName || "").trim()
+      if (userStation && list.length > 0) {
+        const match = list.find(
+          (s) =>
+            s.name === userStation ||
+            s.name.replace(/\u200c/g, "") === userStation.replace(/\u200c/g, "")
+        )
+        if (match) {
+          setSelectedStationId(match.id)
+          setStationLocked(true)
+          return
+        }
+      }
+
+      // ادمین / فروش / بدون ایستگاه → انتخاب آزاد
+      setStationLocked(false)
       if (list.length > 0) {
-        const cut = list.find((s: Station) => s.name === "برش")
+        const cut = list.find((s) => s.name === "برش")
         setSelectedStationId(cut?.id || list[0].id)
       }
     } catch (e) {
@@ -208,7 +247,10 @@ export default function StationQueuePage() {
     return urls
   }
 
-  const doScan = async (confirmed = false) => {
+  const doScan = async (
+    confirmed = false,
+    quantityDone?: number | null
+  ) => {
     const code = barcode.trim()
     if (!code) {
       setLastResult({ type: "err", text: "بارکد را وارد یا اسکن کنید" })
@@ -221,20 +263,26 @@ export default function StationQueuePage() {
 
     try {
       setScanLoading(true)
+      const body: Record<string, unknown> = {
+        barcode: code,
+        stationId: selectedStationId,
+        operatorName: operatorName || undefined,
+        confirmed,
+      }
+      if (quantityDone != null && quantityDone > 0) {
+        body.quantityDone = quantityDone
+      }
+
       const res = await fetch("/api/production/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          barcode: code,
-          stationId: selectedStationId,
-          operatorName: operatorName || undefined,
-          confirmed,
-        }),
+        body: JSON.stringify(body),
       })
       const data = await res.json()
 
       if (data.needsConfirmation) {
         setConfirmData(data)
+        setPartialQty(String(data.quantity || ""))
         return
       }
 
@@ -251,6 +299,7 @@ export default function StationQueuePage() {
       setDetail(data)
       setBarcode("")
       setConfirmData(null)
+      setPartialQty("")
       await fetchQueue()
     } catch (e) {
       console.error(e)
@@ -259,6 +308,26 @@ export default function StationQueuePage() {
       setScanLoading(false)
       setTimeout(() => inputRef.current?.focus(), 50)
     }
+  }
+
+  const confirmAll = () => {
+    if (!confirmData) return
+    doScan(true, Number(confirmData.quantity) || undefined)
+  }
+
+  const confirmPartial = () => {
+    if (!confirmData) return
+    const max = Number(confirmData.quantity) || 0
+    const n = parseInt(partialQty, 10)
+    if (!n || n < 1) {
+      alert("تعداد معتبر وارد کنید")
+      return
+    }
+    if (n > max) {
+      alert(`حداکثر ${max} عدد می‌توانید رد کنید`)
+      return
+    }
+    doScan(true, n)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -286,12 +355,15 @@ export default function StationQueuePage() {
       <div className="relative z-10 max-w-[1600px] mx-auto">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
           <div>
-            <h1 className="text-2xl font-bold text-blue-950">کارتابل ایستگاه</h1>
+            <h1 className="text-2xl font-bold text-blue-950">
+              کارتابل {stationLocked ? selectedStationName : "ایستگاه"}
+            </h1>
             <p className="text-sm text-blue-800 mt-1">
               ایستگاه:{" "}
               <span className="font-bold text-teal-700">{selectedStationName}</span>
+              {stationLocked ? " (ثابت بر اساس ورود شما)" : ""}
               {" — "}
-              اسکن بارکد = رد کار (بعد از برش، بقیه ایستگاه‌ها هم‌زمان)
+              اسکن بارکد = رد کار
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -322,21 +394,27 @@ export default function StationQueuePage() {
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
                 ایستگاه
               </label>
-              <select
-                value={selectedStationId}
-                onChange={(e) => {
-                  setSelectedStationId(e.target.value)
-                  setDetail(null)
-                  setLastResult(null)
-                }}
-                className="w-full rounded-xl border border-teal-500/30 bg-white/70 px-4 py-3 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
-              >
-                {stations.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
+              {stationLocked ? (
+                <div className="w-full rounded-xl border border-teal-500/40 bg-teal-50 px-4 py-3 text-sm font-bold text-teal-900">
+                  {selectedStationName}
+                </div>
+              ) : (
+                <select
+                  value={selectedStationId}
+                  onChange={(e) => {
+                    setSelectedStationId(e.target.value)
+                    setDetail(null)
+                    setLastResult(null)
+                  }}
+                  className="w-full rounded-xl border border-teal-500/30 bg-white/70 px-4 py-3 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
+                >
+                  {stations.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             <div className="md:col-span-5">
@@ -585,7 +663,7 @@ export default function StationQueuePage() {
                 بارکد: <strong className="font-mono">{detail.barcode}</strong>
               </p>
               <p>
-                تعداد: <strong>{detail.quantity}</strong>
+                تعداد رد شده: <strong>{detail.quantity}</strong>
               </p>
               <p>
                 ابعاد:{" "}
@@ -659,12 +737,6 @@ export default function StationQueuePage() {
                           </a>
                         )
                       }
-                      // نکته‌ی مهم: قبلاً اینجا با object-cover و objectPosition
-                      // "left center" فقط گوشه‌ی چپ تصویر برش زده و نمایش داده
-                      // می‌شد (با این فرض که نقشه همیشه سمت چپ اسکرین است). این
-                      // فرض همیشه درست نبود و باعث می‌شد به‌جای خودِ نقشه، بخش
-                      // نامرتبطی از تصویر (یا کل صفحه) دیده شود. حالا کل تصویر،
-                      // بدون هیچ برشی و با حفظ نسبت ابعاد، کامل نمایش داده می‌شود.
                       return (
                         <button
                           key={url}
@@ -705,6 +777,7 @@ export default function StationQueuePage() {
         </div>
       )}
 
+      {/* پاپ‌آپ تعداد بالا — همه یا تعداد دلخواه */}
       {confirmData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div
@@ -712,9 +785,9 @@ export default function StationQueuePage() {
             dir="rtl"
           >
             <h2 className="text-xl font-bold text-blue-950 mb-3">
-              تأیید رد تعداد بالا
+              تأیید رد تعداد
             </h2>
-            <div className="space-y-2 text-sm text-blue-900 mb-5">
+            <div className="space-y-2 text-sm text-blue-900 mb-4">
               <p>
                 کالا: <strong>{confirmData.productName}</strong>
               </p>
@@ -728,37 +801,58 @@ export default function StationQueuePage() {
                 ایستگاه: <strong>{confirmData.stationName}</strong>
               </p>
               <p className="text-lg font-black text-orange-700 mt-3">
-                تعداد: {confirmData.quantity} عدد
-              </p>
-              <p className="text-gray-600">
-                آیا همه این تعداد در ایستگاه «{confirmData.stationName}» رد
-                شوند؟
+                تعداد کل: {confirmData.quantity} عدد
               </p>
             </div>
-            <div className="flex gap-3 justify-end">
+
+            <div className="mb-4">
+              <label className="block text-sm font-bold text-blue-900 mb-1">
+                چند عدد رد شود؟
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={Number(confirmData.quantity) || 1}
+                value={partialQty}
+                onChange={(e) => setPartialQty(e.target.value)}
+                className="w-full rounded-xl border border-teal-400 px-4 py-2.5 text-lg font-bold text-blue-950 focus:outline-none focus:ring-2 focus:ring-teal-400"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                مثلاً اگر ۲ تا از ۵ تا برش خورده، عدد ۲ را بزنید
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2 justify-end">
               <button
                 onClick={() => {
                   setConfirmData(null)
+                  setPartialQty("")
                   setBarcode("")
                   setTimeout(() => inputRef.current?.focus(), 50)
                 }}
-                className="rounded-xl border border-gray-300 px-5 py-2.5 font-bold text-gray-700 hover:bg-gray-50"
+                className="rounded-xl border border-gray-300 px-4 py-2.5 font-bold text-gray-700 hover:bg-gray-50"
               >
                 انصراف
               </button>
               <button
-                onClick={() => doScan(true)}
+                onClick={confirmPartial}
                 disabled={scanLoading}
-                className="rounded-xl bg-green-600 hover:bg-green-700 px-5 py-2.5 font-bold text-white disabled:opacity-50"
+                className="rounded-xl bg-blue-600 hover:bg-blue-700 px-4 py-2.5 font-bold text-white disabled:opacity-50"
               >
-                {scanLoading ? "..." : "بله، همه رد شوند"}
+                {scanLoading ? "..." : "رد با همین تعداد"}
+              </button>
+              <button
+                onClick={confirmAll}
+                disabled={scanLoading}
+                className="rounded-xl bg-green-600 hover:bg-green-700 px-4 py-2.5 font-bold text-white disabled:opacity-50"
+              >
+                {scanLoading ? "..." : "همه رد شوند"}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* پیش‌نمایش تمام‌صفحه‌ی نقشه — کل تصویر اصلی، بدون هیچ برشی */}
       {mapPreviewUrl && (
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4"

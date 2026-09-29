@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useRef } from "react"
+import { useState, useEffect, useMemo, useRef, useLayoutEffect } from "react"
 import Link from "next/link"
 
 type CuttingItem = {
@@ -35,11 +35,16 @@ type SortKey =
   | "length"
   | "width"
   | "quantity"
+  | "meterage"
   | "customerName"
   | "orderNumber"
   | "priority"
   | "labelStatus"
   | "labelPrintCount"
+
+// ───────────── اندازه لیبل: ۹ سانتی‌متر عرض × ۶ سانتی‌متر ارتفاع (افقی) ─────────────
+const LABEL_W_MM = 90
+const LABEL_H_MM = 60
 
 const normalizeText = (value: string) => {
   if (!value) return ""
@@ -54,26 +59,32 @@ const normalizeText = (value: string) => {
     .trim()
 }
 
+// استخراج ضخامت‌ها از نام کالا: «10 میل»، «10میل»، «2.2 میل»، «لمینیت 6+6» (مجموع)
+const extractThicknesses = (name: string): number[] => {
+  const out: number[] = []
+  for (const m of name.matchAll(/(\d+(?:\.\d+)?)\s*(?:میل|mm)/g)) {
+    out.push(Number(m[1]))
+  }
+  for (const m of name.matchAll(/(\d+(?:\.\d+)?(?:\s*\+\s*\d+(?:\.\d+)?)+)/g)) {
+    out.push(m[1].split("+").reduce((s, x) => s + Number(x), 0))
+  }
+  const lead = name.match(/^(\d+(?:\.\d+)?)(?![\d.])/)
+  if (lead) out.push(Number(lead[1]))
+  return out
+}
+
 const matchProductFilter = (productName: string, query: string) => {
   const name = normalizeText(productName || "")
   const q = normalizeText(query)
   if (!q) return true
-  if (/^\d+(\.\d+)?$/.test(q)) {
-    const patterns = [
-      q + " میل",
-      q + "ميل",
-      q + "mm",
-      q + " mm",
-      " " + q + " ",
-      q + "میل",
-    ]
-    if (patterns.some((p) => name.includes(p))) return true
-    if (name.includes(q) && (name.includes("میل") || name.includes("mm"))) {
-      return true
+  const thicknesses = extractThicknesses(name)
+
+  return q.split(/\s+/).every((token) => {
+    if (/^\d+(\.\d+)?$/.test(token)) {
+      return thicknesses.includes(Number(token))
     }
-    return false
-  }
-  return name.includes(q)
+    return name.includes(token)
+  })
 }
 
 const splitServices = (text?: string | null): string[] => {
@@ -84,6 +95,86 @@ const splitServices = (text?: string | null): string[] => {
     .filter(Boolean)
 }
 
+const formatFaDate = (dateStr?: string | null) => {
+  if (!dateStr) return "—"
+  try {
+    return new Date(dateStr).toLocaleDateString("fa-IR")
+  } catch {
+    return "—"
+  }
+}
+
+// تاریخ لیبل: ارقام لاتین و صفر پر مثل نمونه → 1405/07/04
+const formatLabelDate = (dateStr?: string | null) => {
+  if (!dateStr) return "—"
+  try {
+    return new Date(dateStr).toLocaleDateString("fa-IR-u-nu-latn", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+  } catch {
+    return "—"
+  }
+}
+
+// متن لیبل: ارقام لاتین (مثل نمونه) و ی/ک فارسی
+const labelText = (v: unknown) =>
+  String(v ?? "")
+    .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+    .replace(/ي/g, "ی")
+    .replace(/ك/g, "ک")
+    .trim()
+
+// اندازه فونت ابعاد بر اساس طول متن تا از عرض لیبل بیرون نزند
+const dimsFontPt = (text: string) =>
+  text.length <= 9 ? 20 : text.length <= 11 ? 17 : text.length <= 13 ? 14.5 : 12
+
+// چند سطر متن که هرکدام دقیقاً در یک سطر می‌مانند؛ فونت (مشترک بین سطرها) تا جایی کم می‌شود که همه جا شوند
+function FitLines({
+  lines,
+  maxPt,
+  minPt = 7,
+  className,
+}: {
+  lines: string[]
+  maxPt: number
+  minPt?: number
+  className?: string
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const key = lines.join("|")
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let size = maxPt
+    el.style.fontSize = `${size}pt`
+    const fits = () =>
+      Array.from(el.children).every(
+        (c) => (c as HTMLElement).scrollWidth <= (c as HTMLElement).clientWidth + 0.5
+      )
+    while (!fits() && size > minPt) {
+      size -= 0.5
+      el.style.fontSize = `${size}pt`
+    }
+  }, [key, maxPt, minPt])
+
+  return (
+    <div ref={ref} className={className} style={{ fontSize: `${maxPt}pt` }}>
+      {lines.map((ln, i) => (
+        <div
+          key={i}
+          style={{ whiteSpace: "nowrap", overflow: "hidden", lineHeight: 1.4 }}
+        >
+          {ln}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function CuttingPlanningPage() {
   const [items, setItems] = useState<CuttingItem[]>([])
   const [productNames, setProductNames] = useState<string[]>([])
@@ -92,9 +183,6 @@ export default function CuttingPlanningPage() {
   const [actionLoading, setActionLoading] = useState(false)
 
   const [productName, setProductName] = useState("")
-  const [showProductDrop, setShowProductDrop] = useState(false)
-  const productBoxRef = useRef<HTMLDivElement>(null)
-
   const [labelStatus, setLabelStatus] = useState("همه")
   const [priority, setPriority] = useState("همه")
   const [search, setSearch] = useState("")
@@ -119,16 +207,6 @@ export default function CuttingPlanningPage() {
   }, [])
 
   useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (!productBoxRef.current?.contains(e.target as Node)) {
-        setShowProductDrop(false)
-      }
-    }
-    document.addEventListener("mousedown", onDoc)
-    return () => document.removeEventListener("mousedown", onDoc)
-  }, [])
-
-  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return
       if (showReprintModal) {
@@ -143,7 +221,6 @@ export default function CuttingPlanningPage() {
         setShowReportPreview(false)
         return
       }
-      setShowProductDrop(false)
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
@@ -170,6 +247,7 @@ export default function CuttingPlanningPage() {
     document.body.appendChild(script)
   }
 
+  // بارکد لیبل‌ها
   useEffect(() => {
     if (!showLabelPreview || labels.length === 0) return
     let cancelled = false
@@ -189,13 +267,13 @@ export default function CuttingPlanningPage() {
           el.innerHTML = ""
           JsBarcode(el, String(label.barcode), {
             format: "CODE128",
-            width: 1.3,
-            height: 28,
+            width: 1.5,
+            height: 26,
             displayValue: true,
-            fontSize: 11,
-            textMargin: 1,
+            fontSize: 12,
+            textMargin: 2,
             margin: 0,
-            background: "#F0E000",
+            background: "transparent",
             lineColor: "#000000",
             fontOptions: "bold",
           })
@@ -215,14 +293,6 @@ export default function CuttingPlanningPage() {
     }
   }, [showLabelPreview, labels])
 
-  const productSuggestions = useMemo(() => {
-    const all = [...productNames].sort((a, b) => a.localeCompare(b, "fa"))
-    if (!productName.trim()) return all.slice(0, 40)
-    return all
-      .filter((n) => matchProductFilter(n, productName))
-      .slice(0, 40)
-  }, [productNames, productName])
-
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"))
@@ -239,11 +309,12 @@ export default function CuttingPlanningPage() {
 
   const filtered = useMemo(() => {
     let list = [...items]
+    const qProduct = productName
     const qSearch = normalizeText(search)
 
-    if (productName.trim()) {
+    if (qProduct.trim()) {
       list = list.filter((i) =>
-        matchProductFilter(i.productName || "", productName)
+        matchProductFilter(i.productName || "", qProduct)
       )
     }
     if (labelStatus !== "همه") {
@@ -285,6 +356,8 @@ export default function CuttingPlanningPage() {
           return dir * (num(a.width) - num(b.width))
         case "quantity":
           return dir * (num(a.quantity) - num(b.quantity))
+        case "meterage":
+          return dir * (num(a.meterage) - num(b.meterage))
         case "customerName":
           return (
             dir *
@@ -321,21 +394,21 @@ export default function CuttingPlanningPage() {
     [filtered, selectedIds]
   )
 
-  const reportTotals = useMemo(() => {
-    let totalQty = 0
-    let totalMeterage = 0
-    for (const r of reportRows) {
-      totalQty += Number(r.quantity) || 0
-      totalMeterage += Number(r.meterage) || 0
-    }
-    return { totalQty, totalMeterage }
-  }, [reportRows])
+  const totalQuantity = useMemo(
+    () => reportRows.reduce((s, r) => s + (Number(r.quantity) || 0), 0),
+    [reportRows]
+  )
+  const totalMeterage = useMemo(
+    () => reportRows.reduce((s, r) => s + (Number(r.meterage) || 0), 0),
+    [reportRows]
+  )
 
   const reportTitleProduct =
     productName.trim() || (reportRows[0]?.productName ?? "همه کالاها")
 
   const todayFa = new Date().toLocaleDateString("fa-IR")
 
+  // بارکد برگه برنامه‌ریزی
   useEffect(() => {
     if (!showReportPreview || reportRows.length === 0) return
     let cancelled = false
@@ -355,10 +428,10 @@ export default function CuttingPlanningPage() {
           el.innerHTML = ""
           JsBarcode(el, String(row.barcode), {
             format: "CODE128",
-            width: 1.0,
-            height: 20,
+            width: 1.2,
+            height: 26,
             displayValue: true,
-            fontSize: 8,
+            fontSize: 10,
             textMargin: 1,
             margin: 0,
           })
@@ -376,15 +449,11 @@ export default function CuttingPlanningPage() {
     }
   }, [showReportPreview, reportRows])
 
+  // همه فیلترها سمت کلاینت انجام می‌شود؛ سرور همیشه لیست کامل را برمی‌گرداند
   const fetchData = async () => {
     try {
       setLoading(true)
-      const params = new URLSearchParams()
-      if (labelStatus) params.set("labelStatus", labelStatus)
-      if (priority) params.set("priority", priority)
-      if (search) params.set("search", search)
-
-      const res = await fetch(`/api/production/cutting?${params.toString()}`)
+      const res = await fetch("/api/production/cutting", { cache: "no-store" })
       if (!res.ok) throw new Error("خطا در دریافت")
       const data = await res.json()
       setItems(data.items || [])
@@ -516,11 +585,11 @@ export default function CuttingPlanningPage() {
       "تاریخ تحویل",
       "اولویت",
       "نام مشتری",
+      "متراژ",
       "تعداد",
       "نام کالا",
       "عرض",
       "طول",
-      "متراژ",
       "خدمات",
       "توضیحات",
     ]
@@ -534,35 +603,33 @@ export default function CuttingPlanningPage() {
         formatFaDate(row.deliveryDate),
         row.priority || "عادی",
         row.customerName || "",
+        row.meterage != null ? Number(row.meterage).toFixed(4) : "",
         row.quantity,
         row.productName || "",
         row.width ?? "",
         row.length ?? "",
-        row.meterage != null ? Number(row.meterage).toFixed(4) : "",
         (row.servicesText || "").replace(/,/g, "،"),
         (row.notes || "").replace(/,/g, "،"),
       ].join(",")
     )
-    lines.push(
-      [
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "جمع",
-        reportTotals.totalQty,
-        "",
-        "",
-        "",
-        reportTotals.totalMeterage.toFixed(4),
-        "",
-        "",
-      ].join(",")
-    )
-    const csv = "\uFEFF" + [headers.join(","), ...lines].join("\n")
+    const totalLine = [
+      "جمع کل",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      totalMeterage.toFixed(4),
+      totalQuantity,
+      "",
+      "",
+      "",
+      "",
+      "",
+    ].join(",")
+    const csv = "\uFEFF" + [headers.join(","), ...lines, totalLine].join("\n")
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
@@ -585,21 +652,144 @@ export default function CuttingPlanningPage() {
     }
   }
 
-  const formatFaDate = (dateStr?: string | null) => {
-    if (!dateStr) return "—"
-    try {
-      return new Date(dateStr).toLocaleDateString("fa-IR")
-    } catch {
-      return "—"
-    }
-  }
-
   const thClass =
     "p-3 font-bold text-center cursor-pointer select-none hover:bg-teal-500/25 transition whitespace-nowrap"
+  const thNarrowClass =
+    "px-1.5 py-3 text-xs font-bold text-center cursor-pointer select-none hover:bg-teal-500/25 transition whitespace-nowrap"
+
+  const pageCss = `
+    @media print {
+      @page {
+        size: ${
+          showLabelPreview ? `${LABEL_W_MM}mm ${LABEL_H_MM}mm` : "A4 portrait"
+        };
+        margin: ${showLabelPreview ? "0" : "6mm"};
+      }
+      body {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      html, body, .print-root { background: none !important; }
+      ${
+        showLabelPreview
+          ? `
+      html, body { margin: 0 !important; padding: 0 !important; background: none !important; }
+      .print-root { background: none !important; padding: 0 !important; min-height: 0 !important; }
+      .label-sheet {
+        background: transparent !important;
+        border: none !important;
+        height: ${LABEL_H_MM - 0.6}mm !important;
+        margin: 0 !important;
+        break-after: page;
+        page-break-after: always;
+        break-inside: avoid;
+      }
+      .label-sheet:last-child { break-after: auto; page-break-after: auto; }
+      `
+          : ""
+      }
+    }
+
+    .label-sheet {
+      box-sizing: border-box;
+      width: ${LABEL_W_MM}mm;
+      height: ${LABEL_H_MM}mm;
+      padding: 2.5mm 4mm;
+      background: #F0E000;
+      border: 1px solid #c4a000;
+      color: #000;
+      font-family: Tahoma, "Segoe UI", Arial, sans-serif;
+      font-weight: 700;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    /* بالا: تاریخ‌ها گوشه چپ، سمت راست خالی برای لوگوی چاپ‌شده روی لیبل خام */
+    .label-top {
+      direction: ltr;
+      display: flex;
+      justify-content: flex-start;
+      height: 13mm;
+      flex: none;
+    }
+    .label-dates {
+      display: grid;
+      grid-template-columns: auto auto;
+      column-gap: 2mm;
+      align-content: start;
+      width: max-content;
+      direction: rtl;
+      font-size: 8.5pt;
+      line-height: 1.4;
+      font-weight: 700;
+    }
+    .label-dates .lbl { text-align: right; }
+    .label-dates .val {
+      direction: ltr;
+      unicode-bidi: isolate;
+      text-align: left;
+      font-weight: 900;
+    }
+    .label-line { flex: none; border-top: 1px dashed #000; margin: 0 0 2mm; }
+    .label-main {
+      direction: ltr;
+      display: flex;
+      justify-content: space-between;
+      gap: 3mm;
+      flex: 1;
+      min-height: 0;
+    }
+    .label-left {
+      width: 46%;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      text-align: left;
+    }
+    .label-right { width: 50%; direction: rtl; text-align: right; }
+    .label-product {
+      font-size: 12pt;
+      line-height: 1.3;
+      font-weight: 700;
+      direction: rtl;
+      text-align: left;
+      unicode-bidi: plaintext;
+    }
+    .label-dims {
+      font-weight: 900;
+      line-height: 1.15;
+      margin-top: 1mm;
+      direction: ltr;
+      unicode-bidi: isolate;
+      white-space: nowrap;
+    }
+    .label-notes {
+      font-size: 10pt;
+      line-height: 1.3;
+      margin-top: 1mm;
+      font-weight: 700;
+      direction: rtl;
+      text-align: left;
+      unicode-bidi: plaintext;
+    }
+    .label-barcode { margin-top: auto; direction: ltr; line-height: 0; }
+    .label-barcode svg { display: block; max-width: 100%; }
+    .label-right { min-width: 0; }
+    .label-customer {
+      font-weight: 900;
+      line-height: 1.3;
+      margin-bottom: 1.5mm;
+    }
+    .label-service {
+      font-weight: 900;
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+  `
 
   return (
     <div
-      className="min-h-screen p-4 bg-cover bg-center bg-fixed print:bg-none print:p-0"
+      className="print-root min-h-screen p-4 bg-cover bg-center bg-fixed"
       style={{
         backgroundImage:
           "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
@@ -607,71 +797,7 @@ export default function CuttingPlanningPage() {
       }}
       dir="rtl"
     >
-      <style jsx global>{`
-        @media print {
-          @page {
-            size: A4 portrait;
-            margin: 6mm;
-          }
-          html,
-          body {
-            background: #fff !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
-          }
-          body * {
-            visibility: hidden !important;
-          }
-          .print-area,
-          .print-area *,
-          .print-label-area,
-          .print-label-area * {
-            visibility: visible !important;
-          }
-          .print-area,
-          .print-label-area {
-            position: fixed !important;
-            inset: 0 !important;
-            width: 100% !important;
-            height: auto !important;
-            max-width: none !important;
-            margin: 0 !important;
-            padding: 4mm !important;
-            background: #fff !important;
-            box-shadow: none !important;
-            border-radius: 0 !important;
-            overflow: visible !important;
-            z-index: 99999 !important;
-          }
-          .print-area table {
-            width: 100% !important;
-            table-layout: fixed !important;
-            font-size: 9px !important;
-            border-collapse: collapse !important;
-          }
-          .print-area th,
-          .print-area td {
-            padding: 2px 2px !important;
-            word-wrap: break-word !important;
-            overflow-wrap: anywhere !important;
-          }
-          .print-area th:first-child,
-          .print-area td:first-child {
-            width: 26px !important;
-            max-width: 26px !important;
-          }
-          .print-area svg {
-            max-width: 78px !important;
-            height: auto !important;
-          }
-          .print-hidden {
-            display: none !important;
-            visibility: hidden !important;
-          }
-        }
-      `}</style>
+      <style jsx global>{pageCss}</style>
 
       <div className="pointer-events-none fixed inset-0 bg-black/5 print:hidden" />
 
@@ -707,46 +833,24 @@ export default function CuttingPlanningPage() {
 
         <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-            <div className="md:col-span-3 relative" ref={productBoxRef}>
+            <div className="md:col-span-3">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
                 نام کالا / ضخامت
               </label>
               <input
+                list="product-list"
                 value={productName}
-                onChange={(e) => {
-                  setProductName(e.target.value)
-                  setShowProductDrop(true)
-                }}
-                onFocus={() => setShowProductDrop(true)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    setShowProductDrop(false)
-                    fetchData()
-                  }
-                }}
-                placeholder="مثلاً ۴ یا آینه ۴ میل..."
+                onChange={(e) => setProductName(e.target.value)}
+                placeholder="مثلاً ۱۰ یا آینه ۴ میل..."
                 className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
-                autoComplete="off"
               />
-              {showProductDrop && productSuggestions.length > 0 && (
-                <div className="absolute z-30 mt-1 w-full max-h-56 overflow-auto rounded-xl border border-teal-300 bg-white shadow-xl">
-                  {productSuggestions.map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      className="block w-full text-right px-3 py-2 text-sm font-bold text-blue-950 hover:bg-teal-50 border-b border-teal-50 last:border-0"
-                      onClick={() => {
-                        setProductName(name)
-                        setShowProductDrop(false)
-                      }}
-                    >
-                      {name}
-                    </button>
-                  ))}
-                </div>
-              )}
+              <datalist id="product-list">
+                {productNames.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
               <p className="text-[11px] text-blue-700 mt-1">
-                با زدن عدد ضخامت یا انتخاب از لیست، نام کامل کالا می‌آید
+                با زدن فقط عدد ضخامت (مثل ۱۰) همه شیشه و آینه‌های همان ضخامت می‌آید
               </p>
             </div>
             <div className="md:col-span-2">
@@ -787,9 +891,6 @@ export default function CuttingPlanningPage() {
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") fetchData()
-                }}
                 placeholder="مشتری / ش سفارش / بارکد..."
                 className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
               />
@@ -799,7 +900,7 @@ export default function CuttingPlanningPage() {
                 onClick={fetchData}
                 className="w-full rounded-xl bg-teal-500 hover:bg-teal-600 px-4 py-2.5 text-white font-bold"
               >
-                جستجو / بروزرسانی
+                بروزرسانی
               </button>
             </div>
           </div>
@@ -862,7 +963,10 @@ export default function CuttingPlanningPage() {
                     />
                   </th>
                   <th className="p-3 font-bold text-center">ردیف</th>
-                  <th className={thClass} onClick={() => toggleSort("barcode")}>
+                  <th
+                    className={thNarrowClass}
+                    onClick={() => toggleSort("barcode")}
+                  >
                     بارکد{sortIndicator("barcode")}
                   </th>
                   <th
@@ -885,6 +989,12 @@ export default function CuttingPlanningPage() {
                     onClick={() => toggleSort("customerName")}
                   >
                     مشتری{sortIndicator("customerName")}
+                  </th>
+                  <th className={thClass} onClick={() => toggleSort("meterage")}>
+                    متراژ{sortIndicator("meterage")}
+                  </th>
+                  <th className="p-3 font-bold text-center w-[30%] min-w-[260px]">
+                    خدمات
                   </th>
                   <th
                     className={thClass}
@@ -923,7 +1033,7 @@ export default function CuttingPlanningPage() {
                       />
                     </td>
                     <td className="p-3 text-center font-bold">{index + 1}</td>
-                    <td className="p-3 text-center font-bold text-teal-800">
+                    <td className="px-1.5 py-3 text-center font-bold text-teal-800 text-xs whitespace-nowrap">
                       {item.barcode || "—"}
                     </td>
                     <td className="p-3 font-bold">{item.productName}</td>
@@ -933,6 +1043,18 @@ export default function CuttingPlanningPage() {
                       {item.quantity}
                     </td>
                     <td className="p-3 font-bold">{item.customerName || "—"}</td>
+                    <td className="p-3 text-center font-semibold">
+                      {item.meterage != null
+                        ? Number(item.meterage).toFixed(2)
+                        : "—"}
+                    </td>
+                    <td className="p-3 font-bold text-sm leading-6 min-w-[260px]">
+                      {splitServices(item.servicesText).length > 0
+                        ? splitServices(item.servicesText).map((sv, i) => (
+                            <div key={i}>{sv}</div>
+                          ))
+                        : "—"}
+                    </td>
                     <td className="p-3 text-center font-bold text-teal-800">
                       {item.orderNumber || "—"}
                     </td>
@@ -961,6 +1083,7 @@ export default function CuttingPlanningPage() {
             <h2 className="text-xl font-bold text-blue-950 mb-4">
               اجازه چاپ مجدد
             </h2>
+
             <div className="flex gap-2 mb-4">
               <button
                 type="button"
@@ -972,6 +1095,9 @@ export default function CuttingPlanningPage() {
                 }`}
               >
                 چاپ مجدد ساده
+                <span className="block text-[11px] font-semibold opacity-90 mt-0.5">
+                  پارگی لیبل — بدون علت
+                </span>
               </button>
               <button
                 type="button"
@@ -983,8 +1109,12 @@ export default function CuttingPlanningPage() {
                 }`}
               >
                 با ثبت ضایعات
+                <span className="block text-[11px] font-semibold opacity-90 mt-0.5">
+                  علت + بخش + شخص
+                </span>
               </button>
             </div>
+
             {reprintMode === "waste" ? (
               <div className="space-y-4">
                 <div>
@@ -996,6 +1126,7 @@ export default function CuttingPlanningPage() {
                     onChange={(e) => setWasteReason(e.target.value)}
                     rows={3}
                     className="w-full rounded-xl border border-teal-500/30 px-4 py-2.5 text-sm font-semibold focus:border-teal-500 focus:outline-none"
+                    placeholder="علت را بنویسید..."
                   />
                 </div>
                 <div>
@@ -1022,19 +1153,22 @@ export default function CuttingPlanningPage() {
                     value={wastePerson}
                     onChange={(e) => setWastePerson(e.target.value)}
                     className="w-full rounded-xl border border-teal-500/30 px-4 py-2.5 text-sm font-semibold focus:border-teal-500 focus:outline-none"
+                    placeholder="نام شخص"
                   />
                 </div>
               </div>
             ) : (
               <p className="text-sm text-blue-800 bg-teal-50 border border-teal-100 rounded-xl p-3 font-semibold">
-                فقط اجازه چاپ مجدد ثبت می‌شود (پارگی لیبل و …).
+                فقط اجازه چاپ مجدد ثبت می‌شود؛ نیازی به علت ضایعات نیست (مثلاً
+                پارگی لیبل یا چاپ ناخوانا).
               </p>
             )}
+
             <div className="mt-6 flex gap-3 justify-end">
               <button
                 type="button"
                 onClick={() => setShowReprintModal(false)}
-                className="rounded-xl border border-gray-300 px-5 py-2.5 font-bold text-gray-700"
+                className="rounded-xl border border-gray-300 px-5 py-2.5 font-bold text-gray-700 hover:bg-gray-50"
               >
                 انصراف
               </button>
@@ -1048,7 +1182,11 @@ export default function CuttingPlanningPage() {
                     : "bg-teal-500 hover:bg-teal-600"
                 }`}
               >
-                {actionLoading ? "..." : "تأیید"}
+                {actionLoading
+                  ? "در حال ثبت..."
+                  : reprintMode === "waste"
+                    ? "تأیید ضایعات و چاپ مجدد"
+                    : "تأیید چاپ مجدد ساده"}
               </button>
             </div>
           </div>
@@ -1057,10 +1195,10 @@ export default function CuttingPlanningPage() {
 
       {showLabelPreview && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-auto print:static print:bg-white print:p-0">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-0 print-label-area">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-0">
             <div className="flex justify-between items-center mb-4 print:hidden">
               <h2 className="text-xl font-bold text-blue-950">
-                پیش‌نمایش لیبل‌ها ({labels.length} قطعه) — ۹×۶ سانتی‌متر
+                پیش‌نمایش لیبل‌ها ({labels.length} قطعه)
               </h2>
               <div className="flex gap-2">
                 <button
@@ -1078,146 +1216,76 @@ export default function CuttingPlanningPage() {
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-3 print:gap-0 justify-center print:justify-start">
+            <div className="flex flex-wrap gap-4 print:block">
               {labels.map((label, idx) => {
-                const services = splitServices(label.servicesText)
+                const services = splitServices(labelText(label.servicesText))
+                const customerStr = labelText(label.customerName) || "—"
+                const dimsText = `${label.length ?? "—"} * ${label.width ?? "—"}=${label.quantity ?? 1}`
                 return (
                   <div
                     key={`${label.productionItemId}-${idx}`}
-                    className="relative overflow-hidden text-black print:break-inside-avoid"
-                    style={{
-                      backgroundColor: "#F0E000",
-                      width: "9cm",
-                      height: "6cm",
-                      padding: "4mm",
-                      boxSizing: "border-box",
-                      borderRadius: 4,
-                      border: "1px solid #c4a000",
-                      display: "flex",
-                      flexDirection: "column",
-                    }}
+                    className="label-sheet"
                     dir="rtl"
                   >
-                    <div className="flex justify-between items-start gap-1">
-                      <img
-                        src="https://i.postimg.cc/PrV3wWPS/Whats-App-Image-2026-09-04-at-10-25-58-PM.jpg"
-                        alt="Akhavan"
-                        style={{
-                          height: 32,
-                          width: "auto",
-                          mixBlendMode: "multiply",
-                        }}
-                      />
-                      <div
-                        className="text-right font-bold"
-                        style={{ fontSize: 9, lineHeight: 1.35 }}
-                      >
-                        <p>سفارش: {formatFaDate(label.orderDate)}</p>
-                        <p>تحویل: {formatFaDate(label.deliveryDate)}</p>
-                        <p>
-                          ش:{" "}
-                          <span style={{ fontSize: 11, fontWeight: 900 }}>
-                            {label.orderNumber || "—"}
-                          </span>
-                        </p>
+                    {/* بالا چپ: تاریخ‌ها و شماره سفارش */}
+                    <div className="label-top">
+                      <div className="label-dates">
+                        <span className="lbl">تاریخ سفارش:</span>
+                        <span className="val">{formatLabelDate(label.orderDate)}</span>
+                        <span className="lbl">تاریخ تحویل:</span>
+                        <span className="val">{formatLabelDate(label.deliveryDate)}</span>
+                        <span className="lbl">شماره سفارش:</span>
+                        <span className="val">{labelText(label.orderNumber) || "—"}</span>
                       </div>
                     </div>
 
-                    <div
-                      style={{
-                        borderTop: "1px solid rgba(0,0,0,0.35)",
-                        margin: "3px 0 4px",
-                      }}
-                    />
+                    <div className="label-line" />
 
-                    <div
-                      className="flex justify-between items-start gap-2 flex-1"
-                      style={{ minHeight: 0 }}
-                    >
-                      <div style={{ width: "40%", textAlign: "right" }}>
-                        <p
-                          className="font-black"
-                          style={{ fontSize: 12, lineHeight: 1.25 }}
+                    <div className="label-main">
+                      {/* چپ: کالا، ابعاد، توضیحات و بارکد پایین چپ */}
+                      <div className="label-left">
+                        <FitLines
+                          className="label-product"
+                          lines={[labelText(label.productName)]}
+                          maxPt={12}
+                          minPt={7}
+                        />
+                        <div
+                          className="label-dims"
+                          style={{ fontSize: `${dimsFontPt(dimsText)}pt` }}
                         >
-                          {label.customerName || "—"}
-                        </p>
+                          {dimsText}
+                        </div>
+                        {label.notes ? (
+                          <FitLines
+                            className="label-notes"
+                            lines={[labelText(label.notes)]}
+                            maxPt={10}
+                            minPt={7}
+                          />
+                        ) : null}
+                        <div className="label-barcode">
+                          <svg id={`barcode-${label.productionItemId}-${idx}`} />
+                        </div>
+                      </div>
+
+                      {/* راست: مشتری و خدمات زیر هم */}
+                      <div className="label-right">
+                        <FitLines
+                          className="label-customer"
+                          lines={[customerStr]}
+                          maxPt={14}
+                          minPt={8}
+                        />
                         {services.length > 0 && (
-                          <ul className="mt-1 space-y-0.5 list-none p-0 m-0">
-                            {services.map((s, i) => (
-                              <li
-                                key={i}
-                                style={{
-                                  fontSize: 12,
-                                  fontWeight: 900,
-                                  lineHeight: 1.2,
-                                }}
-                              >
-                                {s}
-                              </li>
-                            ))}
-                          </ul>
+                          <FitLines
+                            className="label-service"
+                            lines={services}
+                            maxPt={14}
+                            minPt={8}
+                          />
                         )}
                       </div>
-                      <div
-                        style={{
-                          width: "58%",
-                          textAlign: "left",
-                          direction: "ltr",
-                        }}
-                      >
-                        <p
-                          style={{
-                            fontWeight: 700,
-                            fontSize: 12,
-                            lineHeight: 1.25,
-                            textAlign: "left",
-                            direction: "rtl",
-                            unicodeBidi: "plaintext",
-                          }}
-                        >
-                          {label.productName}
-                        </p>
-                        <p
-                          style={{
-                            fontWeight: 900,
-                            fontSize: 16,
-                            marginTop: 2,
-                            textAlign: "left",
-                            direction: "ltr",
-                          }}
-                        >
-                          {label.length ?? "—"}*{label.width ?? "—"}=
-                          {label.quantity ?? 1}
-                        </p>
-                        {label.notes ? (
-                          <p
-                            style={{
-                              fontSize: 9,
-                              fontWeight: 600,
-                              marginTop: 2,
-                              direction: "rtl",
-                              textAlign: "left",
-                              unicodeBidi: "plaintext",
-                            }}
-                          >
-                            {label.notes}
-                          </p>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <div
-                      style={{
-                        direction: "ltr",
-                        display: "flex",
-                        justifyContent: "flex-start",
-                        marginTop: 2,
-                      }}
-                    >
-                      <svg
-                        id={`barcode-${label.productionItemId}-${idx}`}
-                        style={{ display: "block", maxWidth: "100%" }}
-                      />
                     </div>
                   </div>
                 )
@@ -1229,7 +1297,7 @@ export default function CuttingPlanningPage() {
 
       {showReportPreview && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-auto print:static print:bg-white print:p-0">
-          <div className="bg-white rounded-2xl p-4 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-2 print:w-full print-area">
+          <div className="bg-white rounded-2xl p-4 w-full max-w-5xl my-4 print:shadow-none print:rounded-none print:my-0 print:max-w-none print:p-1">
             <div className="flex justify-between items-center mb-3 print:hidden">
               <h2 className="text-xl font-bold text-blue-950">
                 برگه برنامه‌ریزی برش
@@ -1256,12 +1324,12 @@ export default function CuttingPlanningPage() {
               </div>
             </div>
 
-            <div className="text-black bg-white" dir="rtl">
+            <div className="text-black" dir="rtl">
               <div className="text-center mb-2">
-                <h3 className="text-xl font-black tracking-wide print:text-lg">
+                <h3 className="text-xl font-black tracking-wide">
                   لیست برش CNC
                 </h3>
-                <div className="flex justify-between text-sm mt-2 px-1 font-bold print:text-xs">
+                <div className="flex justify-between text-sm mt-2 px-1 font-bold">
                   <span>
                     نام کالا: <strong>{reportTitleProduct}</strong>
                   </span>
@@ -1269,24 +1337,7 @@ export default function CuttingPlanningPage() {
                 </div>
               </div>
 
-              <table
-                className="w-full border-collapse text-[12px] font-bold print:text-[9px]"
-                style={{ tableLayout: "fixed" }}
-              >
-                <colgroup>
-                  <col style={{ width: "28px" }} />
-                  <col style={{ width: "88px" }} />
-                  <col style={{ width: "48px" }} />
-                  <col style={{ width: "48px" }} />
-                  <col style={{ width: "68px" }} />
-                  <col style={{ width: "68px" }} />
-                  <col />
-                  <col style={{ width: "40px" }} />
-                  <col style={{ width: "40px" }} />
-                  <col style={{ width: "40px" }} />
-                  <col style={{ width: "48px" }} />
-                  <col style={{ width: "70px" }} />
-                </colgroup>
+              <table className="w-full border-collapse text-[12px] font-bold">
                 <thead>
                   <tr>
                     {[
@@ -1297,15 +1348,15 @@ export default function CuttingPlanningPage() {
                       "تاریخ سفارش",
                       "تاریخ تحویل",
                       "نام مشتری",
+                      "متراژ",
                       "تعداد",
                       "عرض",
                       "طول",
-                      "متراژ",
                       "خدمات",
                     ].map((h) => (
                       <th
                         key={h}
-                        className="border border-black p-1 font-black bg-gray-100 text-[11px] print:text-[9px]"
+                        className="border border-black p-1.5 font-black bg-gray-100 text-[12px]"
                       >
                         {h}
                       </th>
@@ -1315,73 +1366,72 @@ export default function CuttingPlanningPage() {
                 <tbody>
                   {reportRows.map((row, idx) => (
                     <tr key={row.productionItemId}>
-                      <td className="border border-black p-1 text-center font-black">
+                      <td className="border border-black p-1.5 text-center font-black">
                         {idx + 1}
                       </td>
-                      <td className="border border-black p-0.5 text-center overflow-hidden">
+                      <td className="border border-black p-1 text-center">
                         <svg
                           id={`report-barcode-${row.productionItemId}`}
-                          style={{
-                            display: "block",
-                            margin: "0 auto",
-                            maxWidth: "82px",
-                          }}
+                          className="mx-auto"
+                          style={{ display: "block", margin: "0 auto" }}
                         />
                       </td>
-                      <td className="border border-black p-1 text-center font-bold">
+                      <td className="border border-black p-1.5 text-center font-bold">
                         {row.installationCode || "—"}
                       </td>
-                      <td className="border border-black p-1 text-center font-black">
+                      <td className="border border-black p-1.5 text-center font-black">
                         {row.orderNumber || "—"}
                       </td>
-                      <td className="border border-black p-1 text-center font-bold">
+                      <td className="border border-black p-1.5 text-center font-bold">
                         {formatFaDate(row.orderDate)}
                       </td>
-                      <td className="border border-black p-1 text-center font-bold">
+                      <td className="border border-black p-1.5 text-center font-bold">
                         <div>{row.priority || "عادی"}</div>
-                        <div className="text-[10px] print:text-[8px]">
+                        <div className="text-[11px]">
                           {formatFaDate(row.deliveryDate)}
                         </div>
                       </td>
-                      <td className="border border-black p-1 font-black">
+                      <td className="border border-black p-1.5 font-black">
                         {row.customerName || "—"}
                       </td>
-                      <td className="border border-black p-1 text-center font-black">
-                        {row.quantity}
-                      </td>
-                      <td className="border border-black p-1 text-center font-black">
-                        {row.width ?? "—"}
-                      </td>
-                      <td className="border border-black p-1 text-center font-black">
-                        {row.length ?? "—"}
-                      </td>
-                      <td className="border border-black p-1 text-center font-bold">
+                      <td className="border border-black p-1.5 text-center font-bold">
                         {row.meterage != null
                           ? Number(row.meterage).toFixed(2)
                           : "—"}
                       </td>
-                      <td className="border border-black p-1 text-[10px] font-bold print:text-[8px]">
+                      <td className="border border-black p-1.5 text-center font-black">
+                        {row.quantity}
+                      </td>
+                      <td className="border border-black p-1.5 text-center font-black">
+                        {row.width ?? "—"}
+                      </td>
+                      <td className="border border-black p-1.5 text-center font-black">
+                        {row.length ?? "—"}
+                      </td>
+                      <td className="border border-black p-1.5 text-[11px] font-bold">
                         {row.servicesText || row.notes || "—"}
                       </td>
                     </tr>
                   ))}
-                  <tr className="bg-gray-50">
+                </tbody>
+                <tfoot>
+                  <tr className="bg-gray-100">
                     <td
                       colSpan={7}
-                      className="border border-black p-1 text-left font-black"
+                      className="border border-black p-1.5 text-center font-black"
                     >
                       جمع کل
                     </td>
-                    <td className="border border-black p-1 text-center font-black">
-                      {reportTotals.totalQty}
+                    <td className="border border-black p-1.5 text-center font-black">
+                      {totalMeterage.toFixed(2)}
                     </td>
-                    <td className="border border-black p-1" colSpan={2} />
-                    <td className="border border-black p-1 text-center font-black">
-                      {reportTotals.totalMeterage.toFixed(2)}
+                    <td className="border border-black p-1.5 text-center font-black">
+                      {totalQuantity}
                     </td>
-                    <td className="border border-black p-1" />
+                    <td colSpan={2} className="border border-black p-1.5" />
+                    <td className="border border-black p-1.5" />
                   </tr>
-                </tbody>
+                </tfoot>
               </table>
             </div>
           </div>

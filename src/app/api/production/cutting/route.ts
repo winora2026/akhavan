@@ -1,39 +1,45 @@
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 
-const normalizeText = (value: string) => {
-  if (!value) return ""
-  return value
-    .replace(/[\u200c\u200f\u200e]/g, "")
-    .replace(/ي/g, "ی")
-    .replace(/ك/g, "ک")
-    .replace(/ة/g, "ه")
-    .toLowerCase()
-    .trim()
+// استخراج عنوان خدمات از servicesData با فرمت‌های مختلف:
+// آرایه‌ی آبجکت (title/name/serviceName/label)، آرایه‌ی رشته، آبجکت با کلید services/items،
+// رشته‌ی JSON، و JSON دوبار encode شده
+function serviceTitle(s: any): string {
+  if (s == null) return ""
+  if (typeof s === "string" || typeof s === "number") return String(s).trim()
+  const t =
+    s.title ||
+    s.name ||
+    s.serviceName ||
+    s.label ||
+    s.text ||
+    s.service?.title ||
+    s.service?.name ||
+    ""
+  return String(t).trim()
 }
 
 function buildServicesText(servicesData: any): string {
   if (!servicesData) return ""
   try {
-    const parsed =
-      typeof servicesData === "string" ? JSON.parse(servicesData) : servicesData
+    let parsed: any = servicesData
+    if (typeof parsed === "string") parsed = JSON.parse(parsed)
+    if (typeof parsed === "string") parsed = JSON.parse(parsed) // دوبار encode
+    if (parsed && !Array.isArray(parsed) && typeof parsed === "object") {
+      parsed = parsed.services ?? parsed.items ?? Object.values(parsed)
+    }
     if (!Array.isArray(parsed)) return ""
-    return parsed
-      .map((s: any) => s.title || s.name)
-      .filter(Boolean)
-      .join(" + ")
+    return parsed.map(serviceTitle).filter(Boolean).join(" + ")
   } catch {
-    return ""
+    // اگر JSON نبود ولی متن ساده بود، همان را نشان بده
+    return typeof servicesData === "string" ? servicesData.trim() : ""
   }
 }
 
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
-    const productName = searchParams.get("productName")?.trim() || ""
-    const labelStatus = searchParams.get("labelStatus") || "همه"
-    const priority = searchParams.get("priority") || "همه"
-    const search = searchParams.get("search")?.trim() || ""
+    const debug = searchParams.get("debug") === "1"
 
     const cutStation = await prisma.productionStation.findFirst({
       where: { name: "برش" },
@@ -70,16 +76,28 @@ export async function GET(req: Request) {
       orderBy: { createdAt: "asc" },
     })
 
-    let result = rows.map((row) => {
+    const rawDebug: any[] = []
+
+    // همه‌ی فیلترها سمت کلاینت انجام می‌شود؛ اینجا لیست کامل برگردانده می‌شود
+    const result = rows.map((row) => {
       const item = row.productionItem
       const order = item.productionOrder
       const salesOrder = order.order
       const salesItem =
         salesOrder?.items?.find((si) => si.id === item.orderItemId) || null
 
-      const servicesText = buildServicesText(
-        (salesItem as any)?.servicesData ?? null
-      )
+      const rawServices = (salesItem as any)?.servicesData ?? null
+      const servicesText = buildServicesText(rawServices)
+
+      if (debug && rawDebug.length < 10) {
+        rawDebug.push({
+          productionItemId: item.id,
+          orderItemId: item.orderItemId,
+          salesItemFound: !!salesItem,
+          rawServices,
+          servicesText,
+        })
+      }
 
       return {
         itemStationId: row.id,
@@ -113,38 +131,14 @@ export async function GET(req: Request) {
       }
     })
 
-    if (productName) {
-      const q = normalizeText(productName)
-      result = result.filter((r) =>
-        normalizeText(r.productName || "").includes(q)
-      )
-    }
-
-    if (labelStatus !== "همه") {
-      result = result.filter((r) => r.labelStatus === labelStatus)
-    }
-
-    if (priority !== "همه") {
-      result = result.filter((r) => r.priority === priority)
-    }
-
-    if (search) {
-      const q = normalizeText(search)
-      result = result.filter(
-        (r) =>
-          normalizeText(r.customerName || "").includes(q) ||
-          normalizeText(r.productionNumber || "").includes(q) ||
-          normalizeText(r.orderNumber || "").includes(q) ||
-          normalizeText(r.barcode || "").includes(q) ||
-          normalizeText(r.productName || "").includes(q)
-      )
-    }
-
-    // لیست نام کالاها از کل داده‌های ایستگاه برش (قبل از فیلتر نام) برای datalist
     const allNames = rows.map((r) => r.productionItem.productName)
     const productNames = Array.from(new Set(allNames)).sort()
 
-    return NextResponse.json({ items: result, productNames })
+    return NextResponse.json({
+      items: result,
+      productNames,
+      ...(debug ? { debug: rawDebug } : {}),
+    })
   } catch (error: any) {
     console.error(error)
     return NextResponse.json(

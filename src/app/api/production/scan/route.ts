@@ -19,7 +19,7 @@ function buildServicesText(servicesData: any): string {
 export async function POST(req: Request) {
   try {
     const body = await req.json()
-    const { barcode, stationId, operatorName, confirmed } = body
+    const { barcode, stationId, operatorName, confirmed, quantityDone } = body
 
     if (!barcode || !stationId) {
       return NextResponse.json(
@@ -92,7 +92,7 @@ export async function POST(req: Request) {
       )
     }
 
-    // فقط برش قبل از بقیه اجباری است — ترتیب بقیه مهم نیست
+    // فقط برش قبل از بقیه اجباری است
     if (stationRow.station.name !== "برش") {
       const cut = item.stations.find((s) => s.station.name === "برش")
       if (!cut || cut.status !== "تکمیل شده") {
@@ -107,13 +107,14 @@ export async function POST(req: Request) {
       }
     }
 
-    const qty = stationRow.quantityIn || item.quantity || 1
+    const fullQty = stationRow.quantityIn || item.quantity || 1
 
-        if (qty > 5 && !confirmed) {
+    // تعداد بالای ۵ بدون تأیید → پاپ‌آپ
+    if (fullQty > 5 && !confirmed) {
       const salesOrderEarly = item.productionOrder.order
       return NextResponse.json({
         needsConfirmation: true,
-        quantity: qty,
+        quantity: fullQty,
         productName: item.productName,
         orderNumber: salesOrderEarly?.orderNumber,
         customerName: salesOrderEarly?.customer?.name,
@@ -127,17 +128,54 @@ export async function POST(req: Request) {
       })
     }
 
-    await prisma.productionItemStation.update({
-      where: { id: stationRow.id },
-      data: {
-        status: "تکمیل شده",
-        quantityOut: qty,
-        quantityWaste: 0,
-        completedAt: new Date(),
-        startedAt: stationRow.startedAt || new Date(),
-        operatorId: operatorName || null,
-      },
-    })
+    // تعدادی که باید رد شود (جزئی یا همه)
+    let qty = fullQty
+    if (quantityDone != null && quantityDone !== "") {
+      const n = parseInt(String(quantityDone), 10)
+      if (!n || n < 1) {
+        return NextResponse.json(
+          { error: "تعداد نامعتبر است" },
+          { status: 400 }
+        )
+      }
+      if (n > fullQty) {
+        return NextResponse.json(
+          { error: `حداکثر ${fullQty} عدد قابل رد است` },
+          { status: 400 }
+        )
+      }
+      qty = n
+    }
+
+    const remaining = fullQty - qty
+
+    if (remaining > 0) {
+      // فقط بخشی رد شد — در صف می‌ماند
+      await prisma.productionItemStation.update({
+        where: { id: stationRow.id },
+        data: {
+          status: "در حال انجام",
+          quantityIn: remaining,
+          quantityOut: (stationRow.quantityOut || 0) + qty,
+          startedAt: stationRow.startedAt || new Date(),
+          operatorId: operatorName || null,
+        },
+      })
+    } else {
+      // همه رد شد
+      await prisma.productionItemStation.update({
+        where: { id: stationRow.id },
+        data: {
+          status: "تکمیل شده",
+          quantityOut: (stationRow.quantityOut || 0) + qty,
+          quantityIn: 0,
+          quantityWaste: 0,
+          completedAt: new Date(),
+          startedAt: stationRow.startedAt || new Date(),
+          operatorId: operatorName || null,
+        },
+      })
+    }
 
     await prisma.productionOrder.updateMany({
       where: { id: item.productionOrderId, status: "در انتظار" },
@@ -147,8 +185,8 @@ export async function POST(req: Request) {
     const allStations = await prisma.productionItemStation.findMany({
       where: { productionItemId: item.id },
     })
-    const allDone = allStations.every(
-      (s) => s.id === stationRow.id || s.status === "تکمیل شده"
+    const allDone = allStations.every((s) =>
+      s.id === stationRow.id ? remaining <= 0 : s.status === "تکمیل شده"
     )
 
     await prisma.productionItem.update({
@@ -166,8 +204,10 @@ export async function POST(req: Request) {
         productionItemStationId: stationRow.id,
         stationId,
         action: "اسکن بارکد - رد ایستگاه",
-        description: `اسکن ${raw} در ${stationRow.station.name} | تعداد: ${qty}`,
-        newStatus: "تکمیل شده",
+        description: `اسکن ${raw} در ${stationRow.station.name} | تعداد رد: ${qty}${
+          remaining > 0 ? ` | باقی‌مانده: ${remaining}` : ""
+        }`,
+        newStatus: remaining > 0 ? "در حال انجام" : "تکمیل شده",
         quantity: qty,
         operatorName: operatorName || null,
       },
@@ -182,13 +222,17 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       success: true,
-      message: `رد شد: ${item.productName} (${qty} عدد)`,
+      message:
+        remaining > 0
+          ? `رد شد: ${item.productName} (${qty} از ${fullQty}) — باقی: ${remaining}`
+          : `رد شد: ${item.productName} (${qty} عدد)`,
       productName: item.productName,
       orderNumber: salesOrder?.orderNumber,
       customerName: salesOrder?.customer?.name,
       stationName: stationRow.station.name,
       barcode: raw,
       quantity: qty,
+      remaining,
       length: item.length,
       width: item.width,
       meterage: item.meterage,
@@ -196,6 +240,7 @@ export async function POST(req: Request) {
       servicesText,
       installationCode: (salesItem as any)?.installationCode || null,
       mapImageUrl: (salesOrder as any)?.mapImageUrl || null,
+      mapImages: (salesOrder as any)?.mapImages || null,
       orderDate: salesOrder?.orderDate
         ? salesOrder.orderDate.toISOString()
         : null,
