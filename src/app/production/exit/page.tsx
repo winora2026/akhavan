@@ -52,6 +52,23 @@ type ExitSlip = {
   }[]
 }
 
+/**
+ * نرمال‌سازی متن فارسی برای جستجو:
+ * ي/ى → ی ، ك → ک ، حذف اعراب، ارقام فارسی/عربی → لاتین، حذف فاصله و نیم‌فاصله
+ */
+const compact = (value: string | null | undefined): string => {
+  if (!value) return ""
+  return String(value)
+    .toLowerCase()
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[يى]/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/ة/g, "ه")
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, "")
+    .replace(/[\s\u200c\u200d\u200e\u200f]+/g, "")
+}
+
 export default function ExitSlipPage() {
   const [customerQuery, setCustomerQuery] = useState("")
   const [lockedCustomer, setLockedCustomer] = useState<string | null>(null)
@@ -113,10 +130,10 @@ export default function ExitSlipPage() {
   }, [])
 
   const filteredCustomers = useMemo(() => {
-    const q = customerQuery.trim().toLowerCase()
+    const q = compact(customerQuery)
     if (!q) return customers.slice(0, 15)
     return customers
-      .filter((c) => c.name.toLowerCase().includes(q))
+      .filter((c) => compact(c.name).includes(q))
       .slice(0, 15)
   }, [customers, customerQuery])
 
@@ -141,6 +158,15 @@ export default function ExitSlipPage() {
     setCurrentSlip(null)
     setShowPrint(false)
     await fetchReady()
+  }
+
+  /** تایپ در فیلد مشتری؛ اگر مشتری انتخاب شده بود و متن عوض شد، قفل خودکار باز می‌شود */
+  const handleCustomerInput = (value: string) => {
+    setCustomerQuery(value)
+    if (lockedCustomer && value !== lockedCustomer) {
+      setLockedCustomer(null)
+      setSelected([])
+    }
   }
 
   const toggleAll = () => {
@@ -347,7 +373,7 @@ export default function ExitSlipPage() {
           </div>
         </div>
 
-        {/* سرچ مشتری + فریز */}
+        {/* سرچ مشتری */}
         <div className="mb-4 rounded-2xl bg-white/90 border border-teal-200 p-4 shadow">
           <label className="block text-sm font-bold text-blue-900 mb-1">
             نام مشتری
@@ -355,13 +381,9 @@ export default function ExitSlipPage() {
           <div className="flex flex-wrap gap-2">
             <input
               value={customerQuery}
-              onChange={(e) => {
-                if (lockedCustomer) return
-                setCustomerQuery(e.target.value)
-              }}
+              onChange={(e) => handleCustomerInput(e.target.value)}
               placeholder="جستجوی مشتری..."
-              disabled={!!lockedCustomer}
-              className="flex-1 min-w-[200px] rounded-xl border border-teal-400 px-4 py-2.5 font-bold disabled:bg-teal-50"
+              className="flex-1 min-w-[200px] rounded-xl border border-teal-400 px-4 py-2.5 font-bold"
             />
             {lockedCustomer ? (
               <button
@@ -369,7 +391,7 @@ export default function ExitSlipPage() {
                 onClick={unlockCustomer}
                 className="rounded-xl border border-orange-400 bg-orange-50 px-4 py-2.5 font-bold text-orange-800"
               >
-                خروج از مشتری ({lockedCustomer})
+                پاک کردن مشتری ({lockedCustomer})
               </button>
             ) : null}
           </div>
@@ -392,8 +414,8 @@ export default function ExitSlipPage() {
           )}
           {lockedCustomer && (
             <p className="mt-2 text-sm font-bold text-teal-800">
-              قفل روی مشتری: {lockedCustomer} — تا خروج دستی، فقط اقلام همین
-              مشتری نمایش داده می‌شود
+              مشتری انتخاب‌شده: {lockedCustomer} — برای عوض کردن مشتری، نام
+              جدید را در همین کادر تایپ کنید
             </p>
           )}
         </div>
