@@ -8,6 +8,10 @@ function norm(s: string) {
     .toLowerCase()
 }
 
+/**
+ * نگاشت نام خدمت فروش → نام ایستگاه تولید
+ * ترتیب ifها مهم است (مته CNC قبل از مته عمومی)
+ */
 function mapServiceToStation(serviceName: string): string | null {
   const name = norm(serviceName)
   if (!name) return null
@@ -21,31 +25,66 @@ function mapServiceToStation(serviceName: string): string | null {
     return "بسته بندی"
   }
 
-  if (name.includes("تراش الگویی") || name.includes("الگویی")) return "تراش الگویی"
+  // تراش الگویی قبل از تراش
+  if (name.includes("تراش الگویی") || name.includes("الگویی")) {
+    return "تراش الگویی"
+  }
+  // تراش عادی → بعداً هم تراش ۱ و هم تراش ۲ در مسیر گذاشته می‌شود
   if (name.includes("تراش")) return "تراش"
-  if (name.includes("دیاموند زاویه") || name.includes("زاویه")) return "دیاموند زاویه"
+
+  if (name.includes("دیاموند زاویه") || (name.includes("دیاموند") && name.includes("زاویه"))) {
+    return "دیاموند زاویه"
+  }
   if (name.includes("دیاموند")) return "دیاموند"
-  if (name.includes("لول براق") || name.includes("براق")) return "لول براق"
+
+  if (name.includes("لول براق") || (name.includes("لول") && name.includes("براق"))) {
+    return "لول براق"
+  }
   if (name.includes("لول")) return "لول معمولی"
+
   if (name.includes("لیمینت") || name.includes("لمینت")) return "لیمینت"
   if (name.includes("دوجداره") || name.includes("دو جداره")) return "دوجداره"
+
+  // CNC: اینگریو، مته CNC، جاساز CNC، هر چیزی با CNC
   if (
-    name.includes("cnc") ||
-    name.includes("سی ان سی") ||
     name.includes("اینگرو") ||
     name.includes("اینگریو") ||
-    name.includes("انگرو")
+    name.includes("انگرو") ||
+    name.includes("cnc") ||
+    name.includes("سی ان سی")
   ) {
     return "CNC"
   }
-  if (name.includes("led") || name.includes("ال ای دی")) return "LED"
+
+  // مته عمومی / سوراخکاری (بعد از مته CNC چک می‌شود)
+  if (name.includes("مته") || name.includes("سوراخ")) return "سوراخکاری"
+
+  // UV
+  if (
+    name.includes("uv") ||
+    name.includes("یووی") ||
+    name.includes("یو وی") ||
+    name.includes("یو-وی")
+  ) {
+    return "UV"
+  }
+
+  if (name.includes("led") || name.includes("ال ای دی") || name.includes("ال‌ای‌دی")) {
+    return "LED"
+  }
   if (name.includes("mdf")) return "MDF"
   if (name.includes("سندبلاست") || name.includes("سند بلاست")) return "سندبلاست"
-  if (name.includes("سوراخ")) return "سوراخکاری"
   if (name.includes("سکوریت") || name.includes("تمپر")) return "سکوریت"
-  if (name.includes("چاپ")) return "چاپ"
+
+  // چاپ (رنگ‌کاری)
+  if (name.includes("چاپ") || name.includes("رنگ")) return "چاپ (رنگ‌کاری)"
+
+  if (name.includes("قاب")) return "قاب"
+  if (name.includes("خم")) return "خم‌کاری"
+
   if (name.includes("شست")) return "شست و شو"
   if (name.includes("بارگیری")) return "بارگیری"
+
   return null
 }
 
@@ -93,17 +132,20 @@ function buildRouteStationNames(salesItem: any): string[] {
     serviceStationSet.add(mapped)
   }
 
+  // ترتیب نمایش/مسیر خدمات میانی
   const preferredOrder = [
-    "تراش",
     "تراش الگویی",
     "دیاموند",
     "دیاموند زاویه",
     "لول معمولی",
     "لول براق",
     "CNC",
+    "UV",
     "سوراخکاری",
     "سندبلاست",
-    "چاپ",
+    "چاپ (رنگ‌کاری)",
+    "قاب",
+    "خم‌کاری",
     "LED",
     "MDF",
     "لیمینت",
@@ -111,14 +153,20 @@ function buildRouteStationNames(salesItem: any): string[] {
     "سکوریت",
   ]
 
+  // تراش → هر دو دستگاه
+  if (serviceStationSet.has("تراش")) {
+    route.push("تراش ۱")
+    route.push("تراش ۲")
+  }
+
   for (const name of preferredOrder) {
     if (serviceStationSet.has(name)) route.push(name)
   }
 
   route.push("شست و شو")
   if (hasPackaging) route.push("بسته بندی")
-  route.push("انبار محصول یک")
-  route.push("انبار محصول دو")
+  route.push("انبار کالای نیمه‌ساخته")
+  route.push("انبار آماده تحویل")
   route.push("بارگیری")
   return route
 }
@@ -166,6 +214,27 @@ function findStationId(
   const found = stations.find((s) => norm(s.name) === n)
   if (found) return found.id
 
+  // سازگاری با نام‌های قدیمی
+  if (n.includes("نیمه") || n === norm("انبار محصول یک")) {
+    const s = stations.find(
+      (x) =>
+        norm(x.name).includes("نیمه") ||
+        norm(x.name) === norm("انبار محصول یک")
+    )
+    if (s) return s.id
+  }
+  if (n.includes("آماده تحویل") || n === norm("انبار محصول دو")) {
+    const s = stations.find(
+      (x) =>
+        norm(x.name).includes("آماده") ||
+        norm(x.name) === norm("انبار محصول دو")
+    )
+    if (s) return s.id
+  }
+  if (n.includes("چاپ")) {
+    const s = stations.find((x) => norm(x.name).includes("چاپ"))
+    if (s) return s.id
+  }
   if (n.includes("بسته")) {
     const pack = stations.find((s) => norm(s.name).includes("بسته"))
     if (pack) return pack.id
@@ -215,8 +284,8 @@ export async function createProductionOrderFromSales(
   const required = [
     "برش",
     "شست و شو",
-    "انبار محصول یک",
-    "انبار محصول دو",
+    "انبار کالای نیمه‌ساخته",
+    "انبار آماده تحویل",
     "بارگیری",
   ]
   for (const name of required) {
@@ -224,7 +293,7 @@ export async function createProductionOrderFromSales(
       return {
         ok: false,
         status: 400,
-        error: `ایستگاه «${name}» تعریف نشده. seed ایستگاه‌ها را اجرا کنید.`,
+        error: `ایستگاه «${name}» تعریف نشده. ابتدا seed ایستگاه‌ها را اجرا کنید.`,
       }
     }
   }

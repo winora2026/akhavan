@@ -84,7 +84,10 @@ export default function StationQueuePage() {
     ;(async () => {
       try {
         const res = await fetch("/api/auth/me")
-        if (!res.ok) return
+        if (!res.ok) {
+          await fetchStations(null)
+          return
+        }
         const data = await res.json()
         const user: SessionUser | null = data.user || null
         if (user?.displayName) setOperatorName(user.displayName)
@@ -104,9 +107,20 @@ export default function StationQueuePage() {
     }
   }, [selectedStationId])
 
+  // رفرش خودکار هر ۱ دقیقه
   useEffect(() => {
-    inputRef.current?.focus()
-  }, [selectedStationId, scanLoading, confirmData, detail])
+    if (!selectedStationId) return
+    const t = setInterval(() => {
+      fetchQueue(true)
+    }, 60_000)
+    return () => clearInterval(t)
+  }, [selectedStationId])
+
+  useEffect(() => {
+    if (confirmData || detail || mapPreviewUrl) return
+    const t = setTimeout(() => inputRef.current?.focus(), 80)
+    return () => clearTimeout(t)
+  }, [selectedStationId, scanLoading, confirmData, detail, mapPreviewUrl])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -119,6 +133,7 @@ export default function StationQueuePage() {
         setConfirmData(null)
         setPartialQty("")
         setBarcode("")
+        if (inputRef.current) inputRef.current.value = ""
         setTimeout(() => inputRef.current?.focus(), 50)
         return
       }
@@ -141,13 +156,13 @@ export default function StationQueuePage() {
       )
       setStations(list)
 
-      // اگر کاربر ایستگاه دارد → فقط همان ایستگاه
       const userStation = (user?.stationName || "").trim()
       if (userStation && list.length > 0) {
         const match = list.find(
           (s) =>
             s.name === userStation ||
-            s.name.replace(/\u200c/g, "") === userStation.replace(/\u200c/g, "")
+            s.name.replace(/\u200c/g, "") ===
+              userStation.replace(/\u200c/g, "")
         )
         if (match) {
           setSelectedStationId(match.id)
@@ -156,7 +171,6 @@ export default function StationQueuePage() {
         }
       }
 
-      // ادمین / فروش / بدون ایستگاه → انتخاب آزاد
       setStationLocked(false)
       if (list.length > 0) {
         const cut = list.find((s) => s.name === "برش")
@@ -167,9 +181,10 @@ export default function StationQueuePage() {
     }
   }
 
-  const fetchQueue = async () => {
+  const fetchQueue = async (silent = false) => {
+    if (!selectedStationId) return
     try {
-      setLoading(true)
+      if (!silent) setLoading(true)
       const res = await fetch(
         `/api/production/station-queue?stationId=${selectedStationId}`
       )
@@ -185,9 +200,9 @@ export default function StationQueuePage() {
       setSummary(data.summary || null)
     } catch (e) {
       console.error(e)
-      alert("خطا در بارگذاری کارتابل")
+      if (!silent) alert("خطا در بارگذاری کارتابل")
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -249,9 +264,18 @@ export default function StationQueuePage() {
 
   const doScan = async (
     confirmed = false,
-    quantityDone?: number | null
+    quantityDone?: number | null,
+    codeOverride?: string
   ) => {
-    const code = barcode.trim()
+    // مهم برای بارکدخوان: خواندن مستقیم از DOM
+    const code = (
+      codeOverride ??
+      inputRef.current?.value ??
+      barcode
+    )
+      .trim()
+      .replace(/\r/g, "")
+
     if (!code) {
       setLastResult({ type: "err", text: "بارکد را وارد یا اسکن کنید" })
       return
@@ -261,8 +285,12 @@ export default function StationQueuePage() {
       return
     }
 
+    setBarcode(code)
+
     try {
       setScanLoading(true)
+      setLastResult(null)
+
       const body: Record<string, unknown> = {
         barcode: code,
         stationId: selectedStationId,
@@ -289,30 +317,34 @@ export default function StationQueuePage() {
       if (!res.ok) {
         setLastResult({ type: "err", text: data.error || "خطا در اسکن" })
         setBarcode("")
+        if (inputRef.current) inputRef.current.value = ""
         return
       }
 
-      setLastResult({
-        type: "ok",
-        text: data.message || "با موفقیت رد شد",
-      })
+      // مثل سفارش تکی: فقط صفحه جزئیات (بدون پیام موفقیت سبز)
       setDetail(data)
       setBarcode("")
+      if (inputRef.current) inputRef.current.value = ""
       setConfirmData(null)
       setPartialQty("")
-      await fetchQueue()
+      await fetchQueue(true)
     } catch (e) {
       console.error(e)
       setLastResult({ type: "err", text: "خطا در ارتباط با سرور" })
     } finally {
       setScanLoading(false)
-      setTimeout(() => inputRef.current?.focus(), 50)
+      setTimeout(() => {
+        if (!confirmData) inputRef.current?.focus()
+      }, 50)
     }
   }
 
   const confirmAll = () => {
     if (!confirmData) return
-    doScan(true, Number(confirmData.quantity) || undefined)
+    const code = String(
+      confirmData.barcode || barcode || inputRef.current?.value || ""
+    )
+    doScan(true, Number(confirmData.quantity) || undefined, code)
   }
 
   const confirmPartial = () => {
@@ -327,13 +359,17 @@ export default function StationQueuePage() {
       alert(`حداکثر ${max} عدد می‌توانید رد کنید`)
       return
     }
-    doScan(true, n)
+    const code = String(
+      confirmData.barcode || barcode || inputRef.current?.value || ""
+    )
+    doScan(true, n, code)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault()
-      doScan(false)
+      const code = (e.currentTarget.value || "").trim().replace(/\r/g, "")
+      doScan(false, null, code)
     }
   }
 
@@ -360,10 +396,12 @@ export default function StationQueuePage() {
             </h1>
             <p className="text-sm text-blue-800 mt-1">
               ایستگاه:{" "}
-              <span className="font-bold text-teal-700">{selectedStationName}</span>
+              <span className="font-bold text-teal-700">
+                {selectedStationName}
+              </span>
               {stationLocked ? " (ثابت بر اساس ورود شما)" : ""}
               {" — "}
-              اسکن بارکد = رد کار
+              اسکن بارکد = رد کار · رفرش خودکار هر ۱ دقیقه
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -449,8 +487,10 @@ export default function StationQueuePage() {
 
             <div className="md:col-span-2">
               <button
-                onClick={() => doScan(false)}
-                disabled={scanLoading || !barcode.trim()}
+                onClick={() =>
+                  doScan(false, null, inputRef.current?.value || barcode)
+                }
+                disabled={scanLoading || !(barcode.trim() || inputRef.current?.value)}
                 className="w-full rounded-xl bg-green-600 hover:bg-green-700 px-4 py-3 text-white font-bold text-lg disabled:opacity-50 shadow"
               >
                 {scanLoading ? "..." : "ثبت"}
@@ -458,14 +498,8 @@ export default function StationQueuePage() {
             </div>
           </div>
 
-          {lastResult && (
-            <div
-              className={`mt-3 rounded-xl px-4 py-3 font-bold text-sm ${
-                lastResult.type === "ok"
-                  ? "bg-green-100 text-green-800 border border-green-300"
-                  : "bg-red-100 text-red-800 border border-red-300"
-              }`}
-            >
+          {lastResult?.type === "err" && (
+            <div className="mt-3 rounded-xl px-4 py-3 font-bold text-sm bg-red-100 text-red-800 border border-red-300">
               {lastResult.text}
             </div>
           )}
@@ -475,7 +509,9 @@ export default function StationQueuePage() {
           <div className="mb-4 grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="rounded-2xl bg-white/50 border border-teal-500/20 p-4 text-center">
               <p className="text-sm text-blue-700 mb-1">ایستگاه</p>
-              <p className="text-lg font-bold text-teal-800">{summary.stationName}</p>
+              <p className="text-lg font-bold text-teal-800">
+                {summary.stationName}
+              </p>
             </div>
             <div className="rounded-2xl bg-white/50 border border-teal-500/20 p-4 text-center">
               <p className="text-sm text-blue-700 mb-1">تعداد ردیف</p>
@@ -529,7 +565,7 @@ export default function StationQueuePage() {
             </div>
             <div className="md:col-span-2">
               <button
-                onClick={fetchQueue}
+                onClick={() => fetchQueue()}
                 className="w-full rounded-xl bg-teal-500 hover:bg-teal-600 px-4 py-2.5 text-white font-bold"
               >
                 بروزرسانی
@@ -591,12 +627,12 @@ export default function StationQueuePage() {
                     <td className="p-3 text-center font-bold text-teal-800">
                       {row.productionItem.barcode || "—"}
                     </td>
-                    <td className="p-3 text-center whitespace-nowrap">
+                    <td className="p-3 text-center whitespace-nowrap font-black">
                       {row.productionItem.length && row.productionItem.width
                         ? `${row.productionItem.length}×${row.productionItem.width}`
                         : "—"}
                     </td>
-                    <td className="p-3 text-center font-semibold">
+                    <td className="p-3 text-center font-black text-teal-800">
                       {row.quantityIn ?? row.productionItem.quantity}
                     </td>
                     <td className="p-3 text-center">
@@ -626,11 +662,11 @@ export default function StationQueuePage() {
         </div>
       </div>
 
-      {/* جزئیات بعد از اسکن */}
+      {/* جزئیات بعد از اسکن — حس «صفحه بعدی» */}
       {detail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div
-            className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto"
+            className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto border-2 border-teal-400"
             dir="rtl"
           >
             <div className="flex justify-between items-start mb-4">
@@ -644,6 +680,19 @@ export default function StationQueuePage() {
               >
                 بستن
               </button>
+            </div>
+
+            {/* ابعاد و تعداد درشت‌تر */}
+            <div className="mb-4 rounded-xl bg-teal-50 border border-teal-200 p-4">
+              <p className="text-2xl font-black text-teal-900 tracking-wide">
+                ابعاد: {detail.length ?? "—"} × {detail.width ?? "—"}
+              </p>
+              <p className="text-2xl font-black text-orange-700 mt-2">
+                تعداد رد شده: {detail.quantity}
+                {detail.remaining != null && detail.remaining > 0
+                  ? ` (باقی‌مانده: ${detail.remaining})`
+                  : ""}
+              </p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-blue-900">
@@ -661,15 +710,6 @@ export default function StationQueuePage() {
               </p>
               <p>
                 بارکد: <strong className="font-mono">{detail.barcode}</strong>
-              </p>
-              <p>
-                تعداد رد شده: <strong>{detail.quantity}</strong>
-              </p>
-              <p>
-                ابعاد:{" "}
-                <strong>
-                  {detail.length ?? "—"} × {detail.width ?? "—"}
-                </strong>
               </p>
               <p>
                 متراژ:{" "}
@@ -777,7 +817,7 @@ export default function StationQueuePage() {
         </div>
       )}
 
-      {/* پاپ‌آپ تعداد بالا — همه یا تعداد دلخواه */}
+      {/* پاپ‌آپ تعداد */}
       {confirmData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div
@@ -801,7 +841,7 @@ export default function StationQueuePage() {
                 ایستگاه: <strong>{confirmData.stationName}</strong>
               </p>
               <p className="text-lg font-black text-orange-700 mt-3">
-                تعداد کل: {confirmData.quantity} عدد
+                تعداد باقی‌مانده: {confirmData.quantity} عدد
               </p>
             </div>
 
@@ -818,7 +858,7 @@ export default function StationQueuePage() {
                 className="w-full rounded-xl border border-teal-400 px-4 py-2.5 text-lg font-bold text-blue-950 focus:outline-none focus:ring-2 focus:ring-teal-400"
               />
               <p className="text-xs text-gray-500 mt-1">
-                مثلاً اگر ۲ تا از ۵ تا برش خورده، عدد ۲ را بزنید
+                مثلاً اگر ۲ تا از ۵ تا انجام شده، عدد ۲ را بزنید
               </p>
             </div>
 
@@ -828,6 +868,7 @@ export default function StationQueuePage() {
                   setConfirmData(null)
                   setPartialQty("")
                   setBarcode("")
+                  if (inputRef.current) inputRef.current.value = ""
                   setTimeout(() => inputRef.current?.focus(), 50)
                 }}
                 className="rounded-xl border border-gray-300 px-4 py-2.5 font-bold text-gray-700 hover:bg-gray-50"

@@ -235,3 +235,53 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
+// ====================== برگه خروج / بارگیری ======================
+model ExitSlip {
+  id               String   @id @default(cuid())
+  exitNumber       String   @unique
+  customerId       String?
+  customerName     String
+  customerPhone    String?
+  exitDate         DateTime @default(now())
+
+  driverName       String?
+  driverNationalId String?
+  driverPhone      String?
+  vehicleName      String?
+  plateNumber      String?
+
+  printCount       Int      @default(0)
+  notes            String?
+  createdBy        String?
+  createdByName    String?
+  status           String   @default("ثبت‌شده") // ثبت‌شده | بارگیری‌شده | ابطال
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  items            ExitSlipItem[]
+}
+
+model ExitSlipItem {
+  id               String    @id @default(cuid())
+  exitSlipId       String
+  exitSlip         ExitSlip  @relation(fields: [exitSlipId], references: [id], onDelete: Cascade)
+
+  productionItemId String
+  orderId          String?
+  orderNumber      String?
+  productName      String
+  length           Float?
+  width            Float?
+  quantity         Int       @default(1)
+  meterage         Float?
+  installationCode String?
+  servicesText     String?
+  notes            String?
+  barcode          String?
+
+  /// زمان اسکن واقعی روی ماشین (اپراتور بارگیری)
+  loadedAt         DateTime?
+
+  createdAt        DateTime  @default(now())
+}

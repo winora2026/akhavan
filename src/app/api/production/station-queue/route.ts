@@ -1,6 +1,14 @@
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 
+function norm(s: string) {
+  return (s || "")
+    .replace(/[\u200c\u200f\u200e]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+}
+
 function buildServicesText(servicesData: any): string {
   if (!servicesData) return ""
   try {
@@ -14,6 +22,21 @@ function buildServicesText(servicesData: any): string {
   } catch {
     return ""
   }
+}
+
+function isCut(name: string) {
+  return norm(name) === "برش"
+}
+function isSemiFinished(name: string) {
+  const n = norm(name)
+  return n.includes("نیمه") || n === norm("انبار محصول یک")
+}
+function isReadyWh(name: string) {
+  const n = norm(name)
+  return n.includes("آماده تحویل") || n === norm("انبار محصول دو")
+}
+function isLoading(name: string) {
+  return norm(name).includes("بارگیری")
 }
 
 export async function GET(req: Request) {
@@ -64,14 +87,37 @@ export async function GET(req: Request) {
       orderBy: { createdAt: "asc" },
     })
 
-    // بعد از برش: همه ایستگاه‌های باقی‌مانده هم‌زمان در صف باشند
-    // فقط برای ایستگاه غیربرش: برش باید تکمیل شده باشد
     const filteredRows = rows.filter((row) => {
-      if (station.name === "برش") return true
-      const cut = row.productionItem.stations.find(
-        (s) => s.station.name === "برش"
-      )
-      return cut && cut.status === "تکمیل شده"
+      const all = row.productionItem.stations
+      const cut = all.find((s) => isCut(s.station.name))
+
+      // برش: همیشه در صف تا رد شود
+      if (isCut(station.name)) return true
+
+      // بقیه: فقط بعد از تکمیل برش
+      if (!cut || cut.status !== "تکمیل شده") return false
+
+      // انبار آماده تحویل: وقتی نیمه‌ساخته رد شده یا همه میانی‌ها تمام شده
+      if (isReadyWh(station.name)) {
+        const semi = all.find((s) => isSemiFinished(s.station.name))
+        if (semi && semi.status === "تکمیل شده") return true
+        const pendingMid = all.filter(
+          (s) =>
+            !isReadyWh(s.station.name) &&
+            !isLoading(s.station.name) &&
+            s.status !== "تکمیل شده"
+        )
+        return pendingMid.length === 0
+      }
+
+      // بارگیری: فقط بعد از انبار آماده تحویل
+      if (isLoading(station.name)) {
+        const ready = all.find((s) => isReadyWh(s.station.name))
+        return !!ready && ready.status === "تکمیل شده"
+      }
+
+      // خدمات + انبار نیمه‌ساخته: بعد از برش هم‌زمان در صف
+      return true
     })
 
     const items = filteredRows.map((row) => {
@@ -102,6 +148,7 @@ export async function GET(req: Request) {
           ),
           installationCode: (salesItem as any)?.installationCode || null,
           mapImageUrl: (salesOrder as any)?.mapImageUrl || null,
+          mapImages: (salesOrder as any)?.mapImages || null,
           orderDate: salesOrder?.orderDate
             ? salesOrder.orderDate.toISOString()
             : null,
@@ -126,8 +173,7 @@ export async function GET(req: Request) {
       0
     )
     const totalQuantity = items.reduce(
-      (sum, r) =>
-        sum + (r.quantityIn ?? r.productionItem.quantity ?? 0),
+      (sum, r) => sum + (r.quantityIn ?? r.productionItem.quantity ?? 0),
       0
     )
 

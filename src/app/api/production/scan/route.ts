@@ -1,6 +1,14 @@
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 
+function norm(s: string) {
+  return (s || "")
+    .replace(/[\u200c\u200f\u200e]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+}
+
 function buildServicesText(servicesData: any): string {
   if (!servicesData) return ""
   try {
@@ -14,6 +22,33 @@ function buildServicesText(servicesData: any): string {
   } catch {
     return ""
   }
+}
+
+function isCutStation(name: string) {
+  return norm(name) === "برش"
+}
+
+function isSemiFinishedWh(name: string) {
+  const n = norm(name)
+  return (
+    n.includes("نیمه") ||
+    n === norm("انبار محصول یک") ||
+    n.includes("کالای نیمه")
+  )
+}
+
+function isReadyWh(name: string) {
+  const n = norm(name)
+  return n.includes("آماده تحویل") || n === norm("انبار محصول دو")
+}
+
+function isLoading(name: string) {
+  return norm(name).includes("بارگیری")
+}
+
+function isBevelPair(name: string) {
+  const n = norm(name)
+  return n === "تراش 1" || n === "تراش ۱" || n === "تراش 2" || n === "تراش ۲"
 }
 
 export async function POST(req: Request) {
@@ -93,8 +128,8 @@ export async function POST(req: Request) {
     }
 
     // فقط برش قبل از بقیه اجباری است
-    if (stationRow.station.name !== "برش") {
-      const cut = item.stations.find((s) => s.station.name === "برش")
+    if (!isCutStation(stationRow.station.name)) {
+      const cut = item.stations.find((s) => isCutStation(s.station.name))
       if (!cut || cut.status !== "تکمیل شده") {
         return NextResponse.json(
           {
@@ -109,7 +144,6 @@ export async function POST(req: Request) {
 
     const fullQty = stationRow.quantityIn || item.quantity || 1
 
-    // بیش از یک عدد → پاپ‌آپ (تعداد کل یا باقی‌مانده)
     if (fullQty > 1 && !confirmed) {
       const salesOrderEarly = item.productionOrder.order
       return NextResponse.json({
@@ -128,7 +162,6 @@ export async function POST(req: Request) {
       })
     }
 
-    // تعدادی که باید رد شود (جزئی یا همه)
     let qty = fullQty
     if (quantityDone != null && quantityDone !== "") {
       const n = parseInt(String(quantityDone), 10)
@@ -148,21 +181,20 @@ export async function POST(req: Request) {
     }
 
     const remaining = fullQty - qty
+    const now = new Date()
 
     if (remaining > 0) {
-      // فقط بخشی رد شد — در صف می‌ماند
       await prisma.productionItemStation.update({
         where: { id: stationRow.id },
         data: {
           status: "در حال انجام",
           quantityIn: remaining,
           quantityOut: (stationRow.quantityOut || 0) + qty,
-          startedAt: stationRow.startedAt || new Date(),
+          startedAt: stationRow.startedAt || now,
           operatorId: operatorName || null,
         },
       })
     } else {
-      // همه رد شد
       await prisma.productionItemStation.update({
         where: { id: stationRow.id },
         data: {
@@ -170,24 +202,97 @@ export async function POST(req: Request) {
           quantityOut: (stationRow.quantityOut || 0) + qty,
           quantityIn: 0,
           quantityWaste: 0,
-          completedAt: new Date(),
-          startedAt: stationRow.startedAt || new Date(),
+          completedAt: now,
+          startedAt: stationRow.startedAt || now,
           operatorId: operatorName || null,
         },
       })
+
+      // تراش ۱ یا ۲: با تکمیل یکی، جفتش هم رد شود
+      if (isBevelPair(stationRow.station.name)) {
+        for (const s of item.stations) {
+          if (
+            s.id !== stationRow.id &&
+            isBevelPair(s.station.name) &&
+            s.status !== "تکمیل شده"
+          ) {
+            await prisma.productionItemStation.update({
+              where: { id: s.id },
+              data: {
+                status: "تکمیل شده",
+                quantityOut: s.quantityIn || item.quantity || qty,
+                quantityIn: 0,
+                completedAt: now,
+                startedAt: s.startedAt || now,
+                operatorId: operatorName || null,
+                notes: "رد خودکار به‌خاطر تکمیل دستگاه تراش دیگر",
+              },
+            })
+            await prisma.productionHistory.create({
+              data: {
+                productionOrderId: item.productionOrderId,
+                productionItemId: item.id,
+                productionItemStationId: s.id,
+                stationId: s.stationId,
+                action: "رد خودکار تراش",
+                description: `با تکمیل «${stationRow.station.name}»، ایستگاه «${s.station.name}» هم رد شد`,
+                newStatus: "تکمیل شده",
+                quantity: s.quantityIn || item.quantity,
+                operatorName: operatorName || null,
+              },
+            })
+          }
+        }
+      }
+
+      // انبار کالای نیمه‌ساخته: همه ایستگاه‌های میانی تا قبل از انبار آماده تحویل و بارگیری رد شوند
+      if (isSemiFinishedWh(stationRow.station.name)) {
+        for (const s of item.stations) {
+          if (s.id === stationRow.id) continue
+          const nm = s.station.name
+          if (isCutStation(nm) || isReadyWh(nm) || isLoading(nm)) continue
+          if (s.status === "تکمیل شده") continue
+
+          await prisma.productionItemStation.update({
+            where: { id: s.id },
+            data: {
+              status: "تکمیل شده",
+              quantityOut: s.quantityIn || item.quantity || qty,
+              quantityIn: 0,
+              completedAt: now,
+              startedAt: s.startedAt || now,
+              operatorId: operatorName || null,
+              notes: "رد گروهی از انبار کالای نیمه‌ساخته",
+            },
+          })
+          await prisma.productionHistory.create({
+            data: {
+              productionOrderId: item.productionOrderId,
+              productionItemId: item.id,
+              productionItemStationId: s.id,
+              stationId: s.stationId,
+              action: "رد گروهی از انبار نیمه‌ساخته",
+              description: `ایستگاه «${nm}» همراه با انبار کالای نیمه‌ساخته رد شد`,
+              newStatus: "تکمیل شده",
+              quantity: s.quantityIn || item.quantity,
+              operatorName: operatorName || null,
+            },
+          })
+        }
+      }
     }
 
     await prisma.productionOrder.updateMany({
       where: { id: item.productionOrderId, status: "در انتظار" },
-      data: { status: "در حال تولید", startedAt: new Date() },
+      data: { status: "در حال تولید", startedAt: now },
     })
 
     const allStations = await prisma.productionItemStation.findMany({
       where: { productionItemId: item.id },
+      include: { station: true },
     })
-    const allDone = allStations.every((s) =>
-      s.id === stationRow.id ? remaining <= 0 : s.status === "تکمیل شده"
-    )
+
+    const allDone = allStations.every((s) => s.status === "تکمیل شده")
 
     await prisma.productionItem.update({
       where: { id: item.id },

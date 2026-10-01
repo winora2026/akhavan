@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 
@@ -14,6 +14,8 @@ type ProductionOrder = {
   startedAt: string | null
   completedAt: string | null
   totalMeterage?: number | null
+  /** خروج خورده بودن کل سفارش (از API) */
+  isExited?: boolean | null
   order: {
     id: string
     orderNumber: string
@@ -21,6 +23,7 @@ type ProductionOrder = {
     orderDate: string
     deliveryDate: string | null
     totalMeterage?: number | null
+    isExited?: boolean | null
     customer: {
       id: string
       name: string
@@ -33,6 +36,8 @@ type ProductionOrder = {
     status: string
     barcode?: string | null
     meterage?: number | null
+    /** خروج خورده بودن همین کالا (از API) */
+    isExited?: boolean | null
   }[]
 }
 
@@ -55,6 +60,7 @@ type WorkflowRow = {
   orderDate: string | null
   deliveryDate: string | null
   createdAt: string
+  isExited: boolean
 }
 
 type SortKey =
@@ -70,9 +76,33 @@ type SortKey =
   | "deliveryDate"
   | "priority"
   | "status"
+  | "exit"
   | "createdAt"
 
 type DeadlineFilter = "all" | "overdue" | "near" | "overdue_and_near"
+type ExitFilter = "all" | "exited" | "not_exited"
+
+const STORAGE_KEY = "production-workflow-page-state-v1"
+
+/**
+ * نرمال‌سازی متن فارسی برای جستجو:
+ * - ي/ى → ی ، ك → ک ، ة → ه
+ * - حذف اعراب و کشیده
+ * - تبدیل ارقام فارسی/عربی به لاتین
+ * - حذف فاصله و نیم‌فاصله
+ */
+const compact = (value: string | null | undefined): string => {
+  if (!value) return ""
+  return String(value)
+    .toLowerCase()
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[يى]/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/ة/g, "ه")
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, "")
+    .replace(/[\s\u200c\u200d\u200e\u200f]+/g, "")
+}
 
 export default function ProductionWorkflowPage() {
   const router = useRouter()
@@ -81,8 +111,69 @@ export default function ProductionWorkflowPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState("همه")
   const [deadlineFilter, setDeadlineFilter] = useState<DeadlineFilter>("all")
+  const [exitFilter, setExitFilter] = useState<ExitFilter>("all")
   const [sortKey, setSortKey] = useState<SortKey>("deliveryDate")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
+
+  const [hydrated, setHydrated] = useState(false)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const savedScrollRef = useRef<number>(0)
+  const scrollRestoredRef = useRef(false)
+
+  // بازیابی فیلترها از sessionStorage (فقط یک‌بار هنگام ورود به صفحه)
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(STORAGE_KEY)
+      if (raw) {
+        const s = JSON.parse(raw)
+        if (typeof s.search === "string") setSearch(s.search)
+        if (typeof s.statusFilter === "string") setStatusFilter(s.statusFilter)
+        if (typeof s.deadlineFilter === "string")
+          setDeadlineFilter(s.deadlineFilter)
+        if (typeof s.exitFilter === "string") setExitFilter(s.exitFilter)
+        if (typeof s.sortKey === "string") setSortKey(s.sortKey)
+        if (s.sortDir === "asc" || s.sortDir === "desc") setSortDir(s.sortDir)
+        if (typeof s.scrollTop === "number") savedScrollRef.current = s.scrollTop
+      }
+    } catch {
+      // ignore
+    }
+    setHydrated(true)
+  }, [])
+
+  // ذخیره فیلترها با هر تغییر
+  useEffect(() => {
+    if (!hydrated) return
+    try {
+      sessionStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          search,
+          statusFilter,
+          deadlineFilter,
+          exitFilter,
+          sortKey,
+          sortDir,
+          scrollTop: scrollRef.current?.scrollTop ?? savedScrollRef.current,
+        })
+      )
+    } catch {
+      // ignore
+    }
+  }, [hydrated, search, statusFilter, deadlineFilter, exitFilter, sortKey, sortDir])
+
+  const saveScroll = () => {
+    const top = scrollRef.current?.scrollTop ?? 0
+    savedScrollRef.current = top
+    try {
+      const raw = sessionStorage.getItem(STORAGE_KEY)
+      const s = raw ? JSON.parse(raw) : {}
+      s.scrollTop = top
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(s))
+    } catch {
+      // ignore
+    }
+  }
 
   useEffect(() => {
     fetchOrders()
@@ -167,7 +258,7 @@ export default function ProductionWorkflowPage() {
     for (const order of orders) {
       const orderTotalQty = getOrderTotalQuantity(order)
       const orderTotalM = getOrderTotalMeterage(order)
-      const items = order.items?.length
+      const items: ProductionOrder["items"] = order.items?.length
         ? order.items
         : [
             {
@@ -175,11 +266,14 @@ export default function ProductionWorkflowPage() {
               productName: "—",
               quantity: 0,
               status: order.status,
-              meterage: null as number | null,
+              meterage: null,
             },
           ]
 
       for (const item of items) {
+        const exited = Boolean(
+          item.isExited ?? order.isExited ?? order.order?.isExited ?? false
+        )
         rows.push({
           rowKey: `${order.id}-${item.id}`,
           productionOrderId: order.id,
@@ -198,6 +292,7 @@ export default function ProductionWorkflowPage() {
           orderDate: order.order?.orderDate || null,
           deliveryDate: order.order?.deliveryDate || null,
           createdAt: order.createdAt,
+          isExited: exited,
         })
       }
     }
@@ -207,15 +302,21 @@ export default function ProductionWorkflowPage() {
   const filteredSorted = useMemo(() => {
     let result = [...allRows]
 
-    const q = search.trim().toLowerCase()
-    if (q) {
+    // جستجو با نرمال‌سازی؛ همه‌ی کلمات باید در یکی از فیلدها پیدا شوند
+    const tokens = search
+      .trim()
+      .split(/[\s\u200c]+/)
+      .map(compact)
+      .filter(Boolean)
+    if (tokens.length > 0) {
       result = result.filter((r) => {
-        return (
-          r.customerName.toLowerCase().includes(q) ||
-          r.orderNumber.toLowerCase().includes(q) ||
-          r.customerOrderNumber.toLowerCase().includes(q) ||
-          r.productName.toLowerCase().includes(q)
-        )
+        const hay = [
+          compact(r.customerName),
+          compact(r.orderNumber),
+          compact(r.customerOrderNumber),
+          compact(r.productName),
+        ].join("|")
+        return tokens.every((t) => hay.includes(t))
       })
     }
 
@@ -231,6 +332,12 @@ export default function ProductionWorkflowPage() {
       result = result.filter(
         (r) => isOverdue(r.deliveryDate) || isNearDeadline(r.deliveryDate)
       )
+    }
+
+    if (exitFilter === "exited") {
+      result = result.filter((r) => r.isExited)
+    } else if (exitFilter === "not_exited") {
+      result = result.filter((r) => !r.isExited)
     }
 
     result.sort((a, b) => {
@@ -288,6 +395,10 @@ export default function ProductionWorkflowPage() {
           av = a.status
           bv = b.status
           break
+        case "exit":
+          av = a.isExited ? 1 : 0
+          bv = b.isExited ? 1 : 0
+          break
         case "createdAt":
         default:
           av = parseDate(a.createdAt)?.getTime() || 0
@@ -305,7 +416,19 @@ export default function ProductionWorkflowPage() {
     })
 
     return result
-  }, [allRows, search, statusFilter, deadlineFilter, sortKey, sortDir])
+  }, [allRows, search, statusFilter, deadlineFilter, exitFilter, sortKey, sortDir])
+
+  // بازیابی محل اسکرول بعد از برگشت از صفحه جزئیات
+  useEffect(() => {
+    if (scrollRestoredRef.current) return
+    if (loading || !hydrated) return
+    if (filteredSorted.length === 0) return
+    const el = scrollRef.current
+    if (el && savedScrollRef.current > 0) {
+      el.scrollTop = savedScrollRef.current
+    }
+    scrollRestoredRef.current = true
+  }, [loading, hydrated, filteredSorted.length])
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -346,12 +469,14 @@ export default function ProductionWorkflowPage() {
     return "border-b border-teal-500/10 bg-white/30 hover:bg-teal-400/30"
   }
 
-  const thClass =
-    "p-3 font-bold whitespace-nowrap text-center cursor-pointer select-none hover:bg-teal-500/20 transition"
+  // th ها sticky هستند، پس پس‌زمینه‌ی کاملاً مات لازم دارند
+  const thBase =
+    "sticky top-0 z-20 bg-teal-100 p-3 font-bold whitespace-nowrap text-center shadow-[0_1px_0_0_rgba(20,184,166,0.4)]"
+  const thClass = `${thBase} cursor-pointer select-none hover:bg-teal-200 transition`
 
   return (
     <div
-      className="min-h-screen p-4 bg-cover bg-center bg-fixed"
+      className="h-screen overflow-hidden p-4 bg-cover bg-center bg-fixed"
       style={{
         backgroundImage:
           "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
@@ -361,8 +486,9 @@ export default function ProductionWorkflowPage() {
     >
       <div className="pointer-events-none fixed inset-0 bg-black/5" />
 
-      <div className="relative z-10 max-w-[1600px] mx-auto">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
+      <div className="relative z-10 max-w-[1600px] mx-auto h-full flex flex-col">
+        {/* هدر صفحه (ثابت) */}
+        <div className="mb-4 shrink-0 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
           <div>
             <h1 className="text-2xl font-bold text-blue-950">مشاهده روند کاری</h1>
             <p className="text-sm text-blue-800 mt-1">
@@ -398,9 +524,10 @@ export default function ProductionWorkflowPage() {
           </div>
         </div>
 
-        <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
+        {/* فیلترها (ثابت) */}
+        <div className="mb-4 shrink-0 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-            <div className="md:col-span-4">
+            <div className="md:col-span-3">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
                 جستجو (مشتری / ش سفارش / ش سفارش مشتری / نام کالا)
               </label>
@@ -430,7 +557,7 @@ export default function ProductionWorkflowPage() {
               </select>
             </div>
 
-            <div className="md:col-span-3">
+            <div className="md:col-span-2">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
                 فیلتر موعد تحویل
               </label>
@@ -445,6 +572,21 @@ export default function ProductionWorkflowPage() {
                 <option value="overdue">فقط موعد گذشته</option>
                 <option value="near">موعد نزدیک (۷ روز آینده)</option>
                 <option value="overdue_and_near">موعد گذشته + نزدیک</option>
+              </select>
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="mb-1.5 block text-sm font-bold text-blue-900">
+                وضعیت خروج
+              </label>
+              <select
+                value={exitFilter}
+                onChange={(e) => setExitFilter(e.target.value as ExitFilter)}
+                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
+              >
+                <option value="all">همه (خروج خورده + نخورده)</option>
+                <option value="exited">فقط خروج خورده</option>
+                <option value="not_exited">فقط خروج نخورده</option>
               </select>
             </div>
 
@@ -468,7 +610,12 @@ export default function ProductionWorkflowPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-x-auto">
+        {/* جدول: فقط همین بخش اسکرول می‌شود و تیترها ثابت می‌مانند */}
+        <div
+          ref={scrollRef}
+          onScroll={saveScroll}
+          className="flex-1 min-h-0 overflow-auto rounded-2xl bg-teal-500/10 backdrop-blur-2xl shadow-lg border border-teal-500/20"
+        >
           {loading ? (
             <p className="text-center text-blue-700 py-16 text-xl font-bold">
               در حال بارگذاری...
@@ -478,10 +625,10 @@ export default function ProductionWorkflowPage() {
               سفارشی یافت نشد
             </p>
           ) : (
-            <table className="w-full text-sm text-blue-900 border-collapse">
+            <table className="w-full text-sm text-blue-900 border-separate border-spacing-0">
               <thead>
-                <tr className="border-b border-teal-500/30 bg-teal-500/15 text-right">
-                  <th className="p-3 font-bold text-center">ردیف</th>
+                <tr className="text-right">
+                  <th className={thBase}>ردیف</th>
                   <th
                     className={thClass}
                     onClick={() => toggleSort("customerName")}
@@ -548,15 +695,19 @@ export default function ProductionWorkflowPage() {
                   <th className={thClass} onClick={() => toggleSort("status")}>
                     وضعیت{sortIcon("status")}
                   </th>
+                  <th className={thClass} onClick={() => toggleSort("exit")}>
+                    خروج{sortIcon("exit")}
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {filteredSorted.map((row, index) => (
                   <tr
                     key={row.rowKey}
-                    onClick={() =>
+                    onClick={() => {
+                      saveScroll()
                       router.push(`/production/orders/${row.productionOrderId}`)
-                    }
+                    }}
                     className={`transition cursor-pointer ${getRowClass(row)}`}
                   >
                     <td className="p-3 text-center font-bold">{index + 1}</td>
@@ -598,6 +749,17 @@ export default function ProductionWorkflowPage() {
                         )}`}
                       >
                         {row.status}
+                      </span>
+                    </td>
+                    <td className="p-3 text-center">
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-bold whitespace-nowrap ${
+                          row.isExited
+                            ? "bg-green-100 text-green-800"
+                            : "bg-gray-100 text-gray-600"
+                        }`}
+                      >
+                        {row.isExited ? "خروج خورده" : "خروج نخورده"}
                       </span>
                     </td>
                   </tr>

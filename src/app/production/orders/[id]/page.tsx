@@ -125,6 +125,24 @@ export default function ProductionOrderDetailPage() {
     }
   }
 
+  /** تاریخ + ساعت (مثلاً ۱۴۰۵/۷/۷ - ۱۴:۳۵) */
+  const formatDateTime = (dateStr: string | null | undefined) => {
+    if (!dateStr) return "—"
+    try {
+      const d = new Date(dateStr)
+      if (isNaN(d.getTime())) return dateStr
+      const datePart = d.toLocaleDateString("fa-IR")
+      const timePart = d.toLocaleTimeString("fa-IR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+      return `${datePart} - ${timePart}`
+    } catch {
+      return dateStr || "—"
+    }
+  }
+
   const getLastStation = (stations: ItemStation[]) => {
     if (!stations || stations.length === 0) {
       return { name: "—", status: "—", sequence: 0 }
@@ -146,7 +164,7 @@ export default function ProductionOrderDetailPage() {
     }
   }
 
-  /** مسیر ایستگاه‌ها با رنگ خوانا (تیره، نه سفید) */
+  /** مسیر ایستگاه‌ها: از برش (راست) شروع می‌شود و فلش‌ها به سمت ایستگاه بعدی (چپ) هستند */
   const getStationPath = (stations: ItemStation[]) => {
     if (!stations || stations.length === 0) {
       return <span className="text-blue-900 font-semibold">—</span>
@@ -179,7 +197,7 @@ export default function ProductionOrderDetailPage() {
             {s.station.name}
           </span>
           {!isLast && (
-            <span className="mx-1.5 text-base font-black text-blue-800">→</span>
+            <span className="mx-1.5 text-base font-black text-blue-800">←</span>
           )}
         </span>
       )
@@ -495,8 +513,11 @@ export default function ProductionOrderDetailPage() {
                       </p>
                     )}
                   </div>
-                  <span className="text-sm font-semibold text-blue-700 whitespace-nowrap">
-                    {formatDate(h.createdAt)}
+                  <span
+                    className="text-sm font-semibold text-blue-700 whitespace-nowrap"
+                    dir="ltr"
+                  >
+                    {formatDateTime(h.createdAt)}
                   </span>
                 </div>
               ))}

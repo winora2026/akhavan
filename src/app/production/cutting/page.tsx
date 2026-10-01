@@ -1,6 +1,13 @@
 "use client"
 
-import { useState, useEffect, useMemo, useRef, useLayoutEffect } from "react"
+import {
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+  useLayoutEffect,
+  type ReactNode,
+} from "react"
 import Link from "next/link"
 
 type CuttingItem = {
@@ -127,9 +134,71 @@ const labelText = (v: unknown) =>
     .replace(/ك/g, "ک")
     .trim()
 
-// اندازه فونت ابعاد بر اساس طول متن تا از عرض لیبل بیرون نزند
-const dimsFontPt = (text: string) =>
-  text.length <= 9 ? 20 : text.length <= 11 ? 17 : text.length <= 13 ? 14.5 : 12
+// بارکد را بدون متن می‌کشد و ارقام را به‌صورت HTML زیر آن می‌گذارد؛
+// رقم اول و آخر دقیقاً زیر ابتدا و انتهای میله‌ها قرار می‌گیرند
+const drawBarcode = (
+  JsBarcode: any,
+  svg: Element,
+  value: string,
+  opts: { moduleW: number; barH: number; fontPx: number; fontWeight?: string }
+) => {
+  const s = svg as SVGSVGElement
+  s.innerHTML = ""
+  JsBarcode(s, value, {
+    format: "CODE128",
+    width: opts.moduleW,
+    height: opts.barH,
+    displayValue: false,
+    margin: 0,
+    background: "transparent",
+    lineColor: "#000000",
+  })
+  const w = parseFloat(s.getAttribute("width") || "0")
+  const h = parseFloat(s.getAttribute("height") || "0")
+  if (!w || !h) return
+  s.style.display = "block"
+  s.style.width = `${w}px`
+  s.style.height = `${h}px`
+  s.style.maxWidth = "none"
+
+  const parent = s.parentElement
+  if (!parent) return
+  parent.querySelectorAll(".bc-digits").forEach((n) => n.remove())
+
+  const digits = document.createElement("div")
+  digits.className = "bc-digits"
+  digits.dir = "ltr"
+  digits.style.cssText = [
+    "display:flex",
+    "justify-content:space-between",
+    `width:${w}px`,
+    "margin:0",
+    "white-space:nowrap",
+    "line-height:1.1",
+    "overflow:hidden",
+    "font-family:Arial,Helvetica,sans-serif",
+    `font-weight:${opts.fontWeight || "700"}`,
+    "color:#000",
+  ].join(";")
+  // همان ترازِ افقی SVG (چپ‌چین در لیبل، وسط‌چین در برگه)
+  const cs = window.getComputedStyle(s)
+  digits.style.marginLeft = cs.marginLeft
+  digits.style.marginRight = cs.marginRight
+  Array.from(value).forEach((ch) => {
+    const sp = document.createElement("span")
+    sp.textContent = ch
+    digits.appendChild(sp)
+  })
+  parent.appendChild(digits)
+
+  // اگر ارقام از عرض میله‌ها بیشتر شدند، فونت کم می‌شود
+  let px = opts.fontPx
+  digits.style.fontSize = `${px}px`
+  while (digits.scrollWidth > w + 0.5 && px > 6) {
+    px -= 0.5
+    digits.style.fontSize = `${px}px`
+  }
+}
 
 // چند سطر متن که هرکدام دقیقاً در یک سطر می‌مانند؛ فونت (مشترک بین سطرها) تا جایی کم می‌شود که همه جا شوند
 function FitLines({
@@ -171,6 +240,76 @@ function FitLines({
           {ln}
         </div>
       ))}
+    </div>
+  )
+}
+
+// یک سطر لیبل؛ متن همیشه در یک سطر می‌ماند (اگر جا نشد، افقی فشرده می‌شود نه ریز)
+function FitLine({ text, className }: { text: string; className?: string }) {
+  return (
+    <div className={`fit-line ${className || ""}`}>
+      <span className="fit-inner">{text}</span>
+    </div>
+  )
+}
+
+// بدنه‌ی لیبل: نام کالا، نام مشتری، ابعاد و خدمات همگی یک اندازه‌ی فونت مشترک دارند.
+// اگر سطری از عرض ستون بلندتر باشد، همان سطر کمی فشرده می‌شود (ارتفاع حروف ثابت می‌ماند).
+// فقط وقتی فشردگی از حد مجاز بیشتر شود یا ارتفاع کم بیاید، فونت همه کمی کوچک می‌شود.
+function FitLabelBody({
+  sig,
+  maxPt,
+  minPt = 9,
+  minRatio = 0.62,
+  children,
+}: {
+  sig: string
+  maxPt: number
+  minPt?: number
+  minRatio?: number
+  children: ReactNode
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const lines = Array.from(el.querySelectorAll<HTMLElement>(".fit-line"))
+    const boxes = Array.from(el.querySelectorAll<HTMLElement>(".fit-box"))
+    let size = maxPt
+
+    const apply = () => {
+      el.style.setProperty("--fs", `${size}pt`)
+      lines.forEach((l) => {
+        const inner = l.firstElementChild as HTMLElement | null
+        if (!inner) return
+        inner.style.transform = "none"
+        const natural = inner.offsetWidth || 1
+        const ratio = Math.min(1, l.clientWidth / natural)
+        inner.dataset.ratio = String(ratio)
+        inner.style.transform = ratio < 1 ? `scaleX(${ratio})` : "none"
+      })
+    }
+    const ok = () =>
+      lines.every((l) => {
+        const inner = l.firstElementChild as HTMLElement | null
+        return !inner || Number(inner.dataset.ratio || 1) >= minRatio
+      }) && boxes.every((b) => b.scrollHeight <= b.clientHeight + 1)
+
+    apply()
+    while (!ok() && size > minPt) {
+      size -= 0.5
+      apply()
+    }
+  }, [sig, maxPt, minPt, minRatio])
+
+  return (
+    <div
+      ref={ref}
+      className="label-body"
+      style={{ ["--fs" as any]: `${maxPt}pt` }}
+    >
+      {children}
     </div>
   )
 }
@@ -264,18 +403,11 @@ export default function CuttingPlanningPage() {
         )
         if (!el) return
         try {
-          el.innerHTML = ""
-          JsBarcode(el, String(label.barcode), {
-            format: "CODE128",
-            width: 1.5,
-            height: 26,
-            displayValue: true,
-            fontSize: 12,
-            textMargin: 2,
-            margin: 0,
-            background: "transparent",
-            lineColor: "#000000",
-            fontOptions: "bold",
+          drawBarcode(JsBarcode, el, String(label.barcode), {
+            moduleW: 1,
+            barH: 28,
+            fontPx: 18,
+            fontWeight: "400",
           })
         } catch (e) {
           console.error("barcode error", e)
@@ -425,15 +557,10 @@ export default function CuttingPlanningPage() {
         )
         if (!el) return
         try {
-          el.innerHTML = ""
-          JsBarcode(el, String(row.barcode), {
-            format: "CODE128",
-            width: 1.2,
-            height: 26,
-            displayValue: true,
-            fontSize: 10,
-            textMargin: 1,
-            margin: 0,
+          drawBarcode(JsBarcode, el, String(row.barcode), {
+            moduleW: 0.9,
+            barH: 26,
+            fontPx: 11,
           })
         } catch {}
       })
@@ -731,6 +858,26 @@ export default function CuttingPlanningPage() {
       font-weight: 900;
     }
     .label-line { flex: none; border-top: 1px dashed #000; margin: 0 0 2mm; }
+    .label-body {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      font-size: var(--fs, 14pt);
+    }
+    .fit-line { white-space: nowrap; overflow: hidden; }
+    .fit-inner { display: inline-block; white-space: nowrap; }
+    .label-left .fit-inner { transform-origin: left center; }
+    .label-right .fit-inner { transform-origin: right center; }
+    .label-product {
+      flex: none;
+      font-weight: 700;
+      line-height: 1.35;
+      direction: rtl;
+      text-align: left;
+      unicode-bidi: plaintext;
+      margin-bottom: 0.5mm;
+    }
     .label-main {
       direction: ltr;
       display: flex;
@@ -744,24 +891,21 @@ export default function CuttingPlanningPage() {
       display: flex;
       flex-direction: column;
       min-height: 0;
+      overflow: hidden;
       text-align: left;
     }
-    .label-right { width: 50%; direction: rtl; text-align: right; }
-    .label-product {
-      font-size: 12pt;
-      line-height: 1.3;
-      font-weight: 700;
+    .label-right {
+      width: 50%;
+      min-width: 0;
+      overflow: hidden;
       direction: rtl;
-      text-align: left;
-      unicode-bidi: plaintext;
+      text-align: right;
     }
     .label-dims {
       font-weight: 900;
-      line-height: 1.15;
-      margin-top: 1mm;
+      line-height: 1.25;
       direction: ltr;
       unicode-bidi: isolate;
-      white-space: nowrap;
     }
     .label-notes {
       font-size: 10pt;
@@ -774,16 +918,14 @@ export default function CuttingPlanningPage() {
     }
     .label-barcode { margin-top: auto; direction: ltr; line-height: 0; }
     .label-barcode svg { display: block; max-width: 100%; }
-    .label-right { min-width: 0; }
     .label-customer {
       font-weight: 900;
-      line-height: 1.3;
+      line-height: 1.35;
       margin-bottom: 1.5mm;
     }
     .label-service {
       font-weight: 900;
       line-height: 1.4;
-      white-space: nowrap;
     }
   `
 
@@ -1241,52 +1383,45 @@ export default function CuttingPlanningPage() {
 
                     <div className="label-line" />
 
-                    <div className="label-main">
-                      {/* چپ: کالا، ابعاد، توضیحات و بارکد پایین چپ */}
-                      <div className="label-left">
-                        <FitLines
-                          className="label-product"
-                          lines={[labelText(label.productName)]}
-                          maxPt={12}
-                          minPt={7}
-                        />
-                        <div
-                          className="label-dims"
-                          style={{ fontSize: `${dimsFontPt(dimsText)}pt` }}
-                        >
-                          {dimsText}
-                        </div>
-                        {label.notes ? (
-                          <FitLines
-                            className="label-notes"
-                            lines={[labelText(label.notes)]}
-                            maxPt={10}
-                            minPt={7}
+                    <FitLabelBody
+                      sig={[labelText(label.productName), dimsText, customerStr, ...services].join("|")}
+                      maxPt={14}
+                      minPt={8}
+                    >
+                      <div className="label-main">
+                        {/* چپ: نام کالا، ابعاد، توضیحات و بارکد پایین چپ */}
+                        <div className="label-left fit-box">
+                          <FitLine
+                            className="label-product"
+                            text={labelText(label.productName)}
                           />
-                        ) : null}
-                        <div className="label-barcode">
-                          <svg id={`barcode-${label.productionItemId}-${idx}`} />
+                          <FitLine className="label-dims" text={dimsText} />
+                          {label.notes ? (
+                            <FitLines
+                              className="label-notes"
+                              lines={[labelText(label.notes)]}
+                              maxPt={10}
+                              minPt={7}
+                            />
+                          ) : null}
+                          <div className="label-barcode">
+                            <svg
+                              id={`barcode-${label.productionItemId}-${idx}`}
+                              width="110"
+                              height="44"
+                            />
+                          </div>
                         </div>
-                      </div>
 
-                      {/* راست: مشتری و خدمات زیر هم */}
-                      <div className="label-right">
-                        <FitLines
-                          className="label-customer"
-                          lines={[customerStr]}
-                          maxPt={14}
-                          minPt={8}
-                        />
-                        {services.length > 0 && (
-                          <FitLines
-                            className="label-service"
-                            lines={services}
-                            maxPt={14}
-                            minPt={8}
-                          />
-                        )}
+                        {/* راست: نام مشتری و خدمات، هر کدام در یک سطر */}
+                        <div className="label-right fit-box">
+                          <FitLine className="label-customer" text={customerStr} />
+                          {services.map((sv, i) => (
+                            <FitLine key={i} className="label-service" text={sv} />
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    </FitLabelBody>
                   </div>
                 )
               })}
@@ -1341,21 +1476,22 @@ export default function CuttingPlanningPage() {
                 <thead>
                   <tr>
                     {[
-                      "ردیف",
-                      "بارکد",
-                      "کد نصب",
-                      "سفارش",
-                      "تاریخ سفارش",
-                      "تاریخ تحویل",
-                      "نام مشتری",
-                      "متراژ",
-                      "تعداد",
-                      "عرض",
-                      "طول",
-                      "خدمات",
-                    ].map((h) => (
+                      { h: "ردیف" },
+                      { h: "بارکد", w: "1%" },
+                      { h: "کد نصب" },
+                      { h: "سفارش" },
+                      { h: "تاریخ سفارش" },
+                      { h: "تاریخ تحویل" },
+                      { h: "نام مشتری" },
+                      { h: "متراژ" },
+                      { h: "تعداد" },
+                      { h: "عرض" },
+                      { h: "طول" },
+                      { h: "خدمات", w: "30%" },
+                    ].map(({ h, w }) => (
                       <th
                         key={h}
+                        style={w ? { width: w } : undefined}
                         className="border border-black p-1.5 font-black bg-gray-100 text-[12px]"
                       >
                         {h}
@@ -1408,7 +1544,7 @@ export default function CuttingPlanningPage() {
                       <td className="border border-black p-1.5 text-center font-black">
                         {row.length ?? "—"}
                       </td>
-                      <td className="border border-black p-1.5 text-[11px] font-bold">
+                      <td className="border border-black p-1.5 text-[11px] font-bold leading-5">
                         {row.servicesText || row.notes || "—"}
                       </td>
                     </tr>
