@@ -189,7 +189,8 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json()
-    const { id, status, convertedBy } = body
+    // orderDate و deliveryDate: تاریخ‌های جدید هنگام انتقال پیش‌فاکتور به فاکتور
+    const { id, status, convertedBy, orderDate, deliveryDate } = body
 
     if (!id || !status) {
       return NextResponse.json(
@@ -242,11 +243,20 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
+    // فقط هنگام انتقال به فاکتور، تاریخ‌های جدید ذخیره می‌شوند
+    // (برگرداندن به پیش‌فاکتور تاریخ‌ها را تغییر نمی‌دهد)
+    const dateUpdates: { orderDate?: Date; deliveryDate?: Date } = {}
+    if (status === "فاکتور") {
+      if (orderDate) dateUpdates.orderDate = safeDate(orderDate)
+      if (deliveryDate) dateUpdates.deliveryDate = safeDate(deliveryDate)
+    }
+
     const order = await prisma.order.update({
       where: { id },
       data: {
         status,
         notes: convertedBy ? `تبدیل شده توسط: ${convertedBy}` : undefined,
+        ...dateUpdates,
       },
       include: {
         customer: true,

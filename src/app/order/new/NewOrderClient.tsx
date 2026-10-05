@@ -20,6 +20,7 @@ type ServiceItem = {
   totalPrice: string
   lengthCount?: string
   widthCount?: string
+  note?: string // توضیح تکمیلی خدمت (مثلاً «با آرم استاندارد» برای اجرت سکوریت) — در پیش‌فاکتور نمایش داده می‌شود
 }
 
 type OrderItem = {
@@ -49,6 +50,14 @@ type MapImage = {
 
 const serviceUnits = ["مترمربع", "مترطول", "عددی", "درصد", "محیط", "ابعاد دایره", "چند طول چند عرض"]
 const discountOptions = [3, 5, 7, 10, 12, 15]
+
+// گزینه‌های پاپ‌آپ «اجرت سکوریت» (توضیح تکمیلی که روی پیش‌فاکتور هم می‌آید)
+const LOGO_OPTIONS = ["با آرم استاندارد", "بدون آرم استاندارد"]
+
+// ارتفاع فضای رزروشده برای هدر/فوتر تصویری پیش‌فاکتور هنگام چاپ (باید با height دیوهای
+// invoice-header و invoice-footer یکی باشد). اگر بالای صفحه بیش از حد خالی شد کمترشان کنید.
+const INVOICE_HEADER_H = 230
+const INVOICE_FOOTER_H = 210
 
 // لیست اولیه‌ی توضیحات (از فایل seed — همان لیست نرم‌افزار قبلی). توضیحات جدیدی که
 // کارشناس‌ها اضافه می‌کنند روی سرور ذخیره می‌شود (/api/descriptions) و با این لیست ادغام می‌شود.
@@ -136,6 +145,10 @@ const normalizeText = (value: string) => {
     .toLowerCase()
     .trim()
 }
+
+// آیا این خدمت «اجرت سکوریت» است؟ (برای باز شدن پاپ‌آپ انتخاب آرم استاندارد)
+// اگر نام خدمت در فایل seed شما متفاوت است، همین شرط را با نام/کد دقیق عوض کنید.
+const isSecurityWage = (title: string) => normalizeText(title).includes("اجرت سکوریت")
 
 // عدد را به حروف فارسی تبدیل می‌کند (برای نمایش «مبلغ به حروف» در پیش‌فاکتور)
 const persianOnes = ["", "یک", "دو", "سه", "چهار", "پنج", "شش", "هفت", "هشت", "نه"]
@@ -372,6 +385,8 @@ export default function NewOrderClient() {
   // ایندکس خدمتِ هایلایت‌شده در لیست نتایج جستجو (برای انتخاب با کیبورد، بدون نیاز به موس)
   const [serviceActiveIndex, setServiceActiveIndex] = useState(0)
   const [editingServiceId, setEditingServiceId] = useState<number | null>(null)
+  // پاپ‌آپ انتخاب «با/بدون آرم استاندارد» هنگام ثبت «اجرت سکوریت»
+  const [showLogoModal, setShowLogoModal] = useState(false)
   const [showInvoice, setShowInvoice] = useState(false)
   const [invoiceMode, setInvoiceMode] = useState<"detailed" | "summary" | "breakdown">("detailed")
   const [isOfficialInvoice, setIsOfficialInvoice] = useState(false)
@@ -1178,6 +1193,11 @@ export default function NewOrderClient() {
         setCopyTargetIds([])
         return
       }
+      // پاپ‌آپ آرم استاندارد (روی مودال خدمات باز می‌شود، پس قبل از آن بسته شود)
+      if (showLogoModal) {
+        setShowLogoModal(false)
+        return
+      }
       if (showDescriptionModal) {
         setShowDescriptionModal(false)
         return
@@ -1227,6 +1247,7 @@ export default function NewOrderClient() {
     showModalDescDropdown,
     contextMenu,
     copyModal,
+    showLogoModal,
     showDescriptionModal,
     showInstallModal,
     installDate,
@@ -1415,13 +1436,20 @@ export default function NewOrderClient() {
     setServiceSearch("")
     setServiceActiveIndex(0)
     setEditingServiceId(null)
+    setShowLogoModal(false)
     setShowServices(true)
     setSvcDiameter("")
   }
 
-  const addOrUpdateService = () => {
+  // chosenNote: توضیح تکمیلی انتخاب‌شده در پاپ‌آپ (فقط برای «اجرت سکوریت»). اگر خدمت
+  // «اجرت سکوریت» باشد و هنوز انتخابی نشده، ابتدا پاپ‌آپ باز می‌شود و ثبت واقعی بعد از انتخاب انجام می‌شود.
+  const addOrUpdateService = (chosenNote?: string) => {
     if (!svcTitle) {
       alert("خدمت را انتخاب کنید")
+      return
+    }
+    if (isSecurityWage(svcTitle) && chosenNote === undefined) {
+      setShowLogoModal(true)
       return
     }
     const count = parseFloat(svcCount) || 1
@@ -1443,6 +1471,7 @@ export default function NewOrderClient() {
       totalPrice: total ? total.toLocaleString("en-US") : "0",
       lengthCount: svcLengthCount,
       widthCount: svcWidthCount,
+      note: isSecurityWage(svcTitle) ? chosenNote : "",
     }
     if (editingServiceId) {
       setTempServices(tempServices.map((s) => (s.id === editingServiceId ? serviceData : s)))
@@ -1698,7 +1727,7 @@ export default function NewOrderClient() {
 
     // ========== گروه‌بندی برای حالت کلی ==========
     // کالاها: هم‌نام + هم‌واحد + هم‌قیمت در یک سطر جمع می‌شوند.
-    // خدمات: در کل پیش‌فاکتور بر اساس «عنوان + واحد + قیمت واحد» جمع می‌شوند
+    // خدمات: در کل پیش‌فاکتور بر اساس «عنوان + واحد + قیمت واحد + توضیح تکمیلی» جمع می‌شوند
     // و هر خدمت یک سطر جدا دارد (تعداد = جمع تعداد، متراژ = جمع تعداد × تعداد واحد).
     type SummaryRow = {
       kind: "product" | "service"
@@ -1753,7 +1782,8 @@ export default function NewOrderClient() {
         const cnt = parseFloat(s.count) || 1
         const unitQty =
           s.unit === "عددی" && !String(s.unitQuantity || "").trim() ? 1 : parseFloat(s.unitQuantity) || 0
-        const sKey = `${s.title}|${s.unit}|${s.unitPrice}`
+        // توضیح تکمیلی (مثلاً «با آرم استاندارد») هم جزو کلید است تا دو نوع مختلف در یک سطر ادغام نشوند
+        const sKey = `${s.title}|${s.unit}|${s.unitPrice}|${s.note || ""}`
 
         const existingS = serviceMap.get(sKey)
         if (existingS) {
@@ -1770,7 +1800,7 @@ export default function NewOrderClient() {
             unit: s.unit,
             unitPrice: parsePrice(s.unitPrice),
             total: parsePrice(s.totalPrice),
-            descriptions: [],
+            descriptions: s.note ? [s.note] : [],
           }
           serviceMap.set(sKey, row)
           serviceRows.push(row)
@@ -1796,6 +1826,7 @@ export default function NewOrderClient() {
       unit: string
       unitPrice: number
       total: number
+      note: string // توضیح تکمیلی خدمت (مثلاً «با آرم استاندارد») — در ستون «شرح» می‌آید
     }
     type DetailBlock = {
       productName: string
@@ -1849,7 +1880,7 @@ export default function NewOrderClient() {
           svc = { title: s.title, variants: [] }
           block!.services.push(svc)
         }
-        let v = svc.variants.find((x) => x.unit === s.unit && x.unitPrice === price)
+        let v = svc.variants.find((x) => x.unit === s.unit && x.unitPrice === price && x.note === (s.note || ""))
         if (!v) {
           v = {
             code: serviceCodeByName.get(s.title) || "",
@@ -1858,6 +1889,7 @@ export default function NewOrderClient() {
             unit: s.unit,
             unitPrice: price,
             total: 0,
+            note: s.note || "",
           }
           svc.variants.push(v)
         }
@@ -1887,6 +1919,7 @@ export default function NewOrderClient() {
             unit: v.unit,
             unitPrice: v.unitPrice,
             total: v.total,
+            description: v.note,
           })
         })
         // سطر «مجموع» فقط وقتی لازم است که این خدمت بیش از یک ردیف (واریانت) داشته باشد؛
@@ -1965,7 +1998,7 @@ export default function NewOrderClient() {
         <div
           className="invoice-header absolute top-0 left-0 right-0 z-0"
           style={{
-            height: "230px",
+            height: `${INVOICE_HEADER_H}px`,
             backgroundImage: "url('https://i.ibb.co/nqFvCvnR/DBBFE0-A3-2036-4200-B276-0-B652-BA49849.png')",
             backgroundSize: "100% auto",
             backgroundPosition: "top center",
@@ -1975,9 +2008,31 @@ export default function NewOrderClient() {
           } as React.CSSProperties}
         />
 
-        <div className="relative z-10 p-6 print:p-4 pb-[210px] print:pb-[210px]">
+        {/*
+          جدول پوششی: فقط برای چاپ چندصفحه‌ای.
+          هدر و فوتر تصویری موقع چاپ position:fixed هستند و روی هر صفحه تکرار می‌شوند، ولی برای
+          محتوا جایی رزرو نمی‌کنند؛ در نتیجه از صفحه‌ی دوم به بعد متن زیر هدر می‌رفت.
+          مرورگر thead/tfoot را روی هر صفحه تکرار می‌کند، پس این دو ردیفِ خالی (فقط در چاپ دیده
+          می‌شوند) به اندازه‌ی هدر و فوتر فضا رزرو می‌کنند و «اطلاعات واریز» که آخر محتواست
+          همیشه انتهای آخرین صفحه و بین هدر و فوتر می‌آید.
+        */}
+        <table className="relative z-10 w-full border-collapse">
+          <thead className="hidden print:table-header-group">
+            <tr>
+              <td style={{ height: `${INVOICE_HEADER_H}px`, padding: 0 }} />
+            </tr>
+          </thead>
+          <tfoot className="hidden print:table-footer-group">
+            <tr>
+              <td style={{ height: `${INVOICE_FOOTER_H}px`, padding: 0 }} />
+            </tr>
+          </tfoot>
+          <tbody>
+            <tr>
+              <td className="align-top p-0">
+        <div className="p-6 print:p-4 pb-[210px] print:pb-0">
           {/* عنوان */}
-          <div className="text-center mt-24 mb-4">
+          <div className="text-center mt-24 print:mt-0 mb-4">
             <h2 className="text-2xl font-bold text-teal-800 tracking-wide">پیش فاکتور</h2>
           </div>
 
@@ -2059,7 +2114,7 @@ export default function NewOrderClient() {
                           <td className="border border-gray-300 p-2 text-left font-bold text-teal-700">
                             {formatPrice(s.totalPrice)}
                           </td>
-                          <td className="border border-gray-300 p-2"></td>
+                          <td className="border border-gray-300 p-2 text-xs text-gray-700">{s.note || ""}</td>
                         </tr>
                       ))}
 
@@ -2333,7 +2388,7 @@ export default function NewOrderClient() {
             <p>محیط کل: <strong>{calculatedTotalPerimeter}</strong></p>
           </div>
 
-          {/* اطلاعات واریز */}
+          {/* اطلاعات واریز — انتهای محتوا؛ در چاپ چندصفحه‌ای همیشه آخر صفحه‌ی آخر می‌آید */}
           <div className="mt-8 pt-4 border-t border-gray-200 text-sm text-gray-700 break-inside-avoid">
             <p className="font-bold mb-2 text-teal-800">اطلاعات واریز:</p>
             {isOfficialInvoice ? (
@@ -2353,12 +2408,16 @@ export default function NewOrderClient() {
             )}
           </div>
         </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
 
         {/* فوتر تصویری — موقع چاپ روی هر صفحه تکرار می‌شود (position: fixed) */}
         <div
           className="invoice-footer absolute bottom-0 left-0 right-0 z-10"
           style={{
-            height: "210px",
+            height: `${INVOICE_FOOTER_H}px`,
             backgroundImage: "url('https://i.ibb.co/nqFvCvnR/DBBFE0-A3-2036-4200-B276-0-B652-BA49849.png')",
             backgroundSize: "100% auto",
             backgroundPosition: "bottom center",
@@ -3743,7 +3802,7 @@ export default function NewOrderClient() {
                     <p className="text-sm text-blue-600 mb-3">فرمول: تعداد × تعداد واحد × قیمت واحد</p>
 
                     <button
-                      onClick={addOrUpdateService}
+                      onClick={() => addOrUpdateService()}
                       className={`w-full rounded-xl py-3.5 text-lg font-bold text-white transition ${
                         editingServiceId ? "bg-amber-500 hover:bg-amber-600" : "bg-teal-500 hover:bg-teal-600"
                       }`}
@@ -3804,7 +3863,10 @@ export default function NewOrderClient() {
                                 editingServiceId === s.id ? "bg-amber-100" : "hover:bg-yellow-50"
                               }`}
                             >
-                              <td className="p-3 font-semibold">{s.title}</td>
+                              <td className="p-3 font-semibold">
+                                {s.title}
+                                {s.note && <div className="text-xs font-bold text-amber-700 mt-0.5">{s.note}</div>}
+                              </td>
                               <td className="p-3">{s.unit}</td>
                               <td className="p-3">{s.count}</td>
                               <td className="p-3">
@@ -3848,6 +3910,49 @@ export default function NewOrderClient() {
                       تأیید و اعمال
                     </button>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* پاپ‌آپ توضیح تکمیلی «اجرت سکوریت»: با/بدون آرم استاندارد (با کلید ۱ و ۲ هم انتخاب می‌شود).
+                این پاپ‌آپ بعد از مودال خدمات رندر می‌شود و z-index بالاتری دارد تا روی آن بیفتد. */}
+            {showLogoModal && (
+              <div className="fixed inset-0 z-[165] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                <div
+                  onKeyDown={(e) => {
+                    if (e.key === "1" || e.key === "2") {
+                      e.preventDefault()
+                      setShowLogoModal(false)
+                      addOrUpdateService(LOGO_OPTIONS[Number(e.key) - 1])
+                    }
+                  }}
+                  className="w-full max-w-md rounded-2xl bg-white shadow-2xl p-6"
+                >
+                  <h3 className="text-xl font-bold text-blue-950 mb-1">توضیحات تکمیلی اجرت سکوریت</h3>
+                  <p className="text-sm text-blue-700 mb-4">یکی را انتخاب کنید (کلید ۱ یا ۲ هم کار می‌کند)</p>
+                  <div className="flex flex-col gap-3">
+                    {LOGO_OPTIONS.map((opt, i) => (
+                      <button
+                        key={opt}
+                        type="button"
+                        autoFocus={i === 0}
+                        onClick={() => {
+                          setShowLogoModal(false)
+                          addOrUpdateService(opt)
+                        }}
+                        className="rounded-xl border border-teal-300 bg-teal-50 hover:bg-yellow-100 focus:bg-yellow-100 focus:ring-2 focus:ring-teal-300 focus:outline-none px-4 py-3 text-lg font-bold text-blue-900 text-right"
+                      >
+                        {i + 1}- {opt}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowLogoModal(false)}
+                    className="mt-4 w-full rounded-xl border border-gray-300 py-2.5 text-base font-bold text-blue-900 hover:bg-gray-100"
+                  >
+                    انصراف
+                  </button>
                 </div>
               </div>
             )}

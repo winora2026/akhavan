@@ -51,6 +51,11 @@ function isBevelPair(name: string) {
   return n === "تراش 1" || n === "تراش ۱" || n === "تراش 2" || n === "تراش ۲"
 }
 
+/** برای اتمام کل قطعه: تکمیل واقعی یا لغو به‌خاطر ایستگاه جفت */
+function isStationClosed(status: string) {
+  return status === "تکمیل شده" || status === "انجام در ایستگاه دیگر"
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -121,6 +126,18 @@ export async function POST(req: Request) {
           error: "این قطعه قبلاً در این ایستگاه رد شده است",
           productName: item.productName,
           orderNumber: item.productionOrder.order?.orderNumber,
+          stationName: stationRow.station.name,
+        },
+        { status: 400 }
+      )
+    }
+
+    if (stationRow.status === "انجام در ایستگاه دیگر") {
+      return NextResponse.json(
+        {
+          error:
+            "این کار در ایستگاه تراش دیگر انجام شده و در این دستگاه قابل رد نیست",
+          productName: item.productName,
           stationName: stationRow.station.name,
         },
         { status: 400 }
@@ -208,24 +225,23 @@ export async function POST(req: Request) {
         },
       })
 
-      // تراش ۱ یا ۲: با تکمیل یکی، جفتش هم رد شود
+      // تراش ۱ یا ۲: فقط همین دستگاه «تکمیل شده»؛ جفت از صف خارج می‌شود بدون ثبت به‌عنوان انجام‌دهنده
       if (isBevelPair(stationRow.station.name)) {
         for (const s of item.stations) {
           if (
             s.id !== stationRow.id &&
             isBevelPair(s.station.name) &&
-            s.status !== "تکمیل شده"
+            s.status !== "تکمیل شده" &&
+            s.status !== "انجام در ایستگاه دیگر"
           ) {
             await prisma.productionItemStation.update({
               where: { id: s.id },
               data: {
-                status: "تکمیل شده",
-                quantityOut: s.quantityIn || item.quantity || qty,
+                status: "انجام در ایستگاه دیگر",
+                quantityOut: 0,
                 quantityIn: 0,
                 completedAt: now,
-                startedAt: s.startedAt || now,
-                operatorId: operatorName || null,
-                notes: "رد خودکار به‌خاطر تکمیل دستگاه تراش دیگر",
+                notes: `کار در «${stationRow.station.name}» انجام شد — این دستگاه انجام‌دهنده نیست`,
               },
             })
             await prisma.productionHistory.create({
@@ -234,10 +250,10 @@ export async function POST(req: Request) {
                 productionItemId: item.id,
                 productionItemStationId: s.id,
                 stationId: s.stationId,
-                action: "رد خودکار تراش",
-                description: `با تکمیل «${stationRow.station.name}»، ایستگاه «${s.station.name}» هم رد شد`,
-                newStatus: "تکمیل شده",
-                quantity: s.quantityIn || item.quantity,
+                action: "خروج از صف تراش (انجام در ایستگاه جفت)",
+                description: `به‌خاطر تکمیل واقعی در «${stationRow.station.name}»، از صف «${s.station.name}» خارج شد (بدون ثبت به‌عنوان انجام‌دهنده)`,
+                newStatus: "انجام در ایستگاه دیگر",
+                quantity: 0,
                 operatorName: operatorName || null,
               },
             })
@@ -251,7 +267,7 @@ export async function POST(req: Request) {
           if (s.id === stationRow.id) continue
           const nm = s.station.name
           if (isCutStation(nm) || isReadyWh(nm) || isLoading(nm)) continue
-          if (s.status === "تکمیل شده") continue
+          if (isStationClosed(s.status)) continue
 
           await prisma.productionItemStation.update({
             where: { id: s.id },
@@ -292,7 +308,7 @@ export async function POST(req: Request) {
       include: { station: true },
     })
 
-    const allDone = allStations.every((s) => s.status === "تکمیل شده")
+    const allDone = allStations.every((s) => isStationClosed(s.status))
 
     await prisma.productionItem.update({
       where: { id: item.id },

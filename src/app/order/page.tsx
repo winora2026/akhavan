@@ -127,6 +127,56 @@ const getFaMonth = (dateStr: string | null | undefined) => {
   }
 }
 
+// ===== کمک‌توابع تاریخ کاری (برای به‌روزرسانی تاریخ‌ها هنگام انتقال به فاکتور) =====
+// باید با لیست تعطیلات صفحه‌ی ثبت سفارش یکی باشد (بهتر است بعداً در یک فایل مشترک بروند)
+const IRAN_HOLIDAYS: string[] = []
+const DEFAULT_LEAD_DAYS = 4
+
+const isNonWorkingDay = (d: Date) => {
+  if (d.getDay() === 5) return true // جمعه
+  return IRAN_HOLIDAYS.includes(d.toISOString().slice(0, 10))
+}
+
+const addBusinessDays = (start: Date, n: number) => {
+  const result = new Date(start)
+  let added = 0
+  while (added < n) {
+    result.setDate(result.getDate() + 1)
+    if (!isNonWorkingDay(result)) added++
+  }
+  return result
+}
+
+// تعداد روزهای کاری بین دو تاریخ (روز شروع حساب نمی‌شود، روز پایان حساب می‌شود)
+const countBusinessDays = (from: Date, to: Date) => {
+  const cur = new Date(from)
+  cur.setHours(0, 0, 0, 0)
+  const end = new Date(to)
+  end.setHours(0, 0, 0, 0)
+  let n = 0
+  while (cur < end) {
+    cur.setDate(cur.getDate() + 1)
+    if (!isNonWorkingDay(cur)) n++
+  }
+  return n
+}
+
+// تاریخ‌های جدید هنگام انتقال به فاکتور:
+// تاریخ سفارش = امروز، تاریخ تحویل = امروز + همان تعداد روز کاریِ بین تاریخ سفارش و تحویل قبلی
+// (اگر تاریخ تحویل قبلی خالی/نامعتبر باشد، پیش‌فرض ۴ روز کاری)
+const calcNewDates = (order: { orderDate: string; deliveryDate: string | null }) => {
+  const today = new Date()
+  const oldOrder = parseOrderDate(order.orderDate)
+  const oldDelivery = parseOrderDate(order.deliveryDate)
+  let lead = oldOrder && oldDelivery ? countBusinessDays(oldOrder, oldDelivery) : 0
+  if (lead <= 0) lead = DEFAULT_LEAD_DAYS
+  return { today, delivery: addBusinessDays(today, lead), lead }
+}
+
+// همان فرمتی که صفحه‌ی ثبت سفارش در handleSave می‌فرستد
+const toPersianStr = (d: Date) =>
+  new DateObject({ date: d, calendar: persian, locale: persian_fa }).format("YYYY/MM/DD")
+
 export default function PreInvoicesPage() {
   const [orders, setOrders] = useState<OrderFromApi[]>([])
   const [loading, setLoading] = useState(true)
@@ -324,6 +374,8 @@ export default function PreInvoicesPage() {
     if (!confirmItem) return
     try {
       setSending(true)
+      // تاریخ سفارش = امروز، تاریخ تحویل = امروز + همان تعداد روز کاری قبلی
+      const { today, delivery } = calcNewDates(confirmItem)
       const res = await fetch("/api/orders", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -331,6 +383,8 @@ export default function PreInvoicesPage() {
           id: confirmItem.id,
           status: "فاکتور",
           convertedBy: confirmItem.salesRep || "سیستم",
+          orderDate: toPersianStr(today),
+          deliveryDate: toPersianStr(delivery),
         }),
       })
       if (!res.ok) {
@@ -350,6 +404,9 @@ export default function PreInvoicesPage() {
 
   const thClass =
     "p-3 font-bold whitespace-nowrap text-center cursor-pointer select-none hover:bg-teal-500/25 transition"
+
+  // پیش‌نمایش تاریخ‌های جدید در مودال تأیید
+  const newDates = confirmItem ? calcNewDates(confirmItem) : null
 
   return (
     <div
@@ -704,9 +761,31 @@ export default function PreInvoicesPage() {
                   {confirmItem.salesRep || "—"}
                 </strong>
               </p>
+
+              {newDates && (
+                <div className="rounded-xl bg-teal-50 border border-teal-200 p-3 text-sm">
+                  <p>
+                    تاریخ سفارش جدید:{" "}
+                    <strong className="text-teal-700">
+                      {formatDate(newDates.today.toISOString())}
+                    </strong>
+                  </p>
+                  <p className="mt-1">
+                    تاریخ تحویل جدید:{" "}
+                    <strong className="text-teal-700">
+                      {formatDate(newDates.delivery.toISOString())}
+                    </strong>
+                    <span className="text-xs text-gray-500 mr-2">
+                      ({newDates.lead} روز کاری)
+                    </span>
+                  </p>
+                </div>
+              )}
+
               <p className="text-sm text-gray-600 mt-3">با تأیید:</p>
               <ul className="text-sm text-gray-700 list-disc list-inside space-y-1">
                 <li>وضعیت به «فاکتور» تغییر می‌کند</li>
+                <li>تاریخ سفارش و تحویل از امروز به‌روزرسانی می‌شود</li>
                 <li>سفارش به‌صورت خودکار وارد تولید می‌شود</li>
                 <li>از لیست پیش‌فاکتورها حذف و به فاکتورها اضافه می‌شود</li>
               </ul>

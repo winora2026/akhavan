@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
+import { buildServicesText } from "@/lib/production/servicesText"
 
 export async function POST(req: Request) {
   try {
@@ -7,6 +8,8 @@ export async function POST(req: Request) {
     const {
       productionItemIds,
       action,
+      mode, // "simple" | "waste"
+      labelReason, // علت چاپ مجدد ساده (پارگی، ناخوانا، ...)
       reason,
       department,
       responsiblePerson,
@@ -22,26 +25,34 @@ export async function POST(req: Request) {
     }
 
     if (action === "allow-reprint") {
-      if (!reason || !String(reason).trim()) {
-        return NextResponse.json(
-          { error: "علت ضایعات الزامی است" },
-          { status: 400 }
-        )
-      }
-      if (!department || !["تولید", "اداری"].includes(department)) {
-        return NextResponse.json(
-          { error: "بخش مسبب باید تولید یا اداری باشد" },
-          { status: 400 }
-        )
-      }
-      if (!responsiblePerson || !String(responsiblePerson).trim()) {
-        return NextResponse.json(
-          { error: "شخص مسبب الزامی است" },
-          { status: 400 }
-        )
+      const reprintMode = mode === "waste" ? "waste" : "simple"
+      const simpleReason = labelReason ? String(labelReason).trim() : ""
+
+      if (reprintMode === "waste") {
+        if (!reason || !String(reason).trim()) {
+          return NextResponse.json(
+            { error: "علت ضایعات الزامی است" },
+            { status: 400 }
+          )
+        }
+        if (!department || !["تولید", "اداری"].includes(department)) {
+          return NextResponse.json(
+            { error: "بخش مسبب باید تولید یا اداری باشد" },
+            { status: 400 }
+          )
+        }
+        if (!responsiblePerson || !String(responsiblePerson).trim()) {
+          return NextResponse.json(
+            { error: "شخص مسبب الزامی است" },
+            { status: 400 }
+          )
+        }
       }
 
-      const wasteNote = `بخش: ${department} | شخص: ${String(responsiblePerson).trim()}`
+      const wasteNote =
+        reprintMode === "waste"
+          ? `بخش: ${department} | شخص: ${String(responsiblePerson).trim()}`
+          : null
 
       await prisma.productionItem.updateMany({
         where: { id: { in: productionItemIds } },
@@ -57,29 +68,41 @@ export async function POST(req: Request) {
         })
         if (!item) continue
 
-        await prisma.waste.create({
-          data: {
-            productionItemId: id,
-            quantity: item.quantity || 1,
-            reason: String(reason).trim(),
-            notes: wasteNote,
-            operatorId: operatorName ? String(operatorName) : null,
-          },
-        })
+        // فقط در حالت ضایعات واقعی رکورد Waste ساخته می‌شود
+        if (reprintMode === "waste") {
+          await prisma.waste.create({
+            data: {
+              productionItemId: id,
+              quantity: item.quantity || 1,
+              reason: String(reason).trim(),
+              notes: wasteNote,
+              operatorId: operatorName ? String(operatorName) : null,
+            },
+          })
+        }
 
         await prisma.productionHistory.create({
           data: {
             productionOrderId: item.productionOrderId,
             productionItemId: id,
-            action: "اجازه چاپ مجدد لیبل",
-            description: `ضایعات/چاپ مجدد | علت: ${String(reason).trim()} | ${wasteNote}`,
+            action:
+              reprintMode === "waste"
+                ? "اجازه چاپ مجدد لیبل (با ضایعات)"
+                : "اجازه چاپ مجدد لیبل",
+            description:
+              reprintMode === "waste"
+                ? `ضایعات | علت: ${String(reason).trim()} | ${wasteNote}`
+                : `چاپ مجدد لیبل${simpleReason ? ` | علت: ${simpleReason}` : ""}`,
             operatorName: operatorName ? String(operatorName) : null,
           },
         })
       }
 
       return NextResponse.json({
-        message: "اجازه چاپ مجدد و ثبت ضایعات انجام شد",
+        message:
+          reprintMode === "waste"
+            ? "اجازه چاپ مجدد و ثبت ضایعات انجام شد"
+            : "اجازه چاپ مجدد لیبل ثبت شد",
       })
     }
 
@@ -144,19 +167,17 @@ export async function POST(req: Request) {
         const qty = item.quantity || 1
         const order = item.productionOrder.order
 
-        let servicesText = ""
         const salesItem = order?.items?.find((si) => si.id === item.orderItemId)
-        if ((salesItem as any)?.servicesData) {
-          try {
-            const parsed = JSON.parse((salesItem as any).servicesData)
-            if (Array.isArray(parsed)) {
-              servicesText = parsed
-                .map((s: any) => s.title || s.name)
-                .filter(Boolean)
-                .join("_")
-            }
-          } catch {}
-        }
+        const servicesText = buildServicesText(
+          (salesItem as any)?.servicesData ?? null
+        )
+
+        const recutNumber = (item as any).recutNumber || 0
+        const baseNotes = item.notes || salesItem?.notes || ""
+        const notes =
+          recutNumber > 0
+            ? `برش مجدد ${recutNumber}${baseNotes ? " | " + baseNotes : ""}`
+            : baseNotes
 
         for (let i = 1; i <= qty; i++) {
           const pieceBarcode =
@@ -176,8 +197,9 @@ export async function POST(req: Request) {
             customerName: order?.customer?.name,
             orderDate: order?.orderDate,
             deliveryDate: order?.deliveryDate,
-            notes: item.notes || salesItem?.notes || "",
+            notes,
             servicesText,
+            recutNumber,
             printCount: (item.labelPrintCount || 0) + 1,
           })
         }

@@ -1,40 +1,6 @@
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
-
-// استخراج عنوان خدمات از servicesData با فرمت‌های مختلف:
-// آرایه‌ی آبجکت (title/name/serviceName/label)، آرایه‌ی رشته، آبجکت با کلید services/items،
-// رشته‌ی JSON، و JSON دوبار encode شده
-function serviceTitle(s: any): string {
-  if (s == null) return ""
-  if (typeof s === "string" || typeof s === "number") return String(s).trim()
-  const t =
-    s.title ||
-    s.name ||
-    s.serviceName ||
-    s.label ||
-    s.text ||
-    s.service?.title ||
-    s.service?.name ||
-    ""
-  return String(t).trim()
-}
-
-function buildServicesText(servicesData: any): string {
-  if (!servicesData) return ""
-  try {
-    let parsed: any = servicesData
-    if (typeof parsed === "string") parsed = JSON.parse(parsed)
-    if (typeof parsed === "string") parsed = JSON.parse(parsed) // دوبار encode
-    if (parsed && !Array.isArray(parsed) && typeof parsed === "object") {
-      parsed = parsed.services ?? parsed.items ?? Object.values(parsed)
-    }
-    if (!Array.isArray(parsed)) return ""
-    return parsed.map(serviceTitle).filter(Boolean).join(" + ")
-  } catch {
-    // اگر JSON نبود ولی متن ساده بود، همان را نشان بده
-    return typeof servicesData === "string" ? servicesData.trim() : ""
-  }
-}
+import { buildServicesText } from "@/lib/production/servicesText"
 
 export async function GET(req: Request) {
   try {
@@ -114,6 +80,7 @@ export async function GET(req: Request) {
         servicesText,
         pieceNumber: (salesItem as any)?.pieceNumber ?? null,
         installationCode: (salesItem as any)?.installationCode ?? null,
+        recutNumber: (item as any).recutNumber ?? 0,
         labelStatus: item.labelStatus || "چاپ‌نشده",
         labelPrintCount: item.labelPrintCount || 0,
         labelReprintAllowed: item.labelReprintAllowed || false,

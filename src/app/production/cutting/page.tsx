@@ -36,6 +36,26 @@ type CuttingItem = {
   installationCode?: string | null
 }
 
+type WasteRow = {
+  wasteId: string
+  createdAt: string
+  quantity: number
+  reason?: string | null
+  notes?: string | null
+  stationName?: string | null
+  isReworked: boolean
+  recutBarcode?: string | null
+  inCuttingQueue: boolean
+  productionItemId: string
+  productName: string
+  barcode?: string | null
+  length: number | null
+  width: number | null
+  orderNumber?: string
+  customerName?: string
+  servicesText?: string
+}
+
 type SortKey =
   | "barcode"
   | "productName"
@@ -52,6 +72,13 @@ type SortKey =
 // ───────────── اندازه لیبل: ۹ سانتی‌متر عرض × ۶ سانتی‌متر ارتفاع (افقی) ─────────────
 const LABEL_W_MM = 90
 const LABEL_H_MM = 60
+
+const LABEL_REPRINT_REASONS = [
+  "پارگی لیبل",
+  "ناخوانا بودن لیبل",
+  "اشتباه چاپی",
+  "سایر",
+] as const
 
 const normalizeText = (value: string) => {
   if (!value) return ""
@@ -96,8 +123,9 @@ const matchProductFilter = (productName: string, query: string) => {
 
 const splitServices = (text?: string | null): string[] => {
   if (!text) return []
+  // هر خدمت در یک خط؛ فقط روی «خط جدید» جدا می‌شود چون خود عنوان خدمت می‌تواند + داشته باشد
   return text
-    .split(/\s*[+_،,|/]\s*|\s+و\s+/)
+    .split(/\n+/)
     .map((s) => s.trim())
     .filter(Boolean)
 }
@@ -337,9 +365,18 @@ export default function CuttingPlanningPage() {
     "تولید"
   )
   const [wastePerson, setWastePerson] = useState("")
+  const [labelReprintReason, setLabelReprintReason] =
+    useState<string>("پارگی لیبل")
 
   const [sortKey, setSortKey] = useState<SortKey>("orderNumber")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
+
+  // تب «ضایعات / برش مجدد»
+  const [view, setView] = useState<"queue" | "waste">("queue")
+  const [wastes, setWastes] = useState<WasteRow[]>([])
+  const [wasteLoading, setWasteLoading] = useState(false)
+  const [wasteSelected, setWasteSelected] = useState<string[]>([])
+  const [wasteStatus, setWasteStatus] = useState("منتظر برش مجدد")
 
   useEffect(() => {
     fetchData()
@@ -557,10 +594,15 @@ export default function CuttingPlanningPage() {
         )
         if (!el) return
         try {
-          drawBarcode(JsBarcode, el, String(row.barcode), {
-            moduleW: 0.9,
-            barH: 26,
-            fontPx: 11,
+          el.innerHTML = ""
+          JsBarcode(el, String(row.barcode), {
+            format: "CODE128",
+            width: 1,
+            height: 26,
+            displayValue: true,
+            fontSize: 10,
+            textMargin: 1,
+            margin: 0,
           })
         } catch {}
       })
@@ -575,6 +617,112 @@ export default function CuttingPlanningPage() {
       cancelled = true
     }
   }, [showReportPreview, reportRows])
+
+  // ───────────── ضایعات / برش مجدد ─────────────
+  const wasteStatusOf = (w: WasteRow) =>
+    w.isReworked
+      ? "برش مجدد شده"
+      : w.inCuttingQueue
+        ? "در صف برش"
+        : "منتظر برش مجدد"
+
+  const filteredWastes = useMemo(() => {
+    const qSearch = normalizeText(search)
+    return wastes.filter((w) => {
+      if (productName.trim() && !matchProductFilter(w.productName || "", productName))
+        return false
+      if (wasteStatus !== "همه" && wasteStatusOf(w) !== wasteStatus) return false
+      if (qSearch) {
+        const hit =
+          normalizeText(w.customerName || "").includes(qSearch) ||
+          normalizeText(w.orderNumber || "").includes(qSearch) ||
+          normalizeText(w.barcode || "").includes(qSearch) ||
+          normalizeText(w.recutBarcode || "").includes(qSearch) ||
+          matchProductFilter(w.productName || "", search)
+        if (!hit) return false
+      }
+      return true
+    })
+  }, [wastes, productName, search, wasteStatus])
+
+  const selectableWastes = useMemo(
+    () => filteredWastes.filter((w) => !w.isReworked && !w.inCuttingQueue),
+    [filteredWastes]
+  )
+
+  const fetchWastes = async () => {
+    try {
+      setWasteLoading(true)
+      const res = await fetch("/api/production/cutting/waste", {
+        cache: "no-store",
+      })
+      if (!res.ok) throw new Error("خطا در دریافت")
+      const data = await res.json()
+      setWastes(data.items || [])
+      setWasteSelected([])
+    } catch (error) {
+      console.error(error)
+      alert("خطا در بارگذاری تاریخچه ضایعات")
+    } finally {
+      setWasteLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (view === "waste") fetchWastes()
+  }, [view])
+
+  const toggleWasteSelect = (id: string) => {
+    setWasteSelected((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    )
+  }
+
+  const toggleWasteAll = () => {
+    if (
+      selectableWastes.length > 0 &&
+      selectableWastes.every((w) => wasteSelected.includes(w.wasteId))
+    ) {
+      setWasteSelected([])
+    } else {
+      setWasteSelected(selectableWastes.map((w) => w.wasteId))
+    }
+  }
+
+  const submitRecut = async () => {
+    if (wasteSelected.length === 0) {
+      alert("حداقل یک مورد را انتخاب کنید")
+      return
+    }
+    if (
+      !confirm(
+        `برای ${wasteSelected.length} مورد، برش مجدد با بارکد جدید ثبت شود؟`
+      )
+    )
+      return
+    try {
+      setActionLoading(true)
+      const res = await fetch("/api/production/cutting/recut", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wasteIds: wasteSelected }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        alert(data.error || "خطا در ثبت برش مجدد")
+        return
+      }
+      alert(data.message || "برش مجدد ثبت شد")
+      setWasteSelected([])
+      await fetchData()
+      setView("queue")
+    } catch (error) {
+      console.error(error)
+      alert("خطا در ارتباط با سرور")
+    } finally {
+      setActionLoading(false)
+    }
+  }
 
   // همه فیلترها سمت کلاینت انجام می‌شود؛ سرور همیشه لیست کامل را برمی‌گرداند
   const fetchData = async () => {
@@ -645,10 +793,15 @@ export default function CuttingPlanningPage() {
     setWasteReason("")
     setWasteDepartment("تولید")
     setWastePerson("")
+    setLabelReprintReason("پارگی لیبل")
     setShowReprintModal(true)
   }
 
   const submitReprint = async () => {
+    if (selectedIds.length === 0) {
+      alert("حداقل یک قلم انتخاب کنید")
+      return
+    }
     if (reprintMode === "waste") {
       if (!wasteReason.trim()) {
         alert("علت ضایعات را وارد کنید")
@@ -661,24 +814,20 @@ export default function CuttingPlanningPage() {
     }
     try {
       setActionLoading(true)
-      const body: Record<string, unknown> = {
-        productionItemIds: selectedIds,
-        action: "allow-reprint",
-      }
-      if (reprintMode === "waste") {
-        body.reason = wasteReason.trim()
-        body.department = wasteDepartment
-        body.responsiblePerson = wastePerson.trim()
-      } else {
-        body.reason = "چاپ مجدد بدون ضایعات (پارگی لیبل / نیاز اداری)"
-        body.department = "اداری"
-        body.responsiblePerson = "—"
-        body.simpleReprint = true
-      }
       const res = await fetch("/api/production/cutting/labels", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          productionItemIds: selectedIds,
+          action: "allow-reprint",
+          mode: reprintMode,
+          labelReason:
+            reprintMode === "simple" ? labelReprintReason : undefined,
+          reason: reprintMode === "waste" ? wasteReason.trim() : undefined,
+          department: reprintMode === "waste" ? wasteDepartment : undefined,
+          responsiblePerson:
+            reprintMode === "waste" ? wastePerson.trim() : undefined,
+        }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -687,7 +836,15 @@ export default function CuttingPlanningPage() {
       }
       alert(data.message || "اجازه چاپ مجدد ثبت شد")
       setShowReprintModal(false)
+      setWasteReason("")
+      setWastePerson("")
+      setLabelReprintReason("پارگی لیبل")
+      setSelectedIds([])
       await fetchData()
+      if (reprintMode === "waste") {
+        // ضایعات واقعی در تب ضایعات هم دیده می‌شود
+        // setView("waste")
+      }
     } catch (error) {
       console.error(error)
       alert("خطا در ارتباط با سرور")
@@ -735,7 +892,7 @@ export default function CuttingPlanningPage() {
         row.productName || "",
         row.width ?? "",
         row.length ?? "",
-        (row.servicesText || "").replace(/,/g, "،"),
+        (row.servicesText || "").replace(/,/g, "،").replace(/\n+/g, " | "),
         (row.notes || "").replace(/,/g, "،"),
       ].join(",")
     )
@@ -973,6 +1130,31 @@ export default function CuttingPlanningPage() {
           </div>
         </div>
 
+        <div className="mb-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setView("queue")}
+            className={`rounded-xl px-5 py-2.5 font-bold border ${
+              view === "queue"
+                ? "bg-teal-500 text-white border-teal-600"
+                : "bg-white/50 text-blue-900 border-teal-500/30 hover:bg-white/70"
+            }`}
+          >
+            صف برش
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("waste")}
+            className={`rounded-xl px-5 py-2.5 font-bold border ${
+              view === "waste"
+                ? "bg-orange-500 text-white border-orange-600"
+                : "bg-white/50 text-blue-900 border-teal-500/30 hover:bg-white/70"
+            }`}
+          >
+            ضایعات / برش مجدد
+          </button>
+        </div>
+
         <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
             <div className="md:col-span-3">
@@ -1048,6 +1230,8 @@ export default function CuttingPlanningPage() {
           </div>
         </div>
 
+        {view === "queue" ? (
+        <>
         <div className="mb-4 flex flex-wrap gap-2">
           <button
             onClick={printLabels}
@@ -1217,6 +1401,140 @@ export default function CuttingPlanningPage() {
             </table>
           )}
         </div>
+        </>
+        ) : (
+        <>
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <button
+            onClick={submitRecut}
+            disabled={actionLoading || wasteSelected.length === 0}
+            className="rounded-xl bg-orange-500 hover:bg-orange-600 px-5 py-2.5 text-white font-bold disabled:opacity-50"
+          >
+            ثبت برش مجدد با بارکد جدید ({wasteSelected.length})
+          </button>
+          <select
+            value={wasteStatus}
+            onChange={(e) => setWasteStatus(e.target.value)}
+            className="rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-sm font-bold text-blue-950 focus:border-teal-500 focus:outline-none"
+          >
+            <option value="منتظر برش مجدد">منتظر برش مجدد</option>
+            <option value="برش مجدد شده">برش مجدد شده</option>
+            <option value="در صف برش">در صف برش (فقط چاپ مجدد لیبل)</option>
+            <option value="همه">همه</option>
+          </select>
+          <button
+            onClick={fetchWastes}
+            className="rounded-xl bg-teal-500 hover:bg-teal-600 px-5 py-2.5 text-white font-bold"
+          >
+            بروزرسانی
+          </button>
+          <div className="rounded-xl bg-teal-500/20 border border-teal-500/30 px-4 py-2.5 text-blue-900 font-bold">
+            تعداد: {filteredWastes.length}
+          </div>
+        </div>
+
+        <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-x-auto">
+          {wasteLoading ? (
+            <p className="text-center text-blue-700 py-16 text-xl font-bold">
+              در حال بارگذاری...
+            </p>
+          ) : filteredWastes.length === 0 ? (
+            <p className="text-center text-blue-700 py-16 text-xl font-bold">
+              موردی یافت نشد
+            </p>
+          ) : (
+            <table className="w-full text-sm text-blue-900 border-collapse">
+              <thead>
+                <tr className="border-b border-teal-500/30 bg-teal-500/15 text-right">
+                  <th className="p-3 font-bold text-center">
+                    <input
+                      type="checkbox"
+                      checked={
+                        selectableWastes.length > 0 &&
+                        selectableWastes.every((w) =>
+                          wasteSelected.includes(w.wasteId)
+                        )
+                      }
+                      onChange={toggleWasteAll}
+                    />
+                  </th>
+                  <th className="p-3 font-bold text-center">ردیف</th>
+                  <th className="p-3 font-bold text-center">تاریخ ثبت</th>
+                  <th className="p-3 font-bold text-center">بارکد</th>
+                  <th className="p-3 font-bold text-right">نام کالا</th>
+                  <th className="p-3 font-bold text-center">عرض</th>
+                  <th className="p-3 font-bold text-center">طول</th>
+                  <th className="p-3 font-bold text-center">تعداد</th>
+                  <th className="p-3 font-bold text-right">مشتری</th>
+                  <th className="p-3 font-bold text-center">ش سفارش</th>
+                  <th className="p-3 font-bold text-right">علت</th>
+                  <th className="p-3 font-bold text-right">بخش / شخص مسبب</th>
+                  <th className="p-3 font-bold text-center">وضعیت</th>
+                  <th className="p-3 font-bold text-center">بارکد جدید</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredWastes.map((w, index) => {
+                  const selectable = !w.isReworked && !w.inCuttingQueue
+                  const st = wasteStatusOf(w)
+                  const stColor =
+                    st === "برش مجدد شده"
+                      ? "bg-green-100 text-green-800"
+                      : st === "در صف برش"
+                        ? "bg-gray-100 text-gray-800"
+                        : "bg-yellow-100 text-yellow-800"
+                  return (
+                    <tr
+                      key={w.wasteId}
+                      className="border-b border-teal-500/10 hover:bg-teal-400/20 bg-white/30 transition"
+                    >
+                      <td className="p-3 text-center">
+                        <input
+                          type="checkbox"
+                          disabled={!selectable}
+                          checked={wasteSelected.includes(w.wasteId)}
+                          onChange={() => toggleWasteSelect(w.wasteId)}
+                        />
+                      </td>
+                      <td className="p-3 text-center font-bold">{index + 1}</td>
+                      <td className="p-3 text-center whitespace-nowrap">
+                        {new Date(w.createdAt).toLocaleDateString("fa-IR")}
+                      </td>
+                      <td className="px-1.5 py-3 text-center font-bold text-teal-800 text-xs whitespace-nowrap">
+                        {w.barcode || "—"}
+                      </td>
+                      <td className="p-3 font-bold">{w.productName}</td>
+                      <td className="p-3 text-center">{w.width ?? "—"}</td>
+                      <td className="p-3 text-center">{w.length ?? "—"}</td>
+                      <td className="p-3 text-center font-semibold">{w.quantity}</td>
+                      <td className="p-3 font-bold">{w.customerName || "—"}</td>
+                      <td className="p-3 text-center font-bold text-teal-800">
+                        {w.orderNumber || "—"}
+                      </td>
+                      <td className="p-3">{w.reason || "—"}</td>
+                      <td className="p-3 text-xs">
+                        {w.notes || "—"}
+                        {w.stationName ? ` | ایستگاه: ${w.stationName}` : ""}
+                      </td>
+                      <td className="p-3 text-center">
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-bold ${stColor}`}
+                        >
+                          {st}
+                        </span>
+                      </td>
+                      <td className="px-1.5 py-3 text-center font-bold text-teal-800 text-xs whitespace-nowrap">
+                        {w.recutBarcode || "—"}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+        </>
+        )}
       </div>
 
       {showReprintModal && (
@@ -1238,7 +1556,7 @@ export default function CuttingPlanningPage() {
               >
                 چاپ مجدد ساده
                 <span className="block text-[11px] font-semibold opacity-90 mt-0.5">
-                  پارگی لیبل — بدون علت
+                  بدون ثبت ضایعات قطعه
                 </span>
               </button>
               <button
@@ -1300,10 +1618,29 @@ export default function CuttingPlanningPage() {
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-blue-800 bg-teal-50 border border-teal-100 rounded-xl p-3 font-semibold">
-                فقط اجازه چاپ مجدد ثبت می‌شود؛ نیازی به علت ضایعات نیست (مثلاً
-                پارگی لیبل یا چاپ ناخوانا).
-              </p>
+              <div className="space-y-3">
+                <p className="text-sm text-blue-800 bg-teal-50 border border-teal-100 rounded-xl p-3 font-semibold">
+                  فقط اجازه چاپ مجدد ثبت می‌شود؛ قطعه ضایعات نمی‌شود و به صف برش
+                  برنمی‌گردد.
+                </p>
+                <p className="text-sm font-bold text-blue-900">علت چاپ مجدد</p>
+                <div className="flex flex-wrap gap-2">
+                  {LABEL_REPRINT_REASONS.map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setLabelReprintReason(r)}
+                      className={`rounded-xl border px-3 py-2 text-sm font-bold ${
+                        labelReprintReason === r
+                          ? "bg-teal-500 text-white border-teal-600"
+                          : "bg-white border-teal-200 text-blue-900"
+                      }`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
 
             <div className="mt-6 flex gap-3 justify-end">
@@ -1477,7 +1814,7 @@ export default function CuttingPlanningPage() {
                   <tr>
                     {[
                       { h: "ردیف" },
-                      { h: "بارکد", w: "1%" },
+                      { h: "بارکد" },
                       { h: "کد نصب" },
                       { h: "سفارش" },
                       { h: "تاریخ سفارش" },
@@ -1487,11 +1824,11 @@ export default function CuttingPlanningPage() {
                       { h: "تعداد" },
                       { h: "عرض" },
                       { h: "طول" },
-                      { h: "خدمات", w: "30%" },
-                    ].map(({ h, w }) => (
+                      { h: "خدمات", minW: "190px" },
+                    ].map(({ h, minW }) => (
                       <th
                         key={h}
-                        style={w ? { width: w } : undefined}
+                        style={minW ? { minWidth: minW } : undefined}
                         className="border border-black p-1.5 font-black bg-gray-100 text-[12px]"
                       >
                         {h}
@@ -1544,7 +1881,7 @@ export default function CuttingPlanningPage() {
                       <td className="border border-black p-1.5 text-center font-black">
                         {row.length ?? "—"}
                       </td>
-                      <td className="border border-black p-1.5 text-[11px] font-bold leading-5">
+                      <td className="border border-black p-1.5 text-[11px] font-bold leading-5 whitespace-pre-line">
                         {row.servicesText || row.notes || "—"}
                       </td>
                     </tr>

@@ -164,6 +164,10 @@ model ProductionItem {
   labelPrintedAt      DateTime?
   labelReprintAllowed Boolean  @default(false)
 
+  // برش مجدد: id آیتم اصلی (ریشه) و شماره‌ی دفعه‌ی برش مجدد
+  parentItemId        String?
+  recutNumber         Int      @default(0)
+
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -222,6 +226,11 @@ model Waste {
   notes            String?
   operatorId       String?
   isReworked       Boolean        @default(false)
+
+  // آیتم جدیدی که برای برش مجدد ساخته شده
+  recutItemId      String?
+  recutAt          DateTime?
+
   createdAt        DateTime       @default(now())
 }
 model User {
