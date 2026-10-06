@@ -1235,24 +1235,181 @@ export default function StationQueuePage() {
       </div>
 
       {detail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 print:hidden">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" dir="rtl">
-            <h2 className="text-xl font-bold mb-3">جزئیات</h2>
-            <p className="text-2xl font-black text-teal-900">
-              {detail.length} × {detail.width}
-            </p>
-            <p className="text-2xl font-black text-orange-700">
-              تعداد: {detail.quantity}
-            </p>
-            <p className="mt-2 font-bold">{detail.productName}</p>
-            <p>سفارش: {detail.orderNumber}</p>
-            <button
-              className="mt-4 rounded-xl bg-teal-500 text-white px-6 py-2 font-bold"
-              onClick={() => setDetail(null)}
-            >
-              ادامه
-            </button>
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4 print:hidden">
+          <div
+            className="w-full max-w-xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-teal-200"
+            dir="rtl"
+          >
+            <div className="sticky top-0 z-10 bg-teal-600 text-white px-5 py-3 flex items-center justify-between">
+              <h2 className="text-lg font-black">جزئیات — رد ایستگاه</h2>
+              <span className="text-sm font-bold opacity-95">
+                {detail.stationName || selectedStationName || "—"}
+              </span>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="text-center rounded-xl bg-orange-50 border border-orange-200 p-4">
+                <p className="text-3xl sm:text-4xl font-black text-blue-950 tracking-wide">
+                  {detail.length ?? "—"} × {detail.width ?? "—"}
+                </p>
+                <p className="text-2xl sm:text-3xl font-black text-orange-600 mt-2">
+                  تعداد: {detail.quantity}
+                  {detail.remaining != null && Number(detail.remaining) > 0
+                    ? ` (باقی: ${detail.remaining})`
+                    : ""}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                <div className="rounded-xl bg-teal-50 border border-teal-100 p-3 sm:col-span-2">
+                  <p className="text-xs text-blue-700 mb-1">نام کالا</p>
+                  <p className="font-black text-blue-950 text-base">
+                    {detail.productName || "—"}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-teal-50 border border-teal-100 p-3">
+                  <p className="text-xs text-blue-700 mb-1">مشتری</p>
+                  <p className="font-bold text-blue-950">
+                    {detail.customerName || "—"}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-white border border-teal-100 p-3">
+                  <p className="text-xs text-blue-700 mb-1">شماره سفارش</p>
+                  <p className="font-bold">{detail.orderNumber || "—"}</p>
+                </div>
+                <div className="rounded-xl bg-white border border-teal-100 p-3">
+                  <p className="text-xs text-blue-700 mb-1">بارکد</p>
+                  <p className="font-bold font-mono" dir="ltr">
+                    {detail.barcode || "—"}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-white border border-teal-100 p-3">
+                  <p className="text-xs text-blue-700 mb-1">کد نصب</p>
+                  <p className="font-bold">
+                    {detail.installationCode || "—"}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-white border border-teal-100 p-3">
+                  <p className="text-xs text-blue-700 mb-1">متراژ</p>
+                  <p className="font-bold">
+                    {detail.meterage != null
+                      ? Number(detail.meterage).toFixed(4)
+                      : "—"}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-white border border-teal-100 p-3">
+                  <p className="text-xs text-blue-700 mb-1">اولویت</p>
+                  <p className="font-bold">{detail.priority || "—"}</p>
+                </div>
+                <div className="rounded-xl bg-white border border-teal-100 p-3">
+                  <p className="text-xs text-blue-700 mb-1">تاریخ سفارش</p>
+                  <p className="font-bold">{formatFaDate(detail.orderDate)}</p>
+                </div>
+                <div className="rounded-xl bg-white border border-teal-100 p-3">
+                  <p className="text-xs text-blue-700 mb-1">تاریخ تحویل</p>
+                  <p className="font-bold">
+                    {formatFaDate(detail.deliveryDate)}
+                  </p>
+                </div>
+              </div>
+
+              {detail.servicesText ? (
+                <div className="rounded-xl border border-teal-200 bg-white p-3">
+                  <p className="text-xs text-blue-700 mb-1 font-bold">خدمات</p>
+                  <p className="font-black text-blue-950 whitespace-pre-line text-base">
+                    {detail.servicesText}
+                  </p>
+                </div>
+              ) : null}
+
+              {detail.notes ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-xs text-amber-800 mb-1 font-bold">
+                    توضیحات
+                  </p>
+                  <p className="font-semibold text-blue-950">{detail.notes}</p>
+                </div>
+              ) : null}
+
+              {(detail.mapImageUrl ||
+                (Array.isArray(detail.mapImages) &&
+                  detail.mapImages.length > 0)) && (
+                <div className="rounded-xl border border-teal-200 overflow-hidden">
+                  <p className="text-xs text-blue-700 font-bold px-3 pt-2">
+                    نقشه
+                  </p>
+                  <button
+                    type="button"
+                    className="w-full"
+                    onClick={() => {
+                      const url =
+                        detail.mapImageUrl ||
+                        (Array.isArray(detail.mapImages)
+                          ? detail.mapImages[0]
+                          : null)
+                      if (url) setMapPreviewUrl(url)
+                    }}
+                  >
+                    <img
+                      src={
+                        detail.mapImageUrl ||
+                        (Array.isArray(detail.mapImages)
+                          ? detail.mapImages[0]
+                          : "")
+                      }
+                      alt="نقشه"
+                      className="max-h-52 w-full object-contain bg-gray-50"
+                    />
+                  </button>
+                  <p className="text-[11px] text-center text-blue-600 py-1">
+                    برای بزرگ‌نمایی کلیک کنید
+                  </p>
+                </div>
+              )}
+
+              {detail.message ? (
+                <p className="text-center text-sm font-bold text-teal-700">
+                  {detail.message}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="sticky bottom-0 bg-white border-t px-5 py-4 flex justify-end">
+              <button
+                type="button"
+                className="rounded-xl bg-teal-500 hover:bg-teal-600 text-white px-8 py-2.5 font-bold"
+                onClick={() => {
+                  setDetail(null)
+                  setBarcode("")
+                  if (inputRef.current) inputRef.current.value = ""
+                  setTimeout(() => inputRef.current?.focus(), 50)
+                }}
+              >
+                ادامه
+              </button>
+            </div>
           </div>
+        </div>
+      )}
+
+      {mapPreviewUrl && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4 print:hidden"
+          onClick={() => setMapPreviewUrl(null)}
+        >
+          <img
+            src={mapPreviewUrl}
+            alt="نقشه"
+            className="max-h-[95vh] max-w-[95vw] object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            type="button"
+            onClick={() => setMapPreviewUrl(null)}
+            className="absolute top-5 left-5 rounded-full bg-white/20 text-white text-2xl w-12 h-12 flex items-center justify-center"
+          >
+            ✕
+          </button>
         </div>
       )}
 
