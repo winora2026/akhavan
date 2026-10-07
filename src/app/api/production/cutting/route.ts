@@ -2,6 +2,70 @@ import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { buildServicesText } from "@/lib/production/servicesText"
 
+/** پیدا کردن OrderItem متناظر — اول با id، بعد با نام کالا */
+function resolveSalesItem(
+  salesOrder: any,
+  item: { orderItemId?: string | null; productName?: string | null }
+) {
+  const items = salesOrder?.items
+  if (!Array.isArray(items) || items.length === 0) return null
+
+  if (item.orderItemId) {
+    const byId = items.find((si: any) => si.id === item.orderItemId)
+    if (byId) return byId
+  }
+
+  const name = (item.productName || "").trim()
+  if (name) {
+    const matches = items.filter(
+      (si: any) => (si.productName || "").trim() === name
+    )
+    if (matches.length === 1) return matches[0]
+    // اگر چند تا هم‌نام بود، اولی که servicesData دارد
+    const withSvc = matches.find((si: any) => {
+      const s = si.servicesData
+      if (!s) return false
+      if (typeof s === "string") return s.trim().length > 2
+      if (Array.isArray(s)) return s.length > 0
+      return true
+    })
+    if (withSvc) return withSvc
+    if (matches.length) return matches[0]
+  }
+
+  return null
+}
+
+/** چند جای رایج ذخیره خدمات را امتحان می‌کند */
+function pickServicesRaw(salesItem: any, prodItem: any): any {
+  if (!salesItem && !prodItem) return null
+  const candidates = [
+    salesItem?.servicesData,
+    salesItem?.services,
+    salesItem?.serviceData,
+    prodItem?.servicesData,
+    prodItem?.notes, // گاهی اشتباهی JSON در notes مانده
+  ]
+  for (const c of candidates) {
+    if (c == null || c === "") continue
+    if (typeof c === "string") {
+      const t = c.trim()
+      if (!t) continue
+      // اگر شبیه JSON خدمت است
+      if (t.startsWith("[") || t.startsWith("{")) return t
+    } else if (Array.isArray(c) && c.length) {
+      return c
+    } else if (typeof c === "object") {
+      return c
+    }
+  }
+  // servicesData خالی نباشد
+  if (salesItem?.servicesData != null && salesItem.servicesData !== "") {
+    return salesItem.servicesData
+  }
+  return null
+}
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
@@ -44,24 +108,35 @@ export async function GET(req: Request) {
 
     const rawDebug: any[] = []
 
-    // همه‌ی فیلترها سمت کلاینت انجام می‌شود؛ اینجا لیست کامل برگردانده می‌شود
     const result = rows.map((row) => {
       const item = row.productionItem
       const order = item.productionOrder
       const salesOrder = order.order
-      const salesItem =
-        salesOrder?.items?.find((si) => si.id === item.orderItemId) || null
+      const salesItem = resolveSalesItem(salesOrder, item)
 
-      const rawServices = (salesItem as any)?.servicesData ?? null
+      const rawServices = pickServicesRaw(salesItem, item)
       const servicesText = buildServicesText(rawServices)
 
-      if (debug && rawDebug.length < 10) {
+      if (debug) {
         rawDebug.push({
           productionItemId: item.id,
+          orderNumber: salesOrder?.orderNumber,
+          productName: item.productName,
           orderItemId: item.orderItemId,
           salesItemFound: !!salesItem,
+          salesItemId: salesItem?.id ?? null,
           rawServices,
           servicesText,
+          allItemsServices: (salesOrder?.items || []).map((si: any) => ({
+            id: si.id,
+            productName: si.productName,
+            hasServicesData: si.servicesData != null && si.servicesData !== "",
+            servicesDataType: typeof si.servicesData,
+            servicesDataPreview:
+              typeof si.servicesData === "string"
+                ? si.servicesData.slice(0, 120)
+                : si.servicesData,
+          })),
         })
       }
 
