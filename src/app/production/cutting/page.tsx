@@ -994,36 +994,63 @@ export default function CuttingPlanningPage() {
   const thNarrowClass =
     "px-1.5 py-3 text-xs font-bold text-center cursor-pointer select-none hover:bg-teal-500/25 transition whitespace-nowrap"
 
-  const pageCss = `
+    const pageCss = `
     @media print {
       @page {
         size: ${
-          showLabelPreview ? `${LABEL_W_MM}mm ${LABEL_H_MM}mm` : "A4 portrait"
+          showLabelPreview ? `90mm 60mm` : "A4 portrait"
         };
-        margin: ${showLabelPreview ? "0" : "6mm"};
+        margin: 0 !important;
       }
       body {
-        -webkit-print-color-adjust: exact;
-        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+        margin: 0 !important;
+        padding: 0 !important;
       }
-      html, body, .print-root { background: none !important; }
       ${
         showLabelPreview
           ? `
-      html, body { margin: 0 !important; padding: 0 !important; background: none !important; }
-      .print-root { background: none !important; padding: 0 !important; min-height: 0 !important; }
-      .label-sheet {
-        background: transparent !important;
-        border: none !important;
-        height: ${LABEL_H_MM - 0.6}mm !important;
-        margin: 0 !important;
-        break-after: page;
-        page-break-after: always;
-        break-inside: avoid;
+      /* فقط لیبل‌ها دیده شوند */
+      body * { visibility: hidden !important; }
+      .label-print-root,
+      .label-print-root * {
+        visibility: visible !important;
       }
-      .label-sheet:last-child { break-after: auto; page-break-after: auto; }
+      .label-print-root {
+        position: absolute !important;
+        left: 0 !important;
+        top: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background: none !important;
+        width: 90mm !important;
+      }
+      .label-sheet {
+        box-sizing: border-box !important;
+        width: 90mm !important;
+        height: 60mm !important;
+        max-width: 90mm !important;
+        max-height: 60mm !important;
+        margin: 0 !important;
+        padding: 2.5mm 4mm !important;
+        background: #F0E000 !important;
+        border: none !important;
+        overflow: hidden !important;
+        page-break-after: always !important;
+        break-after: page !important;
+        break-inside: avoid !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      .label-sheet:last-child {
+        page-break-after: auto !important;
+        break-after: auto !important;
+      }
       `
-          : ""
+          : `
+      html, body, .print-root { background: none !important; }
+      `
       }
     }
 
@@ -1820,7 +1847,7 @@ export default function CuttingPlanningPage() {
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-4 print:block">
+            <div className="label-print-root flex flex-wrap gap-4 print:block">
               {labels.map((label, idx) => {
                 const services = splitServices(labelText(label.servicesText))
                 const customerStr = labelText(label.customerName) || "—"

@@ -2167,7 +2167,10 @@ export default function NewOrderClient() {
 
                 <tr className="bg-teal-700 text-white">
                   <td colSpan={7} className="border border-teal-600 p-3 text-left font-bold text-base">
-                    مبلغ قابل پرداخت
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="shrink-0">مبلغ قابل پرداخت</span>
+                      <span className="text-xs font-semibold">{numberToPersianWords(finalTotal)} ریال</span>
+                    </div>
                   </td>
                   <td className="border border-teal-600 p-3 text-left font-bold text-lg">
                     {finalTotal.toLocaleString("en-US")} ریال
@@ -2249,7 +2252,10 @@ export default function NewOrderClient() {
 
                 <tr className="bg-teal-700 text-white">
                   <td colSpan={6} className="border border-teal-600 p-3 text-left font-bold text-base">
-                    مبلغ قابل پرداخت
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="shrink-0">مبلغ قابل پرداخت</span>
+                      <span className="text-xs font-semibold">{numberToPersianWords(finalTotal)} ریال</span>
+                    </div>
                   </td>
                   <td className="border border-teal-600 p-3 text-left font-bold text-lg">
                     {finalTotal.toLocaleString("en-US")} ریال
@@ -2365,7 +2371,10 @@ export default function NewOrderClient() {
 
                 <tr className="bg-teal-700 text-white">
                   <td colSpan={9} className="border border-teal-600 p-3 text-left font-bold text-base">
-                    مبلغ قابل پرداخت
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="shrink-0">مبلغ قابل پرداخت</span>
+                      <span className="text-xs font-semibold">{numberToPersianWords(finalTotal)} ریال</span>
+                    </div>
                   </td>
                   <td className="border border-teal-600 p-3 text-left font-bold text-base">
                     {finalTotal.toLocaleString("en-US")} ریال
@@ -2376,13 +2385,8 @@ export default function NewOrderClient() {
             </table>
           )}
 
-          {/* مبلغ به حروف — برای هر سه حالت نمایش پیش‌فاکتور (جزئی/کلی/ریز فاکتور) */}
-          <p className="text-sm font-bold text-teal-800 mb-4 bg-teal-50/60 rounded-lg px-3 py-2 border border-teal-100">
-            مبلغ به حروف: {numberToPersianWords(finalTotal)} ریال
-          </p>
-
           {/* خلاصه تعداد و متراژ */}
-          <div className="text-sm text-gray-600 space-y-1 mt-4">
+          <div className="text-sm text-gray-600 flex flex-wrap items-center gap-x-6 gap-y-1 mt-4">
             <p>تعداد کل اقلام: <strong>{items.length}</strong></p>
             <p>متراژ کل: <strong>{calculatedTotalMeterage}</strong></p>
             <p>محیط کل: <strong>{calculatedTotalPerimeter}</strong></p>
