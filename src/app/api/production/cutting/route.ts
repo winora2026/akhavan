@@ -2,227 +2,190 @@ import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { buildServicesText } from "@/lib/production/servicesText"
 
-export async function GET() {
+/** پیدا کردن OrderItem متناظر — اول با id، بعد با نام کالا */
+function resolveSalesItem(
+  salesOrder: any,
+  item: { orderItemId?: string | null; productName?: string | null }
+) {
+  const items = salesOrder?.items
+  if (!Array.isArray(items) || items.length === 0) return null
+
+  if (item.orderItemId) {
+    const byId = items.find((si: any) => si.id === item.orderItemId)
+    if (byId) return byId
+  }
+
+  const name = (item.productName || "").trim()
+  if (name) {
+    const matches = items.filter(
+      (si: any) => (si.productName || "").trim() === name
+    )
+    if (matches.length === 1) return matches[0]
+    // اگر چند تا هم‌نام بود، اولی که servicesData دارد
+    const withSvc = matches.find((si: any) => {
+      const s = si.servicesData
+      if (!s) return false
+      if (typeof s === "string") return s.trim().length > 2
+      if (Array.isArray(s)) return s.length > 0
+      return true
+    })
+    if (withSvc) return withSvc
+    if (matches.length) return matches[0]
+  }
+
+  return null
+}
+
+/** چند جای رایج ذخیره خدمات را امتحان می‌کند */
+function pickServicesRaw(salesItem: any, prodItem: any): any {
+  if (!salesItem && !prodItem) return null
+  const candidates = [
+    salesItem?.servicesData,
+    salesItem?.services,
+    salesItem?.serviceData,
+    prodItem?.servicesData,
+    prodItem?.notes, // گاهی اشتباهی JSON در notes مانده
+  ]
+  for (const c of candidates) {
+    if (c == null || c === "") continue
+    if (typeof c === "string") {
+      const t = c.trim()
+      if (!t) continue
+      // اگر شبیه JSON خدمت است
+      if (t.startsWith("[") || t.startsWith("{")) return t
+    } else if (Array.isArray(c) && c.length) {
+      return c
+    } else if (typeof c === "object") {
+      return c
+    }
+  }
+  // servicesData خالی نباشد
+  if (salesItem?.servicesData != null && salesItem.servicesData !== "") {
+    return salesItem.servicesData
+  }
+  return null
+}
+
+export async function GET(req: Request) {
   try {
+    const { searchParams } = new URL(req.url)
+    const debug = searchParams.get("debug") === "1"
+
     const cutStation = await prisma.productionStation.findFirst({
       where: { name: "برش" },
     })
-    const stations = await prisma.productionStation.findMany()
-    const stationName = new Map(stations.map((s) => [s.id, s.name]))
 
-    const wastes = await prisma.waste.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 1000,
+    if (!cutStation) {
+      return NextResponse.json(
+        { error: "ایستگاه برش تعریف نشده است" },
+        { status: 400 }
+      )
+    }
+
+    const rows = await prisma.productionItemStation.findMany({
+      where: {
+        stationId: cutStation.id,
+        status: { in: ["در انتظار", "در حال انجام"] },
+      },
       include: {
         productionItem: {
           include: {
-            stations: true,
             productionOrder: {
               include: {
-                order: { include: { customer: true, items: true } },
+                order: {
+                  include: {
+                    customer: true,
+                    items: true,
+                  },
+                },
               },
             },
           },
         },
       },
+      orderBy: { createdAt: "asc" },
     })
 
-    const recutIds = wastes
-      .map((w) => (w as any).recutItemId)
-      .filter(Boolean) as string[]
-    const recutItems = recutIds.length
-      ? await prisma.productionItem.findMany({
-          where: { id: { in: recutIds } },
-          select: { id: true, barcode: true },
-        })
-      : []
-    const recutBarcode = new Map(recutItems.map((r) => [r.id, r.barcode]))
+    const rawDebug: any[] = []
 
-    const items = wastes.map((w) => {
-      const item = w.productionItem
+    const result = rows.map((row) => {
+      const item = row.productionItem
       const order = item.productionOrder
       const salesOrder = order.order
-      const salesItem =
-        salesOrder?.items?.find((si) => si.id === item.orderItemId) || null
+      const salesItem = resolveSalesItem(salesOrder, item)
 
-      const inCuttingQueue = item.stations.some(
-        (s) =>
-          s.stationId === cutStation?.id &&
-          ["در انتظار", "در حال انجام"].includes(s.status)
-      )
+      const rawServices = pickServicesRaw(salesItem, item)
+      const servicesText = buildServicesText(rawServices)
+
+      if (debug) {
+        rawDebug.push({
+          productionItemId: item.id,
+          orderNumber: salesOrder?.orderNumber,
+          productName: item.productName,
+          orderItemId: item.orderItemId,
+          salesItemFound: !!salesItem,
+          salesItemId: salesItem?.id ?? null,
+          rawServices,
+          servicesText,
+          allItemsServices: (salesOrder?.items || []).map((si: any) => ({
+            id: si.id,
+            productName: si.productName,
+            hasServicesData: si.servicesData != null && si.servicesData !== "",
+            servicesDataType: typeof si.servicesData,
+            servicesDataPreview:
+              typeof si.servicesData === "string"
+                ? si.servicesData.slice(0, 120)
+                : si.servicesData,
+          })),
+        })
+      }
 
       return {
-        wasteId: w.id,
-        createdAt: w.createdAt.toISOString(),
-        quantity: w.quantity,
-        reason: w.reason,
-        notes: w.notes,
-        stationName: w.stationId ? stationName.get(w.stationId) || null : null,
-        isReworked: w.isReworked,
-        recutBarcode: (w as any).recutItemId
-          ? recutBarcode.get((w as any).recutItemId) || null
-          : null,
-        inCuttingQueue,
+        itemStationId: row.id,
+        itemStationStatus: row.status,
+        sequence: row.sequence,
         productionItemId: item.id,
         productName: item.productName,
         barcode: item.barcode,
         length: item.length,
         width: item.width,
+        quantity: item.quantity,
+        meterage: item.meterage,
+        notes: item.notes || (salesItem as any)?.notes || null,
+        servicesText,
+        pieceNumber: (salesItem as any)?.pieceNumber ?? null,
+        installationCode: (salesItem as any)?.installationCode ?? null,
+        recutNumber: (item as any).recutNumber ?? 0,
+        labelStatus: item.labelStatus || "چاپ‌نشده",
+        labelPrintCount: item.labelPrintCount || 0,
+        labelReprintAllowed: item.labelReprintAllowed || false,
+        productionNumber: order.productionNumber,
+        productionOrderId: order.id,
+        priority: order.priority,
         orderNumber: salesOrder?.orderNumber,
         customerName: salesOrder?.customer?.name,
-        servicesText: buildServicesText(
-          (salesItem as any)?.servicesData ?? null
-        ),
+        orderDate: salesOrder?.orderDate
+          ? salesOrder.orderDate.toISOString()
+          : null,
+        deliveryDate: salesOrder?.deliveryDate
+          ? salesOrder.deliveryDate.toISOString()
+          : null,
       }
     })
 
-    const productNames = Array.from(
-      new Set(items.map((i) => i.productName))
-    ).sort()
-
-    return NextResponse.json({ items, productNames })
-  } catch (error: any) {
-    console.error(error)
-    return NextResponse.json(
-      {
-        error: "خطا در دریافت تاریخچه ضایعات",
-        details: String(error?.message || error),
-      },
-      { status: 500 }
-    )
-  }
-}
-
-/** ثبت ضایعات با بارکد — حتی اگر قطعه از صف برش خارج شده باشد */
-export async function POST(req: Request) {
-  try {
-    const body = await req.json()
-    const {
-      barcode,
-      quantity,
-      reason,
-      department,
-      responsiblePerson,
-      operatorName,
-      stationName,
-    } = body
-
-    const raw = String(barcode || "").trim()
-    if (!raw) {
-      return NextResponse.json({ error: "بارکد الزامی است" }, { status: 400 })
-    }
-    if (!reason || !String(reason).trim()) {
-      return NextResponse.json({ error: "علت ضایعات الزامی است" }, { status: 400 })
-    }
-    if (!department || !["تولید", "اداری"].includes(department)) {
-      return NextResponse.json(
-        { error: "بخش مسبب باید تولید یا اداری باشد" },
-        { status: 400 }
-      )
-    }
-    if (!responsiblePerson || !String(responsiblePerson).trim()) {
-      return NextResponse.json({ error: "شخص مسبب الزامی است" }, { status: 400 })
-    }
-
-    const baseBarcode = raw.includes("-") ? raw.split("-")[0] : raw
-
-    let item = await prisma.productionItem.findFirst({
-      where: { barcode: raw },
-      include: {
-        stations: { include: { station: true } },
-        productionOrder: {
-          include: { order: { include: { customer: true } } },
-        },
-      },
-    })
-    if (!item) {
-      item = await prisma.productionItem.findFirst({
-        where: { barcode: baseBarcode },
-        include: {
-          stations: { include: { station: true } },
-          productionOrder: {
-            include: { order: { include: { customer: true } } },
-          },
-        },
-      })
-    }
-
-    if (!item) {
-      return NextResponse.json(
-        { error: `بارکد «${raw}» یافت نشد` },
-        { status: 404 }
-      )
-    }
-
-    const cutStation = await prisma.productionStation.findFirst({
-      where: { name: "برش" },
-    })
-    const inCuttingQueue = item.stations.some(
-      (s) =>
-        cutStation &&
-        s.stationId === cutStation.id &&
-        ["در انتظار", "در حال انجام"].includes(s.status)
-    )
-
-    const qtyRaw = Number(quantity)
-    const qty =
-      Number.isFinite(qtyRaw) && qtyRaw > 0
-        ? Math.min(Math.floor(qtyRaw), item.quantity || 1)
-        : item.quantity || 1
-
-    let stationId: string | null = null
-    if (stationName) {
-      const st = await prisma.productionStation.findFirst({
-        where: { name: String(stationName).trim() },
-      })
-      stationId = st?.id || null
-    }
-
-    const wasteNote = `بخش: ${department} | شخص: ${String(responsiblePerson).trim()}`
-
-    const waste = await prisma.waste.create({
-      data: {
-        productionItemId: item.id,
-        stationId,
-        quantity: qty,
-        reason: String(reason).trim(),
-        notes: wasteNote,
-        operatorId: operatorName ? String(operatorName) : null,
-      },
-    })
-
-    await prisma.productionHistory.create({
-      data: {
-        productionOrderId: item.productionOrderId,
-        productionItemId: item.id,
-        stationId,
-        action: "ثبت ضایعات",
-        description: `بارکد ${item.barcode || raw} | تعداد: ${qty} | علت: ${String(reason).trim()} | ${wasteNote}${
-          inCuttingQueue ? " | (هنوز در صف برش)" : ""
-        }`,
-        quantity: qty,
-        operatorName: operatorName ? String(operatorName) : null,
-      },
-    })
+    const allNames = rows.map((r) => r.productionItem.productName)
+    const productNames = Array.from(new Set(allNames)).sort()
 
     return NextResponse.json({
-      success: true,
-      message: inCuttingQueue
-        ? "ضایعات ثبت شد. قطعه هنوز در صف برش است — برای برش مجدد ابتدا برش را تکمیل کنید یا از چاپ مجدد استفاده کنید."
-        : "ضایعات ثبت شد. از لیست زیر انتخاب کنید و برش مجدد بزنید.",
-      wasteId: waste.id,
-      inCuttingQueue,
-      productName: item.productName,
-      barcode: item.barcode,
-      orderNumber: item.productionOrder.order?.orderNumber,
-      customerName: item.productionOrder.order?.customer?.name,
-      quantity: qty,
+      items: result,
+      productNames,
+      ...(debug ? { debug: rawDebug } : {}),
     })
   } catch (error: any) {
     console.error(error)
     return NextResponse.json(
       {
-        error: "خطا در ثبت ضایعات",
+        error: "خطا در دریافت لیست برش",
         details: String(error?.message || error),
       },
       { status: 500 }
