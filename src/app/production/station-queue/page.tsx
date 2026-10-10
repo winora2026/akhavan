@@ -126,6 +126,16 @@ function stationMatches(userStation: string, stationName: string) {
   return false
 }
 
+/** فقط متن مربوط به آرم استاندارد از خدمات/توضیحات */
+function extractArmNote(servicesText?: string | null, notes?: string | null) {
+  const blob = `${servicesText || ""} ${notes || ""}`
+  const out: string[] = []
+  if (/بدون\s*آرم\s*استاندارد/.test(blob)) out.push("بدون آرم استاندارد")
+  else if (/با\s*آرم\s*استاندارد/.test(blob) || /آرم\s*استاندارد/.test(blob))
+    out.push("با آرم استاندارد")
+  return out.join(" — ")
+}
+
 export default function StationQueuePage() {
   const [stations, setStations] = useState<Station[]>([])
   const [selectedStationId, setSelectedStationId] = useState("")
@@ -497,7 +507,6 @@ export default function StationQueuePage() {
       "عرض",
       "تعداد",
       "متراژ",
-      "کد نصب",
       "خدمات",
       "توضیحات",
     ]
@@ -509,16 +518,15 @@ export default function StationQueuePage() {
       it.width ?? "",
       it.quantity,
       it.meterage ?? "",
-      it.installationCode || "",
       it.servicesText || "",
-      it.notes || "",
+      extractArmNote(it.servicesText, it.notes) || it.notes || "",
     ])
     const totalQty = currentSlip.items.reduce((s, i) => s + (i.quantity || 0), 0)
     const totalM = currentSlip.items.reduce(
       (s, i) => s + (Number(i.meterage) || 0),
       0
     )
-    rows.push(["", "", "جمع", "", "", totalQty, totalM.toFixed(4), "", "", ""])
+    rows.push(["", "", "جمع", "", "", totalQty, totalM.toFixed(4), "", ""])
     const csv =
       "\uFEFF" +
       [header, ...rows]
@@ -570,51 +578,33 @@ export default function StationQueuePage() {
       alert("ردیفی برای خروجی نیست")
       return
     }
-    const header = [
-      "ردیف",
-      "نام کالا",
-      "طول",
-      "عرض",
-      "ابعاد",
-      "تعداد",
-      "متراژ",
-      "شماره سفارش",
-      "مشتری",
-      "بارکد",
-      "خدمات",
-    ]
+    // فرمت برون‌سپاری خط‌کشی‌شده: ردیف | کالا | ابعاد | مشتری | توضیحات (فقط آرم)
+    const title = `لیست ${selectedStationName}`
+    const header = ["ردیف", "کالا", "ابعاد", "مشتری", "توضیحات"]
     const data = filtered.map((row, idx) => {
       const it = row.productionItem
       const qty = row.quantityIn ?? it.quantity ?? 0
       const len = it.length ?? ""
       const wid = it.width ?? ""
-      const dim = len !== "" && wid !== "" ? `${len}*${wid}=${qty}` : "—"
+      const dim =
+        len !== "" && wid !== "" ? `${len}*${wid}=${qty}` : String(qty)
+      const arm = extractArmNote(it.servicesText, it.notes)
       return [
         idx + 1,
         it.productName,
-        len,
-        wid,
         dim,
-        qty,
-        it.meterage != null ? Number(it.meterage).toFixed(4) : "",
-        it.productionOrder.order?.orderNumber || "",
         it.productionOrder.order?.customer?.name || "",
-        it.barcode || "",
-        it.servicesText || "",
+        arm,
       ]
     })
     const sumQty = filtered.reduce(
       (s, r) => s + (r.quantityIn ?? r.productionItem.quantity ?? 0),
       0
     )
-    const sumM = filtered.reduce(
-      (s, r) => s + (Number(r.productionItem.meterage) || 0),
-      0
-    )
-    data.push(["", "جمع کل", "", "", "", sumQty, sumM.toFixed(4), "", "", "", ""])
+    data.push(["", `جمع کل ${sumQty} عدد`, "", "", ""])
     const csv =
       "\uFEFF" +
-      [header, ...data]
+      [[title, "", "", "", ""], header, ...data]
         .map((r) =>
           r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")
         )
@@ -717,6 +707,50 @@ export default function StationQueuePage() {
     doScan(true, n, String(confirmData.barcode || barcode || ""))
   }
 
+
+  const completeByRow = (row: QueueItem) => {
+    const code = (row.productionItem.barcode || "").trim()
+    if (!code) {
+      alert("این ردیف بارکد ندارد")
+      return
+    }
+    doScan(false, null, code)
+  }
+
+  const undoStation = async (row: QueueItem) => {
+    if (
+      !confirm(
+        `آیا رد ایستگاه «${selectedStationName}» برای «${row.productionItem.productName}» برگردانده شود؟`
+      )
+    )
+      return
+    try {
+      setScanLoading(true)
+      const res = await fetch("/api/production/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "undo",
+          barcode: row.productionItem.barcode,
+          stationId: selectedStationId,
+          operatorName: operatorName || undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        alert(data.error || "خطا در برگشت")
+        return
+      }
+      setLastResult({ type: "ok", text: data.message || "برگشت انجام شد" })
+      await fetchQueue(true)
+    } catch (e) {
+      console.error(e)
+      alert("خطا در ارتباط با سرور")
+    } finally {
+      setScanLoading(false)
+    }
+  }
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault()
@@ -751,7 +785,7 @@ export default function StationQueuePage() {
       dir="rtl"
     >
       <div className="relative z-10 max-w-[1600px] mx-auto print:hidden">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 border border-teal-500/20">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white/95 shadow-md p-5 border border-teal-300">
           <div>
             <h1 className="text-2xl font-bold text-blue-950">
               کارتابل {stationLocked ? selectedStationName : "ایستگاه"}
@@ -767,19 +801,19 @@ export default function StationQueuePage() {
           <div className="flex flex-wrap gap-2">
             <Link
               href="/production/cutting"
-              className="rounded-xl border border-teal-500/40 bg-white/40 px-4 py-2.5 font-bold text-blue-900"
+              className="rounded-xl border border-teal-500/40 bg-white px-4 py-2.5 shadow-sm font-bold text-blue-900"
             >
               برنامه‌ریزی برش
             </Link>
             <Link
               href="/production/queue"
-              className="rounded-xl border border-teal-500/40 bg-white/40 px-4 py-2.5 font-bold text-blue-900"
+              className="rounded-xl border border-teal-500/40 bg-white px-4 py-2.5 shadow-sm font-bold text-blue-900"
             >
               روند کاری
             </Link>
             <Link
               href="/"
-              className="rounded-xl border border-teal-500/40 bg-white/40 px-4 py-2.5 font-bold text-blue-900"
+              className="rounded-xl border border-teal-500/40 bg-white px-4 py-2.5 shadow-sm font-bold text-blue-900"
             >
               بازگشت
             </Link>
@@ -815,7 +849,7 @@ export default function StationQueuePage() {
 
         {(!isLoadingStation || mainTab === "queue") && (
           <>
-            <div className="mb-4 rounded-2xl bg-teal-500/15 p-5 border border-teal-500/30">
+            <div className="mb-4 rounded-2xl bg-white/95 shadow-md p-5 border border-teal-300">
               <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
                 <div className="md:col-span-3">
                   <label className="mb-1.5 block text-sm font-bold text-blue-900">
@@ -833,7 +867,7 @@ export default function StationQueuePage() {
                         setDetail(null)
                         setMainTab("queue")
                       }}
-                      className="w-full rounded-xl border border-teal-500/30 bg-white/70 px-4 py-3 text-sm font-semibold"
+                      className="w-full rounded-xl border border-teal-500/30 bg-white px-4 py-3 text-sm font-semibold"
                     >
                       {stations.map((s) => (
                         <option key={s.id} value={s.id}>
@@ -865,7 +899,7 @@ export default function StationQueuePage() {
                   <input
                     value={operatorName}
                     onChange={(e) => setOperatorName(e.target.value)}
-                    className="w-full rounded-xl border border-teal-500/30 bg-white/70 px-4 py-3 text-sm font-semibold"
+                    className="w-full rounded-xl border border-teal-500/30 bg-white px-4 py-3 text-sm font-semibold"
                   />
                 </div>
                 <div className="md:col-span-2">
@@ -916,7 +950,7 @@ export default function StationQueuePage() {
               </div>
             )}
 
-            <div className="mb-4 rounded-2xl bg-teal-500/10 p-4 border border-teal-500/20">
+            <div className="mb-4 rounded-2xl bg-white/95 shadow-md p-4 border border-teal-300">
               <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
                 <div className="md:col-span-3">
                   <input
@@ -963,64 +997,85 @@ export default function StationQueuePage() {
               </div>
             </div>
 
-            <div className="rounded-2xl bg-teal-500/10 p-4 border overflow-x-auto">
+            <div className="rounded-2xl bg-white shadow-md p-4 border border-teal-300 overflow-x-auto">
               {loading ? (
                 <p className="text-center py-16 font-bold">بارگذاری...</p>
               ) : filtered.length === 0 ? (
                 <p className="text-center py-16 font-bold">صف خالی است</p>
               ) : (
-                <table className="w-full text-sm">
+                <table className="w-full text-sm border-collapse border border-gray-400">
                   <thead>
-                    <tr className="bg-teal-500/15 border-b">
-                      <th className="p-3">ردیف</th>
-                      <th className="p-3">ش سفارش</th>
-                      <th className="p-3">مشتری</th>
-                      <th className="p-3">کالا</th>
-                      <th className="p-3">بارکد</th>
-                      <th className="p-3">ابعاد</th>
-                      <th className="p-3">تعداد</th>
-                      <th className="p-3">متراژ</th>
-                      <th className="p-3">وضعیت</th>
+                    <tr className="bg-teal-100 border border-gray-400">
+                      <th className="p-2 border border-gray-400">ردیف</th>
+                      <th className="p-2 border border-gray-400">ش سفارش</th>
+                      <th className="p-2 border border-gray-400">مشتری</th>
+                      <th className="p-2 border border-gray-400">کالا</th>
+                      <th className="p-2 border border-gray-400">بارکد</th>
+                      <th className="p-2 border border-gray-400">ابعاد</th>
+                      <th className="p-2 border border-gray-400">تعداد</th>
+                      <th className="p-2 border border-gray-400">متراژ</th>
+                      <th className="p-2 border border-gray-400">وضعیت</th>
+                      <th className="p-2 border border-gray-400">عملیات</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filtered.map((row, index) => (
-                      <tr key={row.id} className="border-b bg-white/30">
-                        <td className="p-3 text-center font-bold">
+                      <tr
+                        key={row.id}
+                        className="border border-gray-400 bg-white hover:bg-teal-50 cursor-pointer"
+                        title="دبل‌کلیک = رد ایستگاه"
+                        onDoubleClick={() => completeByRow(row)}
+                      >
+                        <td className="p-2 border border-gray-400 text-center font-bold">
                           {index + 1}
                         </td>
-                        <td className="p-3 text-center font-bold text-teal-800">
+                        <td className="p-2 border border-gray-400 text-center font-bold text-teal-800">
                           {row.productionItem.productionOrder.order
                             ?.orderNumber || "—"}
                         </td>
-                        <td className="p-3 font-bold">
+                        <td className="p-2 border border-gray-400 font-bold">
                           {row.productionItem.productionOrder.order?.customer
                             ?.name || "—"}
                         </td>
-                        <td className="p-3 font-bold">
+                        <td className="p-2 border border-gray-400 font-bold">
                           {row.productionItem.productName}
                         </td>
-                        <td className="p-3 text-center font-bold">
+                        <td className="p-2 border border-gray-400 text-center font-bold">
                           {row.productionItem.barcode || "—"}
                         </td>
-                        <td className="p-3 text-center font-black">
+                        <td className="p-2 border border-gray-400 text-center font-black">
                           {row.productionItem.length &&
                           row.productionItem.width
                             ? `${row.productionItem.length}×${row.productionItem.width}`
                             : "—"}
                         </td>
-                        <td className="p-3 text-center font-black">
+                        <td className="p-2 border border-gray-400 text-center font-black">
                           {row.quantityIn ?? row.productionItem.quantity}
                         </td>
-                        <td className="p-3 text-center">
+                        <td className="p-2 border border-gray-400 text-center">
                           {row.productionItem.meterage != null
                             ? Number(row.productionItem.meterage).toFixed(3)
                             : "—"}
                         </td>
-                        <td className="p-3 text-center">
+                        <td className="p-2 border border-gray-400 text-center">
                           <span className="rounded-full bg-yellow-100 px-3 py-1 text-xs font-bold">
                             {row.status}
                           </span>
+                        </td>
+                        <td className="p-2 border border-gray-400 text-center">
+                          <div className="flex flex-wrap gap-1 justify-center">
+                            <button
+                              type="button"
+                              disabled={scanLoading}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                completeByRow(row)
+                              }}
+                              className="rounded-lg bg-green-600 hover:bg-green-700 text-white px-2 py-1 text-xs font-bold disabled:opacity-50"
+                            >
+                              رد
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

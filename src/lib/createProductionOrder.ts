@@ -10,7 +10,7 @@ function norm(s: string) {
 
 /**
  * نگاشت نام خدمت فروش → نام ایستگاه تولید
- * ترتیب ifها مهم است (مته CNC قبل از مته عمومی)
+ * ترتیب ifها مهم است
  */
 function mapServiceToStation(serviceName: string): string | null {
   const name = norm(serviceName)
@@ -29,23 +29,54 @@ function mapServiceToStation(serviceName: string): string | null {
   if (name.includes("تراش الگویی") || name.includes("الگویی")) {
     return "تراش الگویی"
   }
-  // تراش عادی → بعداً هم تراش ۱ و هم تراش ۲ در مسیر گذاشته می‌شود
   if (name.includes("تراش")) return "تراش"
 
-  if (name.includes("دیاموند زاویه") || (name.includes("دیاموند") && name.includes("زاویه"))) {
+  // دیاموند زاویه / زاویه / ۴۵ درجه — قبل از دیاموند ساده
+  if (
+    name.includes("دیاموند زاویه") ||
+    name.includes("زاویه") ||
+    name.includes("45 درجه") ||
+    name.includes("۴۵ درجه") ||
+    name.includes("45درجه") ||
+    name.includes("۴۵درجه")
+  ) {
     return "دیاموند زاویه"
   }
+
+  // دیاموند، دیاموند مینی، دیاموند مات
   if (name.includes("دیاموند")) return "دیاموند"
 
-  if (name.includes("لول براق") || (name.includes("لول") && name.includes("براق"))) {
-    return "لول براق"
+  // لول یکپارچه: معمولی، براق، ابرویی، فرم ۳۵، خورشیدی، دالبری، طبق الگو، گوشه
+  if (
+    name.includes("لول") ||
+    name.includes("ابرویی") ||
+    name.includes("ابرويی") ||
+    name.includes("فرم 35") ||
+    name.includes("فرم ۳۵") ||
+    name.includes("35 درجه") ||
+    name.includes("۳۵ درجه") ||
+    name.includes("خورشیدی") ||
+    name.includes("خورشيدي") ||
+    name.includes("دالبری") ||
+    name.includes("دالبري") ||
+    name.includes("طبق الگو") ||
+    name.includes("گوشه")
+  ) {
+    return "لول"
   }
-  if (name.includes("لول")) return "لول معمولی"
 
   if (name.includes("لیمینت") || name.includes("لمینت")) return "لیمینت"
   if (name.includes("دوجداره") || name.includes("دو جداره")) return "دوجداره"
 
-  // CNC: اینگریو، مته CNC، جاساز CNC، هر چیزی با CNC
+  // جاساز CNC → CNC (قبل از جاساز دستی و قبل از بلاک عمومی CNC)
+  if (
+    name.includes("جاساز") &&
+    (name.includes("cnc") || name.includes("سی ان سی"))
+  ) {
+    return "CNC"
+  }
+
+  // CNC: اینگریو، مته CNC، ...
   if (
     name.includes("اینگرو") ||
     name.includes("اینگریو") ||
@@ -56,10 +87,12 @@ function mapServiceToStation(serviceName: string): string | null {
     return "CNC"
   }
 
-  // مته عمومی / سوراخکاری (بعد از مته CNC چک می‌شود)
+  // جاساز دستی
+  if (name.includes("جاساز")) return "جاساز"
+
+  // مته عمومی / سوراخکاری (بعد از مته CNC)
   if (name.includes("مته") || name.includes("سوراخ")) return "سوراخکاری"
 
-  // UV
   if (
     name.includes("uv") ||
     name.includes("یووی") ||
@@ -69,14 +102,17 @@ function mapServiceToStation(serviceName: string): string | null {
     return "UV"
   }
 
-  if (name.includes("led") || name.includes("ال ای دی") || name.includes("ال‌ای‌دی")) {
+  if (
+    name.includes("led") ||
+    name.includes("ال ای دی") ||
+    name.includes("ال‌ای‌دی")
+  ) {
     return "LED"
   }
   if (name.includes("mdf")) return "MDF"
   if (name.includes("سندبلاست") || name.includes("سند بلاست")) return "سندبلاست"
   if (name.includes("سکوریت") || name.includes("تمپر")) return "سکوریت"
 
-  // چاپ (رنگ‌کاری)
   if (name.includes("چاپ") || name.includes("رنگ")) return "چاپ (رنگ‌کاری)"
 
   if (name.includes("قاب")) return "قاب"
@@ -132,14 +168,13 @@ function buildRouteStationNames(salesItem: any): string[] {
     serviceStationSet.add(mapped)
   }
 
-  // ترتیب نمایش/مسیر خدمات میانی
   const preferredOrder = [
     "تراش الگویی",
     "دیاموند",
     "دیاموند زاویه",
-    "لول معمولی",
-    "لول براق",
+    "لول",
     "CNC",
+    "جاساز",
     "UV",
     "سوراخکاری",
     "سندبلاست",
@@ -153,7 +188,6 @@ function buildRouteStationNames(salesItem: any): string[] {
     "سکوریت",
   ]
 
-  // تراش → هر دو دستگاه
   if (serviceStationSet.has("تراش")) {
     route.push("تراش ۱")
     route.push("تراش ۲")
@@ -214,7 +248,6 @@ function findStationId(
   const found = stations.find((s) => norm(s.name) === n)
   if (found) return found.id
 
-  // سازگاری با نام‌های قدیمی
   if (n.includes("نیمه") || n === norm("انبار محصول یک")) {
     const s = stations.find(
       (x) =>
@@ -228,6 +261,15 @@ function findStationId(
       (x) =>
         norm(x.name).includes("آماده") ||
         norm(x.name) === norm("انبار محصول دو")
+    )
+    if (s) return s.id
+  }
+  if (n === "لول" || n.includes("لول")) {
+    const s = stations.find(
+      (x) =>
+        norm(x.name) === "لول" ||
+        norm(x.name) === norm("لول معمولی") ||
+        norm(x.name) === norm("لول براق")
     )
     if (s) return s.id
   }

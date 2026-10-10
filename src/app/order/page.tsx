@@ -23,6 +23,8 @@ type OrderFromApi = {
   discountAmount: number | null
   discountPercent: number | null
   salesRep?: string | null
+  convertedBy?: string | null
+  invoicedAt?: string | null
   customer: {
     id: string
     name: string
@@ -49,6 +51,9 @@ type SortKey =
   | "discountAmount"
   | "installationDate"
   | "salesRep"
+  | "status"
+
+type StatusFilter = "pre" | "invoice" | "all"
 
 const DEFAULT_EXPERTS = [
   "خانم حسینی",
@@ -118,22 +123,25 @@ const getFaMonth = (dateStr: string | null | undefined) => {
       calendar: persian,
       locale: persian_fa,
     })
-    // از شماره‌ی عددی ماه استفاده می‌کنیم (نه format با locale فارسی)
-    // چون format("MM") با locale فارسی ارقام فارسی (۰۶) برمی‌گردونه
-    // که با مقادیر لاتین "01".."12" توی PERSIAN_MONTHS مچ نمی‌شه
     return String(dObj.month.number).padStart(2, "0")
   } catch {
     return ""
   }
 }
 
-// ===== کمک‌توابع تاریخ کاری (برای به‌روزرسانی تاریخ‌ها هنگام انتقال به فاکتور) =====
-// باید با لیست تعطیلات صفحه‌ی ثبت سفارش یکی باشد (بهتر است بعداً در یک فایل مشترک بروند)
+const isSameLocalDay = (a: Date, b: Date) =>
+  a.getFullYear() === b.getFullYear() &&
+  a.getMonth() === b.getMonth() &&
+  a.getDate() === b.getDate()
+
+const isPreStatus = (s: string) => s === "پیش‌فاکتور" || s === "ثبت‌شده"
+const isInvoiceStatus = (s: string) => s === "فاکتور"
+
 const IRAN_HOLIDAYS: string[] = []
 const DEFAULT_LEAD_DAYS = 4
 
 const isNonWorkingDay = (d: Date) => {
-  if (d.getDay() === 5) return true // جمعه
+  if (d.getDay() === 5) return true
   return IRAN_HOLIDAYS.includes(d.toISOString().slice(0, 10))
 }
 
@@ -147,7 +155,6 @@ const addBusinessDays = (start: Date, n: number) => {
   return result
 }
 
-// تعداد روزهای کاری بین دو تاریخ (روز شروع حساب نمی‌شود، روز پایان حساب می‌شود)
 const countBusinessDays = (from: Date, to: Date) => {
   const cur = new Date(from)
   cur.setHours(0, 0, 0, 0)
@@ -161,21 +168,23 @@ const countBusinessDays = (from: Date, to: Date) => {
   return n
 }
 
-// تاریخ‌های جدید هنگام انتقال به فاکتور:
-// تاریخ سفارش = امروز، تاریخ تحویل = امروز + همان تعداد روز کاریِ بین تاریخ سفارش و تحویل قبلی
-// (اگر تاریخ تحویل قبلی خالی/نامعتبر باشد، پیش‌فرض ۴ روز کاری)
-const calcNewDates = (order: { orderDate: string; deliveryDate: string | null }) => {
+const calcNewDates = (order: {
+  orderDate: string
+  deliveryDate: string | null
+}) => {
   const today = new Date()
   const oldOrder = parseOrderDate(order.orderDate)
   const oldDelivery = parseOrderDate(order.deliveryDate)
-  let lead = oldOrder && oldDelivery ? countBusinessDays(oldOrder, oldDelivery) : 0
+  let lead =
+    oldOrder && oldDelivery ? countBusinessDays(oldOrder, oldDelivery) : 0
   if (lead <= 0) lead = DEFAULT_LEAD_DAYS
   return { today, delivery: addBusinessDays(today, lead), lead }
 }
 
-// همان فرمتی که صفحه‌ی ثبت سفارش در handleSave می‌فرستد
 const toPersianStr = (d: Date) =>
-  new DateObject({ date: d, calendar: persian, locale: persian_fa }).format("YYYY/MM/DD")
+  new DateObject({ date: d, calendar: persian, locale: persian_fa }).format(
+    "YYYY/MM/DD"
+  )
 
 export default function PreInvoicesPage() {
   const [orders, setOrders] = useState<OrderFromApi[]>([])
@@ -186,12 +195,25 @@ export default function PreInvoicesPage() {
   const [selectedMonth, setSelectedMonth] = useState("همه")
   const [confirmItem, setConfirmItem] = useState<OrderFromApi | null>(null)
   const [selectedExpert, setSelectedExpert] = useState("همه کارشناسان")
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("pre")
+  const [dayFilter, setDayFilter] = useState<"all" | "today">("all")
   const [sending, setSending] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>("orderDate")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
+  const [currentUserName, setCurrentUserName] = useState<string | null>(null)
 
   useEffect(() => {
     fetchOrders()
+    ;(async () => {
+      try {
+        const res = await fetch("/api/auth/me")
+        if (!res.ok) return
+        const data = await res.json()
+        if (data?.user?.displayName) {
+          setCurrentUserName(data.user.displayName)
+        }
+      } catch {}
+    })()
   }, [])
 
   const fetchOrders = async () => {
@@ -200,14 +222,11 @@ export default function PreInvoicesPage() {
       const res = await fetch("/api/orders")
       if (!res.ok) throw new Error("خطا در دریافت سفارش‌ها")
       const data = await res.json()
-      const preInvoices = (Array.isArray(data) ? data : []).filter(
-        (o: OrderFromApi) =>
-          o.status === "پیش‌فاکتور" || o.status === "ثبت‌شده"
-      )
-      setOrders(preInvoices)
+      // همه سفارش‌ها را نگه می‌داریم؛ فیلتر وضعیت سمت کلاینت است
+      setOrders(Array.isArray(data) ? data : [])
     } catch (error) {
       console.error(error)
-      alert("خطا در بارگذاری لیست پیش‌فاکتورها")
+      alert("خطا در بارگذاری لیست سفارش‌ها")
     } finally {
       setLoading(false)
     }
@@ -240,8 +259,48 @@ export default function PreInvoicesPage() {
     return sortDir === "asc" ? " ↑" : " ↓"
   }
 
+  const statusCounts = useMemo(() => {
+    const now = new Date()
+    let pre = 0
+    let inv = 0
+    let preToday = 0
+    let invToday = 0
+    for (const o of orders) {
+      const created = parseOrderDate(o.createdAt)
+      const invAt = parseOrderDate(o.invoicedAt || null)
+      if (isPreStatus(o.status)) {
+        pre++
+        if (created && isSameLocalDay(created, now)) preToday++
+      }
+      if (isInvoiceStatus(o.status)) {
+        inv++
+        if (invAt && isSameLocalDay(invAt, now)) invToday++
+        else if (!invAt && created && isSameLocalDay(created, now)) invToday++
+      }
+    }
+    return { pre, inv, all: orders.length, preToday, invToday }
+  }, [orders])
+
   const filtered = useMemo(() => {
     let result = [...orders]
+    const now = new Date()
+
+    if (statusFilter === "pre") {
+      result = result.filter((o) => isPreStatus(o.status))
+    } else if (statusFilter === "invoice") {
+      result = result.filter((o) => isInvoiceStatus(o.status))
+    }
+
+    if (dayFilter === "today") {
+      result = result.filter((item) => {
+        if (isInvoiceStatus(item.status)) {
+          const d = parseOrderDate(item.invoicedAt || item.createdAt)
+          return d ? isSameLocalDay(d, now) : false
+        }
+        const d = parseOrderDate(item.createdAt)
+        return d ? isSameLocalDay(d, now) : false
+      })
+    }
 
     const q = search.trim().toLowerCase()
     if (q) {
@@ -250,15 +309,17 @@ export default function PreInvoicesPage() {
           item.customer?.name?.toLowerCase().includes(q) ||
           item.orderNumber?.toLowerCase().includes(q) ||
           (item.customerOrderNumber || "").toLowerCase().includes(q) ||
-          (item.salesRep || "").toLowerCase().includes(q)
+          (item.salesRep || "").toLowerCase().includes(q) ||
+          (item.convertedBy || "").toLowerCase().includes(q)
       )
     }
 
+    // فیلتر بازه/ماه روی تاریخ پیش‌فاکتور (createdAt)
     if (fromDate) {
       const from = fromDate?.toDate ? fromDate.toDate() : new Date(fromDate)
       from.setHours(0, 0, 0, 0)
       result = result.filter((item) => {
-        const d = parseOrderDate(item.orderDate)
+        const d = parseOrderDate(item.createdAt)
         if (!d) return false
         d.setHours(0, 0, 0, 0)
         return d >= from
@@ -268,7 +329,7 @@ export default function PreInvoicesPage() {
       const to = toDate?.toDate ? toDate.toDate() : new Date(toDate)
       to.setHours(23, 59, 59, 999)
       result = result.filter((item) => {
-        const d = parseOrderDate(item.orderDate)
+        const d = parseOrderDate(item.createdAt)
         if (!d) return false
         return d <= to
       })
@@ -276,7 +337,7 @@ export default function PreInvoicesPage() {
 
     if (selectedMonth !== "همه") {
       result = result.filter(
-        (item) => getFaMonth(item.orderDate) === selectedMonth
+        (item) => getFaMonth(item.createdAt) === selectedMonth
       )
     }
 
@@ -295,7 +356,12 @@ export default function PreInvoicesPage() {
             (a.customer?.name || "").localeCompare(b.customer?.name || "", "fa")
           )
         case "orderNumber":
-          return dir * String(a.orderNumber).localeCompare(String(b.orderNumber), "fa", { numeric: true })
+          return (
+            dir *
+            String(a.orderNumber).localeCompare(String(b.orderNumber), "fa", {
+              numeric: true,
+            })
+          )
         case "customerOrderNumber":
           return (
             dir *
@@ -306,8 +372,8 @@ export default function PreInvoicesPage() {
             )
           )
         case "orderDate": {
-          const da = parseOrderDate(a.orderDate)?.getTime() || 0
-          const db = parseOrderDate(b.orderDate)?.getTime() || 0
+          const da = parseOrderDate(a.createdAt)?.getTime() || 0
+          const db = parseOrderDate(b.createdAt)?.getTime() || 0
           return dir * (da - db)
         }
         case "deliveryDate": {
@@ -331,9 +397,9 @@ export default function PreInvoicesPage() {
           return dir * (da - db)
         }
         case "salesRep":
-          return (
-            dir * (a.salesRep || "").localeCompare(b.salesRep || "", "fa")
-          )
+          return dir * (a.salesRep || "").localeCompare(b.salesRep || "", "fa")
+        case "status":
+          return dir * (a.status || "").localeCompare(b.status || "", "fa")
         default:
           return 0
       }
@@ -347,6 +413,8 @@ export default function PreInvoicesPage() {
     toDate,
     selectedMonth,
     selectedExpert,
+    statusFilter,
+    dayFilter,
     sortKey,
     sortDir,
   ])
@@ -374,7 +442,6 @@ export default function PreInvoicesPage() {
     if (!confirmItem) return
     try {
       setSending(true)
-      // تاریخ سفارش = امروز، تاریخ تحویل = امروز + همان تعداد روز کاری قبلی
       const { today, delivery } = calcNewDates(confirmItem)
       const res = await fetch("/api/orders", {
         method: "PATCH",
@@ -382,7 +449,7 @@ export default function PreInvoicesPage() {
         body: JSON.stringify({
           id: confirmItem.id,
           status: "فاکتور",
-          convertedBy: confirmItem.salesRep || "سیستم",
+          convertedBy: currentUserName || confirmItem.salesRep || "سیستم",
           orderDate: toPersianStr(today),
           deliveryDate: toPersianStr(delivery),
         }),
@@ -391,7 +458,21 @@ export default function PreInvoicesPage() {
         const err = await res.json()
         throw new Error(err.error || "خطا در انتقال")
       }
-      setOrders((prev) => prev.filter((i) => i.id !== confirmItem.id))
+      // به‌جای حذف، وضعیت را در لیست به‌روز می‌کنیم
+      setOrders((prev) =>
+        prev.map((i) =>
+          i.id === confirmItem.id
+            ? {
+                ...i,
+                status: "فاکتور",
+                convertedBy: currentUserName || i.salesRep || null,
+                invoicedAt: new Date().toISOString(),
+                orderDate: toPersianStr(today),
+                deliveryDate: toPersianStr(delivery),
+              }
+            : i
+        )
+      )
       setConfirmItem(null)
       alert("پیش‌فاکتور به فاکتور منتقل شد و وارد تولید گردید")
     } catch (error: any) {
@@ -405,8 +486,14 @@ export default function PreInvoicesPage() {
   const thClass =
     "p-3 font-bold whitespace-nowrap text-center cursor-pointer select-none hover:bg-teal-500/25 transition"
 
-  // پیش‌نمایش تاریخ‌های جدید در مودال تأیید
   const newDates = confirmItem ? calcNewDates(confirmItem) : null
+
+  const chip = (active: boolean) =>
+    `rounded-xl px-4 py-2 text-sm font-bold transition ${
+      active
+        ? "bg-teal-600 text-white"
+        : "bg-white/50 text-blue-900 border border-teal-500/30 hover:bg-white/70"
+    }`
 
   return (
     <div
@@ -454,6 +541,51 @@ export default function PreInvoicesPage() {
         </div>
 
         <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
+          {/* فیلتر وضعیت: پیش‌فاکتور / فاکتور / همه */}
+          <div className="mb-3 flex flex-wrap gap-2 items-center">
+            <span className="text-sm font-bold text-blue-900 ml-1">وضعیت:</span>
+            <button
+              type="button"
+              onClick={() => setStatusFilter("pre")}
+              className={chip(statusFilter === "pre")}
+            >
+              فقط پیش‌فاکتور ({statusCounts.pre})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter("invoice")}
+              className={chip(statusFilter === "invoice")}
+            >
+              فقط فاکتور ({statusCounts.inv})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter("all")}
+              className={chip(statusFilter === "all")}
+            >
+              همه ({statusCounts.all})
+            </button>
+
+            <span className="text-sm font-bold text-blue-900 mr-3 ml-1">
+              روز:
+            </span>
+            <button
+              type="button"
+              onClick={() => setDayFilter("all")}
+              className={chip(dayFilter === "all")}
+            >
+              همه روزها
+            </button>
+            <button
+              type="button"
+              onClick={() => setDayFilter("today")}
+              className={chip(dayFilter === "today")}
+            >
+              امروز (پیش‌فاکتور {statusCounts.preToday} / فاکتور{" "}
+              {statusCounts.invToday})
+            </button>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
             <div className="md:col-span-3">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
@@ -469,7 +601,7 @@ export default function PreInvoicesPage() {
             </div>
             <div className="md:col-span-2">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
-                ماه سفارش
+                ماه پیش‌فاکتور
               </label>
               <select
                 value={selectedMonth}
@@ -485,7 +617,7 @@ export default function PreInvoicesPage() {
             </div>
             <div className="md:col-span-2 relative z-30">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
-                از تاریخ
+                از تاریخ ثبت
               </label>
               <DatePicker
                 value={fromDate}
@@ -502,7 +634,7 @@ export default function PreInvoicesPage() {
             </div>
             <div className="md:col-span-2 relative z-30">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
-                تا تاریخ
+                تا تاریخ ثبت
               </label>
               <DatePicker
                 value={toDate}
@@ -573,11 +705,14 @@ export default function PreInvoicesPage() {
                   >
                     ش سفارش مشتری{sortIndicator("customerOrderNumber")}
                   </th>
+                  <th className={thClass} onClick={() => toggleSort("status")}>
+                    وضعیت{sortIndicator("status")}
+                  </th>
                   <th
                     className={thClass}
                     onClick={() => toggleSort("orderDate")}
                   >
-                    تاریخ سفارش{sortIndicator("orderDate")}
+                    تاریخ پیش‌فاکتور{sortIndicator("orderDate")}
                   </th>
                   <th
                     className={thClass}
@@ -626,70 +761,101 @@ export default function PreInvoicesPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((item, index) => (
-                  <tr
-                    key={item.id}
-                    className="border-b border-teal-500/10 transition-colors hover:bg-teal-400/20 bg-white/30"
-                  >
-                    <td className="p-3 text-center font-bold">{index + 1}</td>
-                    <td className="p-3 font-bold whitespace-nowrap">
-                      {item.customer?.name || "—"}
-                    </td>
-                    <td className="p-3 font-semibold text-center">
-                      {item.orderNumber}
-                    </td>
-                    <td className="p-3 font-semibold text-center">
-                      {item.customerOrderNumber || "—"}
-                    </td>
-                    <td className="p-3 whitespace-nowrap text-center">
-                      {formatDate(item.orderDate)}
-                    </td>
-                    <td className="p-3 whitespace-nowrap text-center">
-                      {formatDate(item.deliveryDate)}
-                    </td>
-                    <td className="p-3 text-center">
-                      {item.priority || "عادی"}
-                    </td>
-                    <td className="p-3 text-center font-semibold">
-                      {item.totalMeterage?.toFixed(4) || "0"}
-                    </td>
-                    <td className="p-3 text-center font-semibold">
-                      {item.totalQuantity || 0}
-                    </td>
-                    <td className="p-3 text-left font-bold text-teal-800 whitespace-nowrap">
-                      {formatPrice(getTotalPrice(item))}
-                    </td>
-                    <td className="p-3 text-left font-semibold text-orange-700 whitespace-nowrap">
-                      {item.discountAmount
-                        ? formatPrice(item.discountAmount)
-                        : "—"}
-                    </td>
-                    <td className="p-3 text-center whitespace-nowrap">
-                      {item.installationDate
-                        ? formatDate(item.installationDate)
-                        : "—"}
-                    </td>
-                    <td className="p-3 text-center text-xs font-semibold text-blue-800">
-                      {item.salesRep || "—"}
-                    </td>
-                    <td className="p-3 text-center">
-                      <Link
-                        href={`/order/new?edit=${item.id}`}
-                        className="inline-block rounded-lg bg-blue-500/20 hover:bg-blue-500/40 px-3 py-1.5 text-xs font-bold text-blue-900 transition focus:ring-2 focus:ring-blue-400"
-                      >
-                        ویرایش
-                      </Link>
-                    </td>
-                    <td className="p-3 text-center">
-                      <button
-                        onClick={() => setConfirmItem(item)}
-                        className="rounded-lg bg-teal-500 hover:bg-teal-600 px-3 py-1.5 text-xs font-bold text-white shadow transition focus:ring-2 focus:ring-teal-300"
-                      >
-                        ارسال به فاکتور
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {filtered.map((item, index) => {
+                  const isInv = isInvoiceStatus(item.status)
+                  return (
+                    <tr
+                      key={item.id}
+                      className={`border-b border-teal-500/10 transition-colors hover:bg-teal-400/20 ${
+                        isInv ? "bg-amber-50/40" : "bg-white/30"
+                      }`}
+                    >
+                      <td className="p-3 text-center font-bold">{index + 1}</td>
+                      <td className="p-3 font-bold whitespace-nowrap">
+                        {item.customer?.name || "—"}
+                      </td>
+                      <td className="p-3 font-semibold text-center">
+                        {item.orderNumber}
+                      </td>
+                      <td className="p-3 font-semibold text-center">
+                        {item.customerOrderNumber || "—"}
+                      </td>
+                      <td className="p-3 text-center">
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-xs font-bold ${
+                            isInv
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-teal-100 text-teal-800"
+                          }`}
+                        >
+                          {isInv ? "فاکتور" : "پیش‌فاکتور"}
+                        </span>
+                      </td>
+                      <td className="p-3 whitespace-nowrap text-center">
+                        {formatDate(item.createdAt)}
+                      </td>
+                      <td className="p-3 whitespace-nowrap text-center">
+                        {formatDate(item.deliveryDate)}
+                      </td>
+                      <td className="p-3 text-center">
+                        {item.priority || "عادی"}
+                      </td>
+                      <td className="p-3 text-center font-semibold">
+                        {item.totalMeterage?.toFixed(4) || "0"}
+                      </td>
+                      <td className="p-3 text-center font-semibold">
+                        {item.totalQuantity || 0}
+                      </td>
+                      <td className="p-3 text-left font-bold text-teal-800 whitespace-nowrap">
+                        {formatPrice(getTotalPrice(item))}
+                      </td>
+                      <td className="p-3 text-left font-semibold text-orange-700 whitespace-nowrap">
+                        {item.discountAmount
+                          ? formatPrice(item.discountAmount)
+                          : "—"}
+                      </td>
+                      <td className="p-3 text-center whitespace-nowrap">
+                        {item.installationDate
+                          ? formatDate(item.installationDate)
+                          : "—"}
+                      </td>
+                      <td className="p-3 text-center text-xs font-semibold text-blue-800">
+                        {isInv
+                          ? item.convertedBy || item.salesRep || "—"
+                          : item.salesRep || "—"}
+                      </td>
+                      <td className="p-3 text-center">
+                        {!isInv ? (
+                          <Link
+                            href={`/order/new?edit=${item.id}`}
+                            className="inline-block rounded-lg bg-blue-500/20 hover:bg-blue-500/40 px-3 py-1.5 text-xs font-bold text-blue-900 transition focus:ring-2 focus:ring-blue-400"
+                          >
+                            ویرایش
+                          </Link>
+                        ) : (
+                          <Link
+                            href="/invoices"
+                            className="inline-block rounded-lg bg-gray-200/60 hover:bg-gray-300/60 px-3 py-1.5 text-xs font-bold text-blue-900 transition"
+                          >
+                            لیست فاکتور
+                          </Link>
+                        )}
+                      </td>
+                      <td className="p-3 text-center">
+                        {!isInv ? (
+                          <button
+                            onClick={() => setConfirmItem(item)}
+                            className="rounded-lg bg-teal-500 hover:bg-teal-600 px-3 py-1.5 text-xs font-bold text-white shadow transition focus:ring-2 focus:ring-teal-300"
+                          >
+                            ارسال به فاکتور
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-500">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           )}
@@ -761,11 +927,24 @@ export default function PreInvoicesPage() {
                   {confirmItem.salesRep || "—"}
                 </strong>
               </p>
+              <p>
+                منتقل‌کننده:{" "}
+                <strong className="text-teal-700">
+                  {currentUserName || "—"}
+                </strong>
+              </p>
+              <p>
+                تاریخ پیش‌فاکتور:{" "}
+                <strong className="text-teal-700">
+                  {formatDate(confirmItem.createdAt)}
+                </strong>
+                <span className="text-xs text-gray-500 mr-1">(ثابت می‌ماند)</span>
+              </p>
 
               {newDates && (
                 <div className="rounded-xl bg-teal-50 border border-teal-200 p-3 text-sm">
                   <p>
-                    تاریخ سفارش جدید:{" "}
+                    تاریخ فاکتور (امروز):{" "}
                     <strong className="text-teal-700">
                       {formatDate(newDates.today.toISOString())}
                     </strong>
@@ -785,9 +964,9 @@ export default function PreInvoicesPage() {
               <p className="text-sm text-gray-600 mt-3">با تأیید:</p>
               <ul className="text-sm text-gray-700 list-disc list-inside space-y-1">
                 <li>وضعیت به «فاکتور» تغییر می‌کند</li>
-                <li>تاریخ سفارش و تحویل از امروز به‌روزرسانی می‌شود</li>
+                <li>تاریخ فاکتور و تاریخ تحویل از امروز به‌روزرسانی می‌شود</li>
+                <li>تاریخ پیش‌فاکتور (اولین ثبت) ثابت می‌ماند</li>
                 <li>سفارش به‌صورت خودکار وارد تولید می‌شود</li>
-                <li>از لیست پیش‌فاکتورها حذف و به فاکتورها اضافه می‌شود</li>
               </ul>
             </div>
             <div className="flex gap-3 justify-end">

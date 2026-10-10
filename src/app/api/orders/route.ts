@@ -189,7 +189,6 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json()
-    // orderDate و deliveryDate: تاریخ‌های جدید هنگام انتقال پیش‌فاکتور به فاکتور
     const { id, status, convertedBy, orderDate, deliveryDate } = body
 
     if (!id || !status) {
@@ -243,20 +242,41 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
-    // فقط هنگام انتقال به فاکتور، تاریخ‌های جدید ذخیره می‌شوند
-    // (برگرداندن به پیش‌فاکتور تاریخ‌ها را تغییر نمی‌دهد)
+    // تاریخ تحویل (و در صورت ارسال، orderDate) فقط هنگام تبدیل به فاکتور
     const dateUpdates: { orderDate?: Date; deliveryDate?: Date } = {}
     if (status === "فاکتور") {
       if (orderDate) dateUpdates.orderDate = safeDate(orderDate)
       if (deliveryDate) dateUpdates.deliveryDate = safeDate(deliveryDate)
     }
 
+    // نام منتقل‌کننده: از body یا از نشست لاگین
+    const session = await getSession()
+    const whoConverted =
+      (convertedBy && String(convertedBy).trim()) ||
+      session?.displayName ||
+      null
+
     const order = await prisma.order.update({
       where: { id },
       data: {
         status,
-        notes: convertedBy ? `تبدیل شده توسط: ${convertedBy}` : undefined,
         ...dateUpdates,
+        ...(status === "فاکتور"
+          ? {
+              convertedBy: whoConverted,
+              invoicedAt: new Date(),
+              // برای سازگاری با گزارش‌های قدیمی notes هم نگه داشته می‌شود
+              notes: whoConverted
+                ? `تبدیل شده توسط: ${whoConverted}`
+                : undefined,
+            }
+          : {}),
+        ...(status === "پیش‌فاکتور"
+          ? {
+              convertedBy: null,
+              invoicedAt: null,
+            }
+          : {}),
       },
       include: {
         customer: true,
@@ -273,7 +293,6 @@ export async function PATCH(req: NextRequest) {
       })
 
       if (!existing) {
-        // مستقیم با Prisma — بدون fetch به localhost
         const result = await createProductionOrderFromSales(order.id)
         if (result.ok) {
           productionOrder = result.data

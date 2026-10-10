@@ -20,9 +20,14 @@ type OrderFromApi = {
   status: string
   notes: string | null
   createdAt: string
+  updatedAt?: string
   discountAmount: number | null
   discountPercent: number | null
   salesRep?: string | null
+  /** کسی که به فاکتور منتقل کرده */
+  convertedBy?: string | null
+  /** زمان تبدیل به فاکتور */
+  invoicedAt?: string | null
   customer: {
     id: string
     name: string
@@ -33,6 +38,11 @@ type OrderFromApi = {
     productName: string
     totalPrice: number
     meterage: number
+    length?: number | null
+    width?: number | null
+    quantity?: number
+    unitPrice?: number
+    notes?: string | null
   }[]
 }
 
@@ -41,6 +51,7 @@ type SortKey =
   | "orderNumber"
   | "customerOrderNumber"
   | "orderDate"
+  | "invoiceDate"
   | "deliveryDate"
   | "priority"
   | "totalMeterage"
@@ -118,13 +129,27 @@ const getFaMonth = (dateStr: string | null | undefined) => {
       calendar: persian,
       locale: persian_fa,
     })
-    // از شماره‌ی عددی ماه استفاده می‌کنیم (نه format با locale فارسی)
-    // چون format("MM") با locale فارسی ارقام فارسی (۰۶) برمی‌گردونه
-    // که با مقادیر لاتین "01".."12" توی PERSIAN_MONTHS مچ نمی‌شه
     return String(dObj.month.number).padStart(2, "0")
   } catch {
     return ""
   }
+}
+
+/** کارشناس انتقال به فاکتور: فیلد اختصاصی یا متن notes */
+function getInvoiceExpert(order: OrderFromApi): string {
+  if (order.convertedBy && order.convertedBy.trim()) return order.convertedBy.trim()
+  const m = (order.notes || "").match(/تبدیل شده توسط:\s*(.+)/)
+  if (m?.[1]) return m[1].trim()
+  return "—"
+}
+
+/** تاریخ فاکتور: invoicedAt یا updatedAt بعد از تبدیل */
+function getInvoiceDate(order: OrderFromApi): string | null {
+  if (order.invoicedAt) return order.invoicedAt
+  if ((order.notes || "").includes("تبدیل شده توسط") && order.updatedAt) {
+    return order.updatedAt
+  }
+  return order.updatedAt || null
 }
 
 export default function InvoicesPage() {
@@ -135,10 +160,14 @@ export default function InvoicesPage() {
   const [toDate, setToDate] = useState<any>(null)
   const [selectedMonth, setSelectedMonth] = useState("همه")
   const [selectedExpert, setSelectedExpert] = useState("همه کارشناسان")
-  const [sortKey, setSortKey] = useState<SortKey>("orderDate")
+  const [sortKey, setSortKey] = useState<SortKey>("invoiceDate")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
   const [revertItem, setRevertItem] = useState<OrderFromApi | null>(null)
   const [reverting, setReverting] = useState(false)
+
+  // پیش‌نمایش با دبل‌کلیک
+  const [previewOrder, setPreviewOrder] = useState<OrderFromApi | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
 
   useEffect(() => {
     fetchOrders()
@@ -162,10 +191,25 @@ export default function InvoicesPage() {
     }
   }
 
+  const openPreview = async (id: string) => {
+    try {
+      setPreviewLoading(true)
+      const res = await fetch(`/api/orders/${id}`)
+      if (!res.ok) throw new Error("خطا در دریافت سفارش")
+      const data = await res.json()
+      setPreviewOrder(data)
+    } catch (e) {
+      console.error(e)
+      alert("خطا در نمایش پیش‌فاکتور")
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
   const salesExperts = useMemo(() => {
     const fromData = orders
-      .map((o) => o.salesRep)
-      .filter((n): n is string => Boolean(n && n.trim()))
+      .map((o) => getInvoiceExpert(o))
+      .filter((n) => n && n !== "—")
     return [
       "همه کارشناسان",
       ...Array.from(new Set([...DEFAULT_EXPERTS, ...fromData])).sort(),
@@ -199,15 +243,17 @@ export default function InvoicesPage() {
           item.customer?.name?.toLowerCase().includes(q) ||
           item.orderNumber?.toLowerCase().includes(q) ||
           (item.customerOrderNumber || "").toLowerCase().includes(q) ||
+          getInvoiceExpert(item).toLowerCase().includes(q) ||
           (item.salesRep || "").toLowerCase().includes(q)
       )
     }
 
+    // فیلتر تاریخ روی تاریخ فاکتور (اولویت) وگرنه پیش‌فاکتور
     if (fromDate) {
       const from = fromDate?.toDate ? fromDate.toDate() : new Date(fromDate)
       from.setHours(0, 0, 0, 0)
       result = result.filter((item) => {
-        const d = parseOrderDate(item.orderDate)
+        const d = parseOrderDate(getInvoiceDate(item) || item.orderDate)
         if (!d) return false
         d.setHours(0, 0, 0, 0)
         return d >= from
@@ -217,7 +263,7 @@ export default function InvoicesPage() {
       const to = toDate?.toDate ? toDate.toDate() : new Date(toDate)
       to.setHours(23, 59, 59, 999)
       result = result.filter((item) => {
-        const d = parseOrderDate(item.orderDate)
+        const d = parseOrderDate(getInvoiceDate(item) || item.orderDate)
         if (!d) return false
         return d <= to
       })
@@ -225,12 +271,15 @@ export default function InvoicesPage() {
 
     if (selectedMonth !== "همه") {
       result = result.filter(
-        (item) => getFaMonth(item.orderDate) === selectedMonth
+        (item) =>
+          getFaMonth(getInvoiceDate(item) || item.orderDate) === selectedMonth
       )
     }
 
     if (selectedExpert !== "همه کارشناسان") {
-      result = result.filter((item) => item.salesRep === selectedExpert)
+      result = result.filter(
+        (item) => getInvoiceExpert(item) === selectedExpert
+      )
     }
 
     const dir = sortDir === "asc" ? 1 : -1
@@ -264,6 +313,11 @@ export default function InvoicesPage() {
           const db = parseOrderDate(b.orderDate)?.getTime() || 0
           return dir * (da - db)
         }
+        case "invoiceDate": {
+          const da = parseOrderDate(getInvoiceDate(a))?.getTime() || 0
+          const db = parseOrderDate(getInvoiceDate(b))?.getTime() || 0
+          return dir * (da - db)
+        }
         case "deliveryDate": {
           const da = parseOrderDate(a.deliveryDate)?.getTime() || 0
           const db = parseOrderDate(b.deliveryDate)?.getTime() || 0
@@ -285,7 +339,10 @@ export default function InvoicesPage() {
           return dir * (da - db)
         }
         case "salesRep":
-          return dir * (a.salesRep || "").localeCompare(b.salesRep || "", "fa")
+          return (
+            dir *
+            getInvoiceExpert(a).localeCompare(getInvoiceExpert(b), "fa")
+          )
         default:
           return 0
       }
@@ -348,6 +405,8 @@ export default function InvoicesPage() {
 
   const thClass =
     "p-3 font-bold whitespace-nowrap text-center cursor-pointer select-none hover:bg-teal-500/25 transition"
+
+  const previewTotal = previewOrder ? getTotalPrice(previewOrder) : 0
 
   return (
     <div
@@ -458,7 +517,7 @@ export default function InvoicesPage() {
             </div>
             <div className="md:col-span-2">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
-                کارشناس فروش
+                کارشناس (انتقال به فاکتور)
               </label>
               <select
                 value={selectedExpert}
@@ -516,7 +575,13 @@ export default function InvoicesPage() {
                     className={thClass}
                     onClick={() => toggleSort("orderDate")}
                   >
-                    تاریخ سفارش{sortIndicator("orderDate")}
+                    تاریخ پیش‌فاکتور{sortIndicator("orderDate")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("invoiceDate")}
+                  >
+                    تاریخ فاکتور{sortIndicator("invoiceDate")}
                   </th>
                   <th
                     className={thClass}
@@ -567,7 +632,9 @@ export default function InvoicesPage() {
                 {filtered.map((item, index) => (
                   <tr
                     key={item.id}
-                    className="border-b border-teal-500/10 transition-colors hover:bg-teal-400/20 bg-white/30"
+                    className="border-b border-teal-500/10 transition-colors hover:bg-teal-400/20 bg-white/30 cursor-pointer"
+                    title="دبل‌کلیک: نمایش پیش‌فاکتور"
+                    onDoubleClick={() => openPreview(item.id)}
                   >
                     <td className="p-3 text-center font-bold">{index + 1}</td>
                     <td className="p-3 font-bold whitespace-nowrap">
@@ -581,6 +648,9 @@ export default function InvoicesPage() {
                     </td>
                     <td className="p-3 whitespace-nowrap text-center">
                       {formatDate(item.orderDate)}
+                    </td>
+                    <td className="p-3 whitespace-nowrap text-center font-semibold text-teal-800">
+                      {formatDate(getInvoiceDate(item))}
                     </td>
                     <td className="p-3 whitespace-nowrap text-center">
                       {formatDate(item.deliveryDate)}
@@ -608,18 +678,26 @@ export default function InvoicesPage() {
                         : "—"}
                     </td>
                     <td className="p-3 text-center text-xs font-semibold text-blue-800">
-                      {item.salesRep || "—"}
+                      {getInvoiceExpert(item)}
                     </td>
-                    <td className="p-3 text-center">
+                    <td
+                      className="p-3 text-center"
+                      onDoubleClick={(e) => e.stopPropagation()}
+                    >
                       <div className="flex flex-col gap-1 items-center">
                         <Link
                           href={`/order/new?edit=${item.id}`}
                           className="inline-block rounded-lg bg-blue-500/20 hover:bg-blue-500/40 px-3 py-1.5 text-xs font-bold text-blue-900 transition focus:ring-2 focus:ring-blue-400"
+                          onClick={(e) => e.stopPropagation()}
                         >
                           ویرایش
                         </Link>
                         <button
-                          onClick={() => setRevertItem(item)}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setRevertItem(item)
+                          }}
                           className="rounded-lg bg-amber-500/30 hover:bg-amber-500/50 px-3 py-1.5 text-xs font-bold text-amber-900 transition focus:ring-2 focus:ring-amber-400"
                         >
                           برگشت به پیش‌فاکتور
@@ -673,6 +751,153 @@ export default function InvoicesPage() {
           </div>
         )}
       </div>
+
+      {/* پیش‌نمایش سفارش با دبل‌کلیک */}
+      {(previewOrder || previewLoading) && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+          onClick={() => !previewLoading && setPreviewOrder(null)}
+        >
+          <div
+            className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-teal-300"
+            dir="rtl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {previewLoading || !previewOrder ? (
+              <p className="p-10 text-center font-bold text-blue-900">
+                در حال بارگذاری...
+              </p>
+            ) : (
+              <>
+                <div className="sticky top-0 bg-teal-600 text-white px-5 py-3 flex items-center justify-between">
+                  <h2 className="text-lg font-black">
+                    پیش‌نمایش سفارش {previewOrder.orderNumber}
+                  </h2>
+                  <button
+                    type="button"
+                    className="text-2xl leading-none px-2"
+                    onClick={() => setPreviewOrder(null)}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="p-5 space-y-4 text-sm text-blue-950">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    <div>
+                      <p className="text-xs text-blue-700">مشتری</p>
+                      <p className="font-black">
+                        {previewOrder.customer?.name || "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-blue-700">تاریخ پیش‌فاکتور</p>
+                      <p className="font-bold">
+                        {formatDate(previewOrder.orderDate)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-blue-700">تاریخ فاکتور</p>
+                      <p className="font-bold">
+                        {formatDate(getInvoiceDate(previewOrder))}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-blue-700">تاریخ تحویل</p>
+                      <p className="font-bold">
+                        {formatDate(previewOrder.deliveryDate)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-blue-700">کارشناس (انتقال)</p>
+                      <p className="font-bold">
+                        {getInvoiceExpert(previewOrder)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-blue-700">اولویت</p>
+                      <p className="font-bold">
+                        {previewOrder.priority || "عادی"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <table className="w-full border-collapse border border-gray-300 text-xs">
+                    <thead>
+                      <tr className="bg-teal-50">
+                        <th className="border border-gray-300 p-2">ردیف</th>
+                        <th className="border border-gray-300 p-2">کالا</th>
+                        <th className="border border-gray-300 p-2">ابعاد</th>
+                        <th className="border border-gray-300 p-2">تعداد</th>
+                        <th className="border border-gray-300 p-2">متراژ</th>
+                        <th className="border border-gray-300 p-2">مبلغ</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(previewOrder.items || []).map((it, idx) => (
+                        <tr key={it.id || idx}>
+                          <td className="border border-gray-300 p-2 text-center">
+                            {idx + 1}
+                          </td>
+                          <td className="border border-gray-300 p-2 font-bold">
+                            {it.productName}
+                          </td>
+                          <td className="border border-gray-300 p-2 text-center">
+                            {it.length != null && it.width != null
+                              ? `${it.length}×${it.width}`
+                              : "—"}
+                          </td>
+                          <td className="border border-gray-300 p-2 text-center">
+                            {it.quantity ?? "—"}
+                          </td>
+                          <td className="border border-gray-300 p-2 text-center">
+                            {it.meterage != null
+                              ? Number(it.meterage).toFixed(4)
+                              : "—"}
+                          </td>
+                          <td className="border border-gray-300 p-2 text-left font-bold">
+                            {formatPrice(it.totalPrice || 0)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  <div className="flex flex-wrap gap-4 justify-end font-bold text-base">
+                    <span>
+                      متراژ: {previewOrder.totalMeterage?.toFixed(4) || 0}
+                    </span>
+                    <span>تعداد: {previewOrder.totalQuantity || 0}</span>
+                    <span className="text-teal-800">
+                      جمع: {formatPrice(previewTotal)}
+                    </span>
+                    {previewOrder.discountAmount ? (
+                      <span className="text-orange-700">
+                        تخفیف: {formatPrice(previewOrder.discountAmount)}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="flex gap-2 justify-end pt-2 border-t">
+                    <Link
+                      href={`/order/new?edit=${previewOrder.id}`}
+                      className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 font-bold"
+                    >
+                      باز کردن برای ویرایش
+                    </Link>
+                    <button
+                      type="button"
+                      className="rounded-xl border px-5 py-2.5 font-bold"
+                      onClick={() => setPreviewOrder(null)}
+                    >
+                      بستن
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {revertItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">

@@ -22,11 +22,18 @@ const defaultStations: {
   { name: "تراش الگویی", code: "PATTERN", sortOrder: 4 },
   { name: "دیاموند", code: "DIAMOND", sortOrder: 5 },
   { name: "دیاموند زاویه", code: "DIAMOND_ANGLE", sortOrder: 6 },
-  { name: "لول معمولی", code: "LOOL", sortOrder: 7 },
-  { name: "لول براق", code: "LOOL_SHINY", sortOrder: 8 },
-  { name: "لیمینت", code: "LAMINATE", sortOrder: 9 },
-  { name: "دوجداره", code: "DOUBLE", sortOrder: 10 },
-  { name: "CNC", code: "CNC", sortOrder: 11 },
+  // لول معمولی + لول براق → یک ایستگاه «لول»
+  {
+    name: "لول",
+    code: "LOOL",
+    sortOrder: 7,
+    renameFrom: ["لول معمولی", "لول براق"],
+  },
+  { name: "لیمینت", code: "LAMINATE", sortOrder: 8 },
+  { name: "دوجداره", code: "DOUBLE", sortOrder: 9 },
+  { name: "CNC", code: "CNC", sortOrder: 10 },
+  // جاساز دستی (جاساز CNC همچنان به CNC می‌رود — در mapServiceToStation)
+  { name: "جاساز", code: "JASAZ", sortOrder: 11 },
   { name: "UV", code: "UV", sortOrder: 12 },
   { name: "LED", code: "LED", sortOrder: 13 },
   { name: "MDF", code: "MDF", sortOrder: 14 },
@@ -58,6 +65,9 @@ const defaultStations: {
   { name: "بارگیری", code: "LOAD", sortOrder: 25 },
 ]
 
+/** ایستگاه‌های منسوخ که بعد از ادغام باید غیرفعال شوند */
+const deprecateNames = ["لول معمولی", "لول براق"]
+
 function norm(name: string) {
   return (name || "")
     .replace(/[\u200c\u200f\u200e]/g, "")
@@ -77,12 +87,12 @@ export async function POST() {
 
     const created: string[] = []
     const updated: string[] = []
+    const deprecated: string[] = []
 
     for (const def of defaultStations) {
       const key = norm(def.name)
       let found = byNorm.get(key)
 
-      // پیدا کردن با نام قدیمی (rename)
       if (!found && def.renameFrom?.length) {
         for (const old of def.renameFrom) {
           const oldRow = byNorm.get(norm(old))
@@ -130,23 +140,37 @@ export async function POST() {
       }
     }
 
+    // اگر هر دو «لول معمولی» و «لول براق» بودند، یکی لول شد؛ بقیه را غیرفعال کن
+    for (const dep of deprecateNames) {
+      const row = byNorm.get(norm(dep))
+      if (row && row.isActive) {
+        await prisma.productionStation.update({
+          where: { id: row.id },
+          data: { isActive: false },
+        })
+        deprecated.push(dep)
+      }
+    }
+
     const stations = await prisma.productionStation.findMany({
       orderBy: { sortOrder: "asc" },
     })
 
     return NextResponse.json({
       message:
-        created.length || updated.length
-          ? `ایجاد: ${created.length} | اصلاح نام/ترتیب: ${updated.length}`
+        created.length || updated.length || deprecated.length
+          ? `ایجاد: ${created.length} | اصلاح: ${updated.length} | غیرفعال: ${deprecated.length}`
           : "همه ایستگاه‌ها از قبل درست بودند",
       created,
       updated,
+      deprecated,
       count: stations.length,
       stations: stations.map((s) => ({
         id: s.id,
         name: s.name,
         code: s.code,
         sortOrder: s.sortOrder,
+        isActive: s.isActive,
       })),
     })
   } catch (error) {

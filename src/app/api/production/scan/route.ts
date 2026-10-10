@@ -59,8 +59,147 @@ function isStationClosed(status: string) {
 export async function POST(req: Request) {
   try {
     const body = await req.json()
-    const { barcode, stationId, operatorName, confirmed, quantityDone } = body
+    const {
+      barcode,
+      stationId,
+      operatorName,
+      confirmed,
+      quantityDone,
+      action,
+    } = body
 
+    // ====================== برگشت رد ایستگاه ======================
+    if (action === "undo") {
+      if (!barcode || !stationId) {
+        return NextResponse.json(
+          { error: "بارکد و ایستگاه الزامی است" },
+          { status: 400 }
+        )
+      }
+
+      const raw = String(barcode).trim()
+      const baseBarcode = raw.includes("-") ? raw.split("-")[0] : raw
+
+      const include = {
+        stations: {
+          include: { station: true },
+          orderBy: { sequence: "asc" as const },
+        },
+      }
+
+      let item = await prisma.productionItem.findFirst({
+        where: { barcode: raw },
+        include,
+      })
+      if (!item) {
+        item = await prisma.productionItem.findFirst({
+          where: { barcode: baseBarcode },
+          include,
+        })
+      }
+      if (!item) {
+        return NextResponse.json(
+          { error: `بارکد «${raw}» یافت نشد` },
+          { status: 404 }
+        )
+      }
+
+      const stationRow = item.stations.find((s) => s.stationId === stationId)
+      if (!stationRow) {
+        return NextResponse.json(
+          { error: "این قطعه برای ایستگاه انتخاب‌شده مسیر ندارد" },
+          { status: 400 }
+        )
+      }
+
+      if (
+        stationRow.status !== "تکمیل شده" &&
+        stationRow.status !== "در حال انجام"
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "این ایستگاه هنوز رد نشده یا قابل برگشت نیست (وضعیت فعلی: " +
+              stationRow.status +
+              ")",
+          },
+          { status: 400 }
+        )
+      }
+
+      const qtyBack =
+        stationRow.quantityOut ||
+        stationRow.quantityIn ||
+        item.quantity ||
+        1
+
+      await prisma.productionItemStation.update({
+        where: { id: stationRow.id },
+        data: {
+          status: "در انتظار",
+          completedAt: null,
+          startedAt: null,
+          quantityOut: null,
+          quantityIn: qtyBack,
+          quantityWaste: null,
+          operatorId: null,
+          notes: null,
+        },
+      })
+
+      // اگر تراش بود: جفت «انجام در ایستگاه دیگر» را هم برگردان
+      if (isBevelPair(stationRow.station.name)) {
+        for (const s of item.stations) {
+          if (
+            s.id !== stationRow.id &&
+            isBevelPair(s.station.name) &&
+            s.status === "انجام در ایستگاه دیگر"
+          ) {
+            await prisma.productionItemStation.update({
+              where: { id: s.id },
+              data: {
+                status: "در انتظار",
+                completedAt: null,
+                startedAt: null,
+                quantityOut: null,
+                quantityIn: item.quantity || 1,
+                notes: null,
+              },
+            })
+          }
+        }
+      }
+
+      await prisma.productionItem.update({
+        where: { id: item.id },
+        data: {
+          status: "در حال تولید",
+          currentStationId: stationId,
+        },
+      })
+
+      await prisma.productionHistory.create({
+        data: {
+          productionOrderId: item.productionOrderId,
+          productionItemId: item.id,
+          productionItemStationId: stationRow.id,
+          stationId,
+          action: "برگشت رد ایستگاه",
+          description: `برگشت از «${stationRow.station.name}» | بارکد ${raw}`,
+          oldStatus: stationRow.status,
+          newStatus: "در انتظار",
+          quantity: qtyBack,
+          operatorName: operatorName || null,
+        },
+      })
+
+      return NextResponse.json({
+        success: true,
+        message: `برگشت انجام شد: ${item.productName} — ${stationRow.station.name}`,
+      })
+    }
+
+    // ====================== اسکن عادی ======================
     if (!barcode || !stationId) {
       return NextResponse.json(
         { error: "بارکد و ایستگاه الزامی است" },
@@ -225,7 +364,7 @@ export async function POST(req: Request) {
         },
       })
 
-      // تراش ۱ یا ۲: فقط همین دستگاه «تکمیل شده»؛ جفت از صف خارج می‌شود بدون ثبت به‌عنوان انجام‌دهنده
+      // تراش ۱ یا ۲
       if (isBevelPair(stationRow.station.name)) {
         for (const s of item.stations) {
           if (
@@ -251,7 +390,7 @@ export async function POST(req: Request) {
                 productionItemStationId: s.id,
                 stationId: s.stationId,
                 action: "خروج از صف تراش (انجام در ایستگاه جفت)",
-                description: `به‌خاطر تکمیل واقعی در «${stationRow.station.name}»، از صف «${s.station.name}» خارج شد (بدون ثبت به‌عنوان انجام‌دهنده)`,
+                description: `به‌خاطر تکمیل واقعی در «${stationRow.station.name}»، از صف «${s.station.name}» خارج شد`,
                 newStatus: "انجام در ایستگاه دیگر",
                 quantity: 0,
                 operatorName: operatorName || null,
@@ -261,14 +400,13 @@ export async function POST(req: Request) {
         }
       }
 
-      // انبار کالای نیمه‌ساخته: همه ایستگاه‌های میانی تا قبل از انبار آماده تحویل و بارگیری رد شوند
+      // انبار کالای نیمه‌ساخته
       if (isSemiFinishedWh(stationRow.station.name)) {
         for (const s of item.stations) {
           if (s.id === stationRow.id) continue
           const nm = s.station.name
           if (isCutStation(nm) || isReadyWh(nm) || isLoading(nm)) continue
           if (isStationClosed(s.status)) continue
-
           await prisma.productionItemStation.update({
             where: { id: s.id },
             data: {
@@ -307,7 +445,6 @@ export async function POST(req: Request) {
       where: { productionItemId: item.id },
       include: { station: true },
     })
-
     const allDone = allStations.every((s) => isStationClosed(s.status))
 
     await prisma.productionItem.update({

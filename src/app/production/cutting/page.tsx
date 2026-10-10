@@ -378,6 +378,13 @@ export default function CuttingPlanningPage() {
   const [wasteSelected, setWasteSelected] = useState<string[]>([])
   const [wasteStatus, setWasteStatus] = useState("منتظر برش مجدد")
 
+  // فرم ثبت ضایعات با بارکد (حتی بعد از خروج از صف برش)
+  const [wasteBarcode, setWasteBarcode] = useState("")
+  const [wasteQty, setWasteQty] = useState("1")
+  const [wasteRegReason, setWasteRegReason] = useState("")
+  const [wasteRegDept, setWasteRegDept] = useState<"تولید" | "اداری">("تولید")
+  const [wasteRegPerson, setWasteRegPerson] = useState("")
+
   useEffect(() => {
     fetchData()
   }, [])
@@ -725,6 +732,52 @@ export default function CuttingPlanningPage() {
   }
 
   // همه فیلترها سمت کلاینت انجام می‌شود؛ سرور همیشه لیست کامل را برمی‌گرداند
+
+  const submitRegisterWaste = async () => {
+    if (!wasteBarcode.trim()) {
+      alert("بارکد را وارد کنید")
+      return
+    }
+    if (!wasteRegReason.trim()) {
+      alert("علت ضایعات الزامی است")
+      return
+    }
+    if (!wasteRegPerson.trim()) {
+      alert("شخص مسبب الزامی است")
+      return
+    }
+    try {
+      setActionLoading(true)
+      const res = await fetch("/api/production/cutting/waste", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          barcode: wasteBarcode.trim(),
+          quantity: Number(wasteQty) || 1,
+          reason: wasteRegReason.trim(),
+          department: wasteRegDept,
+          responsiblePerson: wasteRegPerson.trim(),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        alert(data.error || "خطا در ثبت ضایعات")
+        return
+      }
+      alert(data.message || "ثبت شد")
+      setWasteBarcode("")
+      setWasteQty("1")
+      setWasteRegReason("")
+      setWasteRegPerson("")
+      await fetchWastes()
+    } catch (e) {
+      console.error(e)
+      alert("خطا در ارتباط با سرور")
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
   const fetchData = async () => {
     try {
       setLoading(true)
@@ -1404,6 +1457,78 @@ export default function CuttingPlanningPage() {
         </>
         ) : (
         <>
+        <div className="mb-4 rounded-2xl border border-orange-200 bg-orange-50/90 p-4">
+          <h3 className="text-base font-bold text-orange-900 mb-3">
+            ثبت ضایعات با بارکد
+            <span className="block text-xs font-semibold text-orange-800 mt-1">
+              برای قطعه‌ای که برش خورده و دیگر در صف برش نیست — بعد از ثبت، از جدول زیر انتخاب و «برش مجدد» بزنید
+            </span>
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-blue-900 mb-1">بارکد</label>
+              <input
+                value={wasteBarcode}
+                onChange={(e) => setWasteBarcode(e.target.value)}
+                className="w-full rounded-xl border border-teal-300 px-3 py-2 text-sm font-bold"
+                placeholder="اسکن یا تایپ بارکد"
+                dir="ltr"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-blue-900 mb-1">تعداد</label>
+              <input
+                type="number"
+                min={1}
+                value={wasteQty}
+                onChange={(e) => setWasteQty(e.target.value)}
+                className="w-full rounded-xl border border-teal-300 px-3 py-2 text-sm font-bold"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-blue-900 mb-1">بخش مسبب</label>
+              <select
+                value={wasteRegDept}
+                onChange={(e) =>
+                  setWasteRegDept(e.target.value as "تولید" | "اداری")
+                }
+                className="w-full rounded-xl border border-teal-300 px-3 py-2 text-sm font-bold"
+              >
+                <option value="تولید">تولید</option>
+                <option value="اداری">اداری</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-blue-900 mb-1">شخص مسبب</label>
+              <input
+                value={wasteRegPerson}
+                onChange={(e) => setWasteRegPerson(e.target.value)}
+                className="w-full rounded-xl border border-teal-300 px-3 py-2 text-sm font-bold"
+                placeholder="نام"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-bold text-blue-900 mb-1">علت ضایعات</label>
+              <input
+                value={wasteRegReason}
+                onChange={(e) => setWasteRegReason(e.target.value)}
+                className="w-full rounded-xl border border-teal-300 px-3 py-2 text-sm font-bold"
+                placeholder="مثلاً شکستگی در تراش"
+              />
+            </div>
+          </div>
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={submitRegisterWaste}
+              disabled={actionLoading}
+              className="rounded-xl bg-orange-500 hover:bg-orange-600 px-5 py-2.5 text-white font-bold disabled:opacity-50"
+            >
+              {actionLoading ? "..." : "ثبت ضایعات"}
+            </button>
+          </div>
+        </div>
+
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <button
             onClick={submitRecut}
