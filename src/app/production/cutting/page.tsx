@@ -1041,7 +1041,7 @@ export default function CuttingPlanningPage() {
         left: 50% !important;
         top: 50% !important;
         /* چرخش تا روی رول عمودی، محتوا افقی چاپ شود */
-        transform: translate(-50%, -50%) rotate(-90deg) !important;
+        transform: translate(-50%, -50%) rotate(90deg) !important;
         transform-origin: center center !important;
         page-break-after: always !important;
         break-after: page !important;
