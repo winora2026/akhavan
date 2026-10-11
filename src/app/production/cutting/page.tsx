@@ -995,11 +995,11 @@ export default function CuttingPlanningPage() {
     "px-1.5 py-3 text-xs font-bold text-center cursor-pointer select-none hover:bg-teal-500/25 transition whitespace-nowrap"
 
     const pageCss = `
+    @page {
+      size: ${showLabelPreview ? `${LABEL_H_MM}mm ${LABEL_W_MM}mm` : "A4 portrait"};
+      margin: 0;
+    }
     @media print {
-      @page {
-        size: ${showLabelPreview ? `${LABEL_H_MM}mm ${LABEL_W_MM}mm` : "A4 portrait"};
-        margin: 0 !important;
-      }
       html, body {
         margin: 0 !important;
         padding: 0 !important;
@@ -1190,7 +1190,7 @@ export default function CuttingPlanningPage() {
       }}
       dir="rtl"
     >
-      <style jsx global>{pageCss}</style>
+      <style dangerouslySetInnerHTML={{ __html: pageCss }} />
 
       <div className="pointer-events-none fixed inset-0 bg-black/5 print:hidden" />
 
