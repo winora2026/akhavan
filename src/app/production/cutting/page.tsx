@@ -997,32 +997,31 @@ export default function CuttingPlanningPage() {
     const pageCss = `
     @media print {
       @page {
-        /* درایور Gprinter معمولاً صفحه را ۶۰×۹۰ عمودی می‌بیند؛ لیبل واقعی ۹۰×۶۰ افقی است */
-        size: ${showLabelPreview ? `60mm 90mm` : "A4 portrait"};
+        size: ${showLabelPreview ? `90mm 60mm` : "A4 portrait"};
         margin: 0 !important;
       }
-      body {
-        -webkit-print-color-adjust: exact !important;
-        print-color-adjust: exact !important;
+      html, body {
         margin: 0 !important;
         padding: 0 !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+        background: #fff !important;
       }
       ${
         showLabelPreview
           ? `
-      body * { visibility: hidden !important; }
-      .label-print-root,
-      .label-print-root * {
-        visibility: visible !important;
+      .print-root {
+        background: none !important;
+        background-image: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        min-height: 0 !important;
       }
       .label-print-root {
-        position: relative !important;
+        display: block !important;
         margin: 0 !important;
         padding: 0 !important;
-        background: none !important;
-        width: 60mm !important;
-        height: 90mm !important;
-        overflow: visible !important;
+        width: 90mm !important;
       }
       .label-sheet {
         box-sizing: border-box !important;
@@ -1030,19 +1029,15 @@ export default function CuttingPlanningPage() {
         height: 60mm !important;
         max-width: 90mm !important;
         max-height: 60mm !important;
-        margin: 0 !important;
+        margin: 0 auto !important;
         padding: 2mm 3mm !important;
         background: #F0E000 !important;
         border: none !important;
         overflow: hidden !important;
         display: flex !important;
         flex-direction: column !important;
-        position: absolute !important;
-        left: 50% !important;
-        top: 50% !important;
-        /* چرخش تا روی رول عمودی، محتوا افقی چاپ شود */
-        transform: translate(-50%, -50%) rotate(90deg) !important;
-        transform-origin: center center !important;
+        position: relative !important;
+        transform: none !important;
         page-break-after: always !important;
         break-after: page !important;
         break-inside: avoid !important;
@@ -1053,10 +1048,6 @@ export default function CuttingPlanningPage() {
         page-break-after: auto !important;
         break-after: auto !important;
       }
-      .label-dates { font-size: 7.5pt !important; line-height: 1.25 !important; }
-      .label-product { font-size: 11pt !important; }
-      .label-dims { font-size: 12pt !important; }
-      .label-notes, .label-service { font-size: 8pt !important; }
       `
           : `
       html, body, .print-root { background: none !important; }
@@ -1078,7 +1069,6 @@ export default function CuttingPlanningPage() {
       display: flex;
       flex-direction: column;
     }
-    /* بالا: تاریخ‌ها گوشه چپ، سمت راست خالی برای لوگوی چاپ‌شده روی لیبل خام */
     .label-top {
       direction: ltr;
       display: flex;
@@ -1175,6 +1165,7 @@ export default function CuttingPlanningPage() {
       line-height: 1.4;
     }
   `
+
 
   return (
     <div
