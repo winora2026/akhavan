@@ -997,7 +997,7 @@ export default function CuttingPlanningPage() {
     const pageCss = `
     @media print {
       @page {
-        size: ${showLabelPreview ? `90mm 60mm landscape` : "A4 portrait"};
+        size: ${showLabelPreview ? `${LABEL_H_MM}mm ${LABEL_W_MM}mm` : "A4 portrait"};
         margin: 0 !important;
       }
       html, body {
@@ -1021,32 +1021,44 @@ export default function CuttingPlanningPage() {
         display: block !important;
         margin: 0 !important;
         padding: 0 !important;
-        width: 90mm !important;
+        width: ${LABEL_H_MM}mm !important;
+      }
+      /* رول لیبل روی چاپگر عمودی است (۶۰×۹۰)؛ هر لیبل افقی ۹۰×۶۰ نیم‌دور ساعت‌گرد چرخانده می‌شود */
+      .label-page {
+        display: block !important;
+        position: relative !important;
+        box-sizing: border-box !important;
+        width: ${LABEL_H_MM}mm !important;
+        height: ${LABEL_W_MM}mm !important;
+        overflow: hidden !important;
+        page-break-after: always !important;
+        break-after: page !important;
+        break-inside: avoid !important;
+      }
+      .label-page:last-child {
+        page-break-after: auto !important;
+        break-after: auto !important;
       }
       .label-sheet {
         box-sizing: border-box !important;
-        width: 90mm !important;
-        height: 60mm !important;
-        max-width: 90mm !important;
-        max-height: 60mm !important;
-        margin: 0 auto !important;
+        width: ${LABEL_W_MM}mm !important;
+        height: ${LABEL_H_MM}mm !important;
+        max-width: none !important;
+        max-height: none !important;
+        margin: 0 !important;
         padding: 2mm 3mm !important;
         background: #F0E000 !important;
         border: none !important;
         overflow: hidden !important;
         display: flex !important;
         flex-direction: column !important;
-        position: relative !important;
-        transform: none !important;
-        page-break-after: always !important;
-        break-after: page !important;
-        break-inside: avoid !important;
+        position: absolute !important;
+        top: 0 !important;
+        left: ${LABEL_H_MM}mm !important;
+        transform-origin: 0 0 !important;
+        transform: rotate(90deg) !important;
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
-      }
-      .label-sheet:last-child {
-        page-break-after: auto !important;
-        break-after: auto !important;
       }
       `
           : `
@@ -1055,6 +1067,7 @@ export default function CuttingPlanningPage() {
       }
     }
 
+    .label-page { display: contents; }
     .label-sheet {
       box-sizing: border-box;
       width: ${LABEL_W_MM}mm;
@@ -1856,9 +1869,9 @@ export default function CuttingPlanningPage() {
                 return (
                   <div
                     key={`${label.productionItemId}-${idx}`}
-                    className="label-sheet"
-                    dir="rtl"
+                    className="label-page"
                   >
+                  <div className="label-sheet" dir="rtl">
                     {/* بالا چپ: تاریخ‌ها و شماره سفارش */}
                     <div className="label-top">
                       <div className="label-dates">
@@ -1912,6 +1925,7 @@ export default function CuttingPlanningPage() {
                         </div>
                       </div>
                     </FitLabelBody>
+                  </div>
                   </div>
                 )
               })}
