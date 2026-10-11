@@ -997,7 +997,7 @@ export default function CuttingPlanningPage() {
     const pageCss = `
     @media print {
       @page {
-        size: ${showLabelPreview ? `90mm 60mm` : "A4 portrait"};
+        size: ${showLabelPreview ? `90mm 60mm landscape` : "A4 portrait"};
         margin: 0 !important;
       }
       html, body {
