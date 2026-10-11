@@ -1086,7 +1086,7 @@ export default function CuttingPlanningPage() {
       direction: ltr;
       display: flex;
       justify-content: flex-start;
-      height: 13mm;
+      height: 21mm;
       flex: none;
     }
     .label-dates {
@@ -1107,7 +1107,7 @@ export default function CuttingPlanningPage() {
       text-align: left;
       font-weight: 900;
     }
-    .label-line { flex: none; border-top: 1px dashed #000; margin: 0 0 2mm; }
+    .label-line { flex: none; border-top: 1px dashed #000; margin: 0 0 1.5mm; }
     .label-body {
       flex: 1;
       min-height: 0;
@@ -1117,8 +1117,21 @@ export default function CuttingPlanningPage() {
     }
     .fit-line { white-space: nowrap; overflow: hidden; }
     .fit-inner { display: inline-block; white-space: nowrap; }
-    .label-left .fit-inner { transform-origin: left center; }
-    .label-right .fit-inner { transform-origin: right center; }
+    .label-left .fit-inner,
+    .label-row1-left .fit-inner,
+    .label-dims .fit-inner { transform-origin: left center; }
+    .label-right .fit-inner,
+    .label-row1-right .fit-inner { transform-origin: right center; }
+    /* ردیف اول: نام کالا (چپ) و نام مشتری (راست) */
+    .label-row1 {
+      direction: ltr;
+      display: flex;
+      justify-content: space-between;
+      gap: 3mm;
+      flex: none;
+    }
+    .label-row1-left { width: 50%; min-width: 0; overflow: hidden; text-align: left; }
+    .label-row1-right { width: 50%; min-width: 0; overflow: hidden; direction: rtl; text-align: right; }
     .label-product {
       flex: none;
       font-weight: 700;
@@ -1151,11 +1164,15 @@ export default function CuttingPlanningPage() {
       direction: rtl;
       text-align: right;
     }
+    /* ابعاد: یک سطر کامل و درشت */
     .label-dims {
+      flex: none;
+      font-size: calc(var(--fs, 14pt) * 2);
       font-weight: 900;
-      line-height: 1.25;
+      line-height: 1.15;
       direction: ltr;
       unicode-bidi: isolate;
+      margin: 0.5mm 0;
     }
     .label-notes {
       font-size: 10pt;
@@ -1171,7 +1188,6 @@ export default function CuttingPlanningPage() {
     .label-customer {
       font-weight: 900;
       line-height: 1.35;
-      margin-bottom: 1.5mm;
     }
     .label-service {
       font-weight: 900;
@@ -1891,14 +1907,25 @@ export default function CuttingPlanningPage() {
                       maxPt={14}
                       minPt={8}
                     >
-                      <div className="label-main">
-                        {/* چپ: نام کالا، ابعاد، توضیحات و بارکد پایین چپ */}
-                        <div className="label-left fit-box">
+                      {/* ردیف اول: نام کالا (چپ) و نام مشتری (راست) */}
+                      <div className="label-row1">
+                        <div className="label-row1-left">
                           <FitLine
                             className="label-product"
                             text={labelText(label.productName)}
                           />
-                          <FitLine className="label-dims" text={dimsText} />
+                        </div>
+                        <div className="label-row1-right">
+                          <FitLine className="label-customer" text={customerStr} />
+                        </div>
+                      </div>
+
+                      {/* ابعاد: یک سطر کامل */}
+                      <FitLine className="label-dims" text={dimsText} />
+
+                      <div className="label-main">
+                        {/* چپ: توضیحات زیر ابعاد و بارکد پایین چپ */}
+                        <div className="label-left fit-box">
                           {label.notes ? (
                             <FitLines
                               className="label-notes"
@@ -1916,9 +1943,8 @@ export default function CuttingPlanningPage() {
                           </div>
                         </div>
 
-                        {/* راست: نام مشتری و خدمات، هر کدام در یک سطر */}
+                        {/* راست: خدمات، هر کدام در یک سطر، زیر ردیف ابعاد */}
                         <div className="label-right fit-box">
-                          <FitLine className="label-customer" text={customerStr} />
                           {services.map((sv, i) => (
                             <FitLine key={i} className="label-service" text={sv} />
                           ))}

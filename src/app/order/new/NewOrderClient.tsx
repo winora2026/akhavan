@@ -1,4 +1,5 @@
 "use client"
+// REV-2026-10-11-B order/new: embedded preview
 
 import { useRouter, useSearchParams } from "next/navigation"
 import { useState, useMemo, useRef, useEffect, Fragment } from "react"
@@ -321,6 +322,8 @@ export default function NewOrderClient() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const editId = searchParams.get("edit")
+  // پیش‌نمایش کامل پیش‌فاکتور داخل صفحه‌ی «فاکتورها» (iframe): فقط مودال پیش‌فاکتور نشان داده می‌شود
+  const embedPreview = searchParams.get("preview") === "1"
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
   const [orderDate, setOrderDate] = useState<any>(null)
   const [deliveryDate, setDeliveryDate] = useState<any>(null)
@@ -702,6 +705,7 @@ export default function NewOrderClient() {
 
         setQuantityLocked(true)
         setMeterageLocked(true)
+        if (searchParams.get("preview") === "1") setShowInvoice(true)
       } catch (err) {
         console.error(err)
         alert("خطا در بارگذاری سفارش برای ویرایش")
@@ -3962,8 +3966,18 @@ export default function NewOrderClient() {
             )}
 
             {/* مودال پیش‌فاکتور (نسخه‌ی روی صفحه - در چاپ کلاً مخفی می‌شود) */}
+            {embedPreview && (
+              <style>{`
+                @media screen {
+                  html, body { background: transparent !important; overflow: hidden !important; }
+                  body * { visibility: hidden !important; }
+                  #invoice-preview-modal, #invoice-preview-modal * { visibility: visible !important; }
+                  #invoice-preview-modal { background: transparent !important; }
+                }
+              `}</style>
+            )}
             {showInvoice && (
-              <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/60 p-4 print:hidden">
+              <div id="invoice-preview-modal" className="fixed inset-0 z-[160] flex items-center justify-center bg-black/60 p-4 print:hidden">
                 <div className="w-full max-w-5xl max-h-[94vh] overflow-y-auto rounded-2xl bg-white shadow-2xl">
 
                   {/* هدر کنترل‌ها */}
@@ -3996,13 +4010,21 @@ export default function NewOrderClient() {
                         <button onClick={() => window.print()} className="rounded-lg bg-white/20 px-3 py-1.5 text-sm font-bold">
                           چاپ
                         </button>
-                        <button onClick={() => setShowInvoice(false)} className="rounded-lg bg-white/20 px-3 py-1.5 text-sm font-bold">
+                        <button
+                          onClick={() =>
+                            embedPreview
+                              ? window.parent.postMessage({ type: "invoice-preview-close" }, "*")
+                              : setShowInvoice(false)
+                          }
+                          className="rounded-lg bg-white/20 px-3 py-1.5 text-sm font-bold"
+                        >
                           بستن
                         </button>
                       </div>
                     </div>
 
                     {/* نوار تخفیف / فاکتور رسمی — در ردیف جداگانه و با فاصله‌ی بیشتر تا شلوغ/باریک نشود */}
+                    {!embedPreview && (
                     <div className="flex items-center gap-3 flex-wrap bg-white/10 rounded-xl px-3 py-2.5">
                       <div className="flex items-center gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
                         <label className="flex items-center gap-1.5 text-sm cursor-pointer">
@@ -4071,6 +4093,7 @@ export default function NewOrderClient() {
                         فاکتور رسمی (+۱۰٪)
                       </label>
                     </div>
+                    )}
                   </div>
 
                   {renderInvoiceContent()}
