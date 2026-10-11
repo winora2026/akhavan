@@ -997,9 +997,8 @@ export default function CuttingPlanningPage() {
     const pageCss = `
     @media print {
       @page {
-        size: ${
-          showLabelPreview ? `90mm 60mm` : "A4 portrait"
-        };
+        /* درایور Gprinter معمولاً صفحه را ۶۰×۹۰ عمودی می‌بیند؛ لیبل واقعی ۹۰×۶۰ افقی است */
+        size: ${showLabelPreview ? `60mm 90mm` : "A4 portrait"};
         margin: 0 !important;
       }
       body {
@@ -1011,20 +1010,19 @@ export default function CuttingPlanningPage() {
       ${
         showLabelPreview
           ? `
-      /* فقط لیبل‌ها دیده شوند */
       body * { visibility: hidden !important; }
       .label-print-root,
       .label-print-root * {
         visibility: visible !important;
       }
       .label-print-root {
-        position: absolute !important;
-        left: 0 !important;
-        top: 0 !important;
+        position: relative !important;
         margin: 0 !important;
         padding: 0 !important;
         background: none !important;
-        width: 90mm !important;
+        width: 60mm !important;
+        height: 90mm !important;
+        overflow: visible !important;
       }
       .label-sheet {
         box-sizing: border-box !important;
@@ -1033,10 +1031,18 @@ export default function CuttingPlanningPage() {
         max-width: 90mm !important;
         max-height: 60mm !important;
         margin: 0 !important;
-        padding: 2.5mm 4mm !important;
+        padding: 2mm 3mm !important;
         background: #F0E000 !important;
         border: none !important;
         overflow: hidden !important;
+        display: flex !important;
+        flex-direction: column !important;
+        position: absolute !important;
+        left: 50% !important;
+        top: 50% !important;
+        /* چرخش تا روی رول عمودی، محتوا افقی چاپ شود */
+        transform: translate(-50%, -50%) rotate(-90deg) !important;
+        transform-origin: center center !important;
         page-break-after: always !important;
         break-after: page !important;
         break-inside: avoid !important;
@@ -1047,6 +1053,10 @@ export default function CuttingPlanningPage() {
         page-break-after: auto !important;
         break-after: auto !important;
       }
+      .label-dates { font-size: 7.5pt !important; line-height: 1.25 !important; }
+      .label-product { font-size: 11pt !important; }
+      .label-dims { font-size: 12pt !important; }
+      .label-notes, .label-service { font-size: 8pt !important; }
       `
           : `
       html, body, .print-root { background: none !important; }
