@@ -826,7 +826,15 @@ export default function CuttingPlanningPage() {
         alert(data.error || "خطا در چاپ")
         return
       }
-      setLabels(data.labels || [])
+      setLabels(
+        (data.labels || []).map((l: any) => ({
+          ...l,
+          servicesText:
+            l.servicesText ||
+            items.find((i: any) => i.productionItemId === l.productionItemId)?.servicesText ||
+            "",
+        }))
+      )
       setShowLabelPreview(true)
       await fetchData()
     } catch (error) {
@@ -1046,7 +1054,7 @@ export default function CuttingPlanningPage() {
         max-width: none !important;
         max-height: none !important;
         margin: 0 !important;
-        padding: 2mm 3mm !important;
+        padding: 2mm 3mm 0.5mm !important;
         background: #F0E000 !important;
         border: none !important;
         overflow: hidden !important;
@@ -1072,7 +1080,7 @@ export default function CuttingPlanningPage() {
       box-sizing: border-box;
       width: ${LABEL_W_MM}mm;
       height: ${LABEL_H_MM}mm;
-      padding: 2.5mm 4mm;
+      padding: 2.5mm 4mm 1mm;
       background: #F0E000;
       border: 1px solid #c4a000;
       color: #000;
@@ -1086,7 +1094,7 @@ export default function CuttingPlanningPage() {
       direction: ltr;
       display: flex;
       justify-content: flex-start;
-      height: 21mm;
+      height: 18.5mm;
       flex: none;
     }
     .label-dates {
