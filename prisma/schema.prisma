@@ -23,6 +23,7 @@ model Customer {
   opportunities Opportunity[]
   activities    Activity[]
   followUps     FollowUp[]
+    sepidarPartyRef     Int?
 }
 
 model Order {
@@ -57,6 +58,11 @@ model Order {
   notes                  String?
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
+   sepidarSyncStatus   String?   // null | PENDING | SUCCESS | FAILED
+  sepidarInvoiceId    String?
+  sepidarSyncedAt     DateTime?
+  sepidarSyncError    String?
+  sepidarLastPayload  String?   // JSON آخرین درخواست (برای دیباگ) 
   items                  OrderItem[]
   productionOrders       ProductionOrder[]
 }
@@ -414,4 +420,29 @@ model LostReason {
   leads         Lead[]
   opportunities Opportunity[]
   createdAt     DateTime      @default(now())
+}
+// ====================== نگاشت سپیدار ======================
+model SepidarItemMap {
+  id          String   @id @default(cuid())
+  productName String   @unique
+  itemRef     Int
+  stockRef    Int?
+  unitRef     Int?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model SepidarSettings {
+  id                String   @id @default("default")
+  saleTypeRef       Int?
+  currencyRef       Int      @default(1)
+  slRef             Int?
+  deliveryLocationRef Int?
+  defaultStockRef   Int?
+  settlementType    Int      @default(1)
+  state             Int      @default(1)
+  rate              Float    @default(1)
+  mockMode          Boolean  @default(true)
+  updatedAt         DateTime @updatedAt
 }

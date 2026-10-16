@@ -1,5 +1,5 @@
 "use client"
-// REV-2026-10-11-B invoices: search, registrar column, full preview
+// REV-2026-10-15 invoices: Sepidar single+bulk + role gate (finance/admin)
 
 import { useState, useEffect, useMemo } from "react"
 import Link from "next/link"
@@ -25,10 +25,12 @@ type OrderFromApi = {
   discountAmount: number | null
   discountPercent: number | null
   salesRep?: string | null
-  /** کسی که به فاکتور منتقل کرده */
   convertedBy?: string | null
-  /** زمان تبدیل به فاکتور */
   invoicedAt?: string | null
+  sepidarSyncStatus?: string | null
+  sepidarInvoiceId?: string | null
+  sepidarSyncedAt?: string | null
+  sepidarSyncError?: string | null
   customer: {
     id: string
     name: string
@@ -108,7 +110,6 @@ const parseOrderDate = (dateStr: string | null | undefined): Date | null => {
   return isNaN(d.getTime()) ? null : d
 }
 
-/** یکسان‌سازی متن برای جستجو: ي/ك عربی، نیم‌فاصله، ارقام فارسی/عربی، حروف بزرگ و فاصله‌ی اضافه */
 const normalizeText = (value: string | null | undefined) => {
   if (!value) return ""
   return String(value)
@@ -152,7 +153,6 @@ const getFaMonth = (dateStr: string | null | undefined) => {
   }
 }
 
-/** کارشناس انتقال به فاکتور: فیلد اختصاصی یا متن notes */
 function getInvoiceExpert(order: OrderFromApi): string {
   if (order.convertedBy && order.convertedBy.trim()) return order.convertedBy.trim()
   const m = (order.notes || "").match(/تبدیل شده توسط:\s*(.+)/)
@@ -160,18 +160,20 @@ function getInvoiceExpert(order: OrderFromApi): string {
   return "—"
 }
 
-/** تاریخ پیش‌فاکتور: createdAt (ثابت می‌ماند)؛ orderDate هنگام تبدیل به فاکتور به امروز تغییر می‌کند */
 function getPreInvoiceDate(order: OrderFromApi): string | null {
   return order.createdAt || order.orderDate || null
 }
 
-/** تاریخ فاکتور: invoicedAt یا updatedAt بعد از تبدیل */
 function getInvoiceDate(order: OrderFromApi): string | null {
   if (order.invoicedAt) return order.invoicedAt
   if ((order.notes || "").includes("تبدیل شده توسط") && order.updatedAt) {
     return order.updatedAt
   }
   return order.updatedAt || null
+}
+
+function isAlreadySynced(o: OrderFromApi) {
+  return o.sepidarSyncStatus === "SUCCESS" && !!o.sepidarInvoiceId
 }
 
 export default function InvoicesPage() {
@@ -186,12 +188,25 @@ export default function InvoicesPage() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
   const [revertItem, setRevertItem] = useState<OrderFromApi | null>(null)
   const [reverting, setReverting] = useState(false)
-
-  // پیش‌نمایش کامل پیش‌فاکتور با دبل‌کلیک (همان نمای چاپ صفحه‌ی ثبت سفارش)
   const [previewId, setPreviewId] = useState<string | null>(null)
+  const [syncingId, setSyncingId] = useState<string | null>(null)
+  const [bulkSyncing, setBulkSyncing] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [canSyncSepidar, setCanSyncSepidar] = useState(false)
 
   useEffect(() => {
     fetchOrders()
+    ;(async () => {
+      try {
+        const res = await fetch("/api/auth/me")
+        if (!res.ok) return
+        const data = await res.json()
+        const role = String(data?.user?.role || "").toLowerCase()
+        setCanSyncSepidar(role === "finance" || role === "admin")
+      } catch {
+        setCanSyncSepidar(false)
+      }
+    })()
   }, [])
 
   const fetchOrders = async () => {
@@ -212,11 +227,13 @@ export default function InvoicesPage() {
     }
   }
 
-  // بستن پیش‌نمایش: دکمه‌ی «بستن» داخل خود پیش‌نمایش یا کلید Escape
   useEffect(() => {
     if (!previewId) return
     const onMessage = (e: MessageEvent) => {
-      if (e.origin === window.location.origin && e.data?.type === "invoice-preview-close") {
+      if (
+        e.origin === window.location.origin &&
+        e.data?.type === "invoice-preview-close"
+      ) {
         setPreviewId(null)
       }
     }
@@ -230,6 +247,126 @@ export default function InvoicesPage() {
       window.removeEventListener("keydown", onKey)
     }
   }, [previewId])
+
+  const sendOneToSepidar = async (order: OrderFromApi, silent = false) => {
+    if (isAlreadySynced(order)) {
+      if (!silent) {
+        alert(`قبلاً ارسال شده\nشناسه سپیدار: ${order.sepidarInvoiceId}`)
+      }
+      return { ok: false, skipped: true, orderNumber: order.orderNumber }
+    }
+    const res = await fetch("/api/sepidar/sync-invoice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderId: order.id }),
+    })
+    const data = await res.json()
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: data.error || "خطا",
+        orderNumber: order.orderNumber,
+      }
+    }
+    return {
+      ok: true,
+      mock: !!data.mock,
+      sepidarInvoiceId: data.sepidarInvoiceId,
+      orderNumber: order.orderNumber,
+    }
+  }
+
+  const sendToSepidar = async (order: OrderFromApi) => {
+    if (!canSyncSepidar) {
+      alert("فقط مالی و مدیریت مجاز به ارسال سپیدار هستند")
+      return
+    }
+    if (isAlreadySynced(order)) {
+      alert(`قبلاً ارسال شده\nشناسه سپیدار: ${order.sepidarInvoiceId}`)
+      return
+    }
+    if (
+      !confirm(
+        `فاکتور ${order.orderNumber} — ${order.customer?.name}\nبه سپیدار ارسال شود؟`
+      )
+    ) {
+      return
+    }
+    setSyncingId(order.id)
+    try {
+      const result = await sendOneToSepidar(order)
+      if (!result.ok && !result.skipped) {
+        alert(result.error || "خطا در ارسال به سپیدار")
+        await fetchOrders()
+        return
+      }
+      if (result.ok) {
+        if (result.mock) {
+          alert(
+            `حالت آزمایشی (mock)\nشناسه: ${result.sepidarInvoiceId}\n\nشنبه با توکن واقعی وصل می‌شود.`
+          )
+        } else {
+          alert(`ارسال شد\nشناسه سپیدار: ${result.sepidarInvoiceId}`)
+        }
+      }
+      await fetchOrders()
+    } catch {
+      alert("خطا در ارتباط با سرور")
+    } finally {
+      setSyncingId(null)
+    }
+  }
+
+  const sendSelectedToSepidar = async () => {
+    if (!canSyncSepidar) {
+      alert("فقط مالی و مدیریت مجاز به ارسال سپیدار هستند")
+      return
+    }
+    const targets = filtered.filter(
+      (o) => selectedIds.includes(o.id) && !isAlreadySynced(o)
+    )
+    if (targets.length === 0) {
+      alert("فاکتور قابل ارسالی انتخاب نشده (یا همه قبلاً ارسال شده‌اند)")
+      return
+    }
+    if (
+      !confirm(
+        `${targets.length} فاکتور انتخاب‌شده به سپیدار ارسال شود؟\n(موارد ارسال‌شده قبلی رد می‌شوند)`
+      )
+    ) {
+      return
+    }
+    setBulkSyncing(true)
+    let okCount = 0
+    let failCount = 0
+    let mockAny = false
+    const errors: string[] = []
+    try {
+      for (const order of targets) {
+        try {
+          const r = await sendOneToSepidar(order, true)
+          if (r.ok) {
+            okCount++
+            if (r.mock) mockAny = true
+          } else if (!r.skipped) {
+            failCount++
+            errors.push(`${r.orderNumber}: ${r.error || "خطا"}`)
+          }
+        } catch {
+          failCount++
+          errors.push(`${order.orderNumber}: خطای شبکه`)
+        }
+      }
+      await fetchOrders()
+      setSelectedIds([])
+      let msg = `ارسال گروهی تمام شد\nموفق: ${okCount}\nناموفق: ${failCount}`
+      if (mockAny) msg += "\n\n(حداقل یک مورد در حالت mock بود)"
+      if (errors.length) msg += "\n\n" + errors.slice(0, 8).join("\n")
+      alert(msg)
+    } finally {
+      setBulkSyncing(false)
+    }
+  }
 
   const salesExperts = useMemo(() => {
     const fromData = orders
@@ -261,7 +398,6 @@ export default function InvoicesPage() {
   const filtered = useMemo(() => {
     let result = [...orders]
 
-    // جستجو: همه‌ی کلمه‌ها باید در نام مشتری / شماره سفارش / کارشناس‌ها باشند (مستقل از ي/ی، ك/ک، نیم‌فاصله و ارقام)
     const tokens = normalizeText(search).split(" ").filter(Boolean)
     if (tokens.length) {
       result = result.filter((item) => {
@@ -280,7 +416,6 @@ export default function InvoicesPage() {
       })
     }
 
-    // فیلتر تاریخ روی تاریخ فاکتور (اولویت) وگرنه پیش‌فاکتور
     if (fromDate) {
       const from = fromDate?.toDate ? fromDate.toDate() : new Date(fromDate)
       from.setHours(0, 0, 0, 0)
@@ -372,13 +507,10 @@ export default function InvoicesPage() {
         }
         case "salesRep":
           return (
-            dir *
-            getInvoiceExpert(a).localeCompare(getInvoiceExpert(b), "fa")
+            dir * getInvoiceExpert(a).localeCompare(getInvoiceExpert(b), "fa")
           )
         case "registrar":
-          return (
-            dir * (a.salesRep || "").localeCompare(b.salesRep || "", "fa")
-          )
+          return dir * (a.salesRep || "").localeCompare(b.salesRep || "", "fa")
         default:
           return 0
       }
@@ -395,6 +527,29 @@ export default function InvoicesPage() {
     sortKey,
     sortDir,
   ])
+
+  const selectableIds = useMemo(
+    () => filtered.filter((o) => !isAlreadySynced(o)).map((o) => o.id),
+    [filtered]
+  )
+
+  const allSelectableChecked =
+    selectableIds.length > 0 &&
+    selectableIds.every((id) => selectedIds.includes(id))
+
+  const toggleSelectAll = () => {
+    if (allSelectableChecked) {
+      setSelectedIds((prev) => prev.filter((id) => !selectableIds.includes(id)))
+    } else {
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...selectableIds])))
+    }
+  }
+
+  const toggleSelectOne = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    )
+  }
 
   const report = useMemo(() => {
     const totalCount = filtered.length
@@ -430,6 +585,7 @@ export default function InvoicesPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "خطا در برگشت")
       setOrders((prev) => prev.filter((o) => o.id !== revertItem.id))
+      setSelectedIds((prev) => prev.filter((id) => id !== revertItem.id))
       setRevertItem(null)
       alert("فاکتور به پیش‌فاکتور برگشت و از صف تولید حذف شد")
     } catch (e: any) {
@@ -469,7 +625,19 @@ export default function InvoicesPage() {
               نرم‌افزار اخوان | شیشه و آینه
             </p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex gap-3 flex-wrap justify-end">
+            {canSyncSepidar && (
+              <button
+                type="button"
+                disabled={bulkSyncing || selectedIds.length === 0}
+                onClick={sendSelectedToSepidar}
+                className="rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed px-5 py-3 text-base font-bold text-white shadow transition focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              >
+                {bulkSyncing
+                  ? "در حال ارسال گروهی..."
+                  : `ارسال انتخاب‌شده‌ها (${selectedIds.length})`}
+              </button>
+            )}
             <Link
               href="/order/new"
               className="rounded-xl bg-teal-500 hover:bg-teal-600 px-6 py-3 text-lg font-bold text-white shadow transition focus:outline-none focus:ring-2 focus:ring-teal-400"
@@ -589,6 +757,17 @@ export default function InvoicesPage() {
             <table className="w-full text-sm text-blue-900 border-collapse">
               <thead>
                 <tr className="border-b border-teal-500/30 bg-teal-500/15 text-right">
+                  {canSyncSepidar && (
+                    <th className="p-3 font-bold text-center w-10">
+                      <input
+                        type="checkbox"
+                        checked={allSelectableChecked}
+                        onChange={toggleSelectAll}
+                        title="انتخاب همه قابل‌ارسال در لیست فیلترشده"
+                        className="w-4 h-4 cursor-pointer"
+                      />
+                    </th>
+                  )}
                   <th className="p-3 font-bold text-center">ردیف</th>
                   <th className={thClass} onClick={() => toggleSort("customer")}>
                     نام مشتری{sortIndicator("customer")}
@@ -665,6 +844,7 @@ export default function InvoicesPage() {
                   <th className={thClass} onClick={() => toggleSort("salesRep")}>
                     منتقل‌کننده{sortIndicator("salesRep")}
                   </th>
+                  <th className="p-3 font-bold text-center">سپیدار</th>
                   <th className="p-3 font-bold text-center">عملیات</th>
                 </tr>
               </thead>
@@ -676,6 +856,21 @@ export default function InvoicesPage() {
                     title="دبل‌کلیک: نمایش کامل پیش‌فاکتور"
                     onDoubleClick={() => setPreviewId(item.id)}
                   >
+                    {canSyncSepidar && (
+                      <td
+                        className="p-3 text-center"
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(item.id)}
+                          disabled={isAlreadySynced(item)}
+                          onChange={() => toggleSelectOne(item.id)}
+                          className="w-4 h-4 cursor-pointer disabled:opacity-40"
+                        />
+                      </td>
+                    )}
                     <td className="p-3 text-center font-bold">{index + 1}</td>
                     <td className="p-3 font-bold whitespace-nowrap">
                       {item.customer?.name || "—"}
@@ -727,6 +922,32 @@ export default function InvoicesPage() {
                       className="p-3 text-center"
                       onDoubleClick={(e) => e.stopPropagation()}
                     >
+                      {item.sepidarSyncStatus === "SUCCESS" ? (
+                        <span
+                          className="inline-block rounded-lg bg-green-100 text-green-800 text-xs font-bold px-2 py-1"
+                          title={item.sepidarInvoiceId || ""}
+                        >
+                          ✓ ارسال‌شده
+                        </span>
+                      ) : item.sepidarSyncStatus === "FAILED" ? (
+                        <span
+                          className="inline-block rounded-lg bg-red-100 text-red-800 text-xs font-bold px-2 py-1"
+                          title={item.sepidarSyncError || ""}
+                        >
+                          خطا
+                        </span>
+                      ) : item.sepidarSyncStatus === "PENDING" ? (
+                        <span className="text-xs font-bold text-amber-700">
+                          در حال ارسال…
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-500">—</span>
+                      )}
+                    </td>
+                    <td
+                      className="p-3 text-center"
+                      onDoubleClick={(e) => e.stopPropagation()}
+                    >
                       <div className="flex flex-col gap-1 items-center">
                         <Link
                           href={`/order/new?edit=${item.id}`}
@@ -735,6 +956,35 @@ export default function InvoicesPage() {
                         >
                           ویرایش
                         </Link>
+                        {canSyncSepidar && (
+                          <button
+                            type="button"
+                            disabled={
+                              syncingId === item.id ||
+                              bulkSyncing ||
+                              item.sepidarSyncStatus === "SUCCESS"
+                            }
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              sendToSepidar(item)
+                            }}
+                            className="rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed px-3 py-1.5 text-xs font-bold text-white transition focus:ring-2 focus:ring-indigo-400"
+                            title={
+                              item.sepidarSyncStatus === "SUCCESS"
+                                ? `ارسال‌شده: ${item.sepidarInvoiceId}`
+                                : item.sepidarSyncError ||
+                                  "ارسال دستی به سپیدار"
+                            }
+                          >
+                            {syncingId === item.id
+                              ? "..."
+                              : item.sepidarSyncStatus === "SUCCESS"
+                                ? "✓ سپیدار"
+                                : item.sepidarSyncStatus === "FAILED"
+                                  ? "تلاش مجدد سپیدار"
+                                  : "ارسال سپیدار"}
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={(e) => {
@@ -795,7 +1045,6 @@ export default function InvoicesPage() {
         )}
       </div>
 
-      {/* پیش‌نمایش کامل پیش‌فاکتور با دبل‌کلیک (همان نمای چاپ صفحه‌ی ثبت سفارش) */}
       {previewId && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
           <iframe
