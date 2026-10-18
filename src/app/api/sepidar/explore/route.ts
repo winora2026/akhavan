@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSession } from "@/lib/auth"
-import { sepidarFetch, isMockMode } from "@/lib/sepidar/client"
+import { sepidarFetch, isMockMode, getAll } from "@/lib/sepidar/client"
 
 // فقط متدهای GET و فقط‌خواندنی؛ برای دیدن خروجی سپیدار (بدون تغییر داده)
 const METHODS: Record<string, string> = {
@@ -9,6 +9,16 @@ const METHODS: Record<string, string> = {
   items: "/api/sepidar/v1/Inventory/GetAllItems",
   units: "/api/sepidar/v1/Inventory/GetAllUnits",
   stocks: "/api/sepidar/v1/Inventory/GetAllItemStockSummaries",
+}
+
+function norm(s: string) {
+  return (s || "")
+    .replace(/[\u200c\u200f\u200e]/g, "")
+    .replace(/ي/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
 }
 
 export async function GET(req: NextRequest) {
@@ -33,19 +43,46 @@ export async function GET(req: NextRequest) {
     )
   }
 
-  // بقیه‌ی پارامترها (مثل iscustomer) عیناً به سپیدار پاس داده می‌شوند
-  const forward = new URLSearchParams()
-  sp.forEach((v, k) => {
-    if (k !== "m" && k !== "limit") forward.set(k, v)
-  })
-  if (m === "parties" && ![...forward.keys()].some((k) => k.toLowerCase() === "iscustomer")) {
-    forward.set("iscustomer", "1")
-  }
-  const limit = Math.max(1, Math.min(Number(sp.get("limit")) || 50, 2000))
-
   try {
-    const qs = forward.toString()
-    const res = await sepidarFetch(qs ? `${path}?${qs}` : path, {
+    // جستجوی نام در کل طرف‌حساب‌ها: ?m=parties&q=قربانی
+    const q = sp.get("q")
+    if (m === "parties" && q) {
+      const all = await getAll(path, { IsCustomer: sp.get("IsCustomer") || "true" }, 200)
+      const nq = norm(q)
+      const hit = all
+        .filter((p: any) => norm(`${p?.name ?? ""} ${p?.lastName ?? ""}`).includes(nq))
+        .slice(0, 20)
+        .map((p: any) => ({
+          partyId: p.partyId,
+          name: p.name,
+          lastName: p.lastName,
+          dlCode: p.dlCode,
+          isCustomer: p.isCustomer,
+          isVendor: p.isVendor,
+          isActive: p.isActive,
+        }))
+      return NextResponse.json({
+        method: m,
+        q,
+        totalLoaded: all.length,
+        matches: hit.length,
+        data: hit,
+      })
+    }
+
+    // بقیه‌ی پارامترها (مثل IsCustomer) عیناً به سپیدار پاس داده می‌شوند
+    const forward = new URLSearchParams()
+    sp.forEach((v, k) => {
+      if (k !== "m" && k !== "limit" && k !== "q") forward.set(k, v)
+    })
+    const has = (name: string) =>
+      [...forward.keys()].some((k) => k.toLowerCase() === name.toLowerCase())
+    if (m === "parties" && !has("IsCustomer")) forward.set("IsCustomer", "true")
+    if (!has("Page")) forward.set("Page", "1")
+    if (!has("ItemCount")) forward.set("ItemCount", "50")
+    const limit = Math.max(1, Math.min(Number(sp.get("limit")) || 50, 2000))
+
+    const res = await sepidarFetch(`${path}?${forward.toString()}`, {
       signal: AbortSignal.timeout(30_000),
     })
     const text = await res.text()
@@ -57,7 +94,11 @@ export async function GET(req: NextRequest) {
     }
     if (!res.ok) {
       return NextResponse.json(
-        { error: `Sepidar ${res.status}`, response: data },
+        {
+          error: `Sepidar ${res.status}`,
+          correlationId: res.headers.get("x-correlation-id"),
+          response: data,
+        },
         { status: 502 }
       )
     }
