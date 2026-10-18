@@ -18,10 +18,27 @@ function digits(s: string) {
     .replace(/\D/g, "")
 }
 
-const PARTY_ID_KEYS = ["partyId", "id", "ref", "partyRef", "partySerial", "PartyId"]
+const PARTY_ID_KEYS = ["partyId", "id", "ref", "partyRef", "partySerial", "PartyId", "Id"]
+
+// عنوان‌های احترام که در مقایسه‌ی نام نادیده گرفته می‌شوند
+const HONORIFICS = new Set(["آقای", "اقای", "خانم", "دکتر", "مهندس"])
+
+// کلمات نام (بدون علائم نگارشی و عنوان‌ها)
+function nameTokens(s: string): string[] {
+  return norm(s)
+    .replace(/[.,،؛:;()\-_/\\]/g, " ")
+    .split(" ")
+    .filter((t) => t && !HONORIFICS.has(t))
+}
+
+// کلید نام، مستقل از ترتیب کلمات:
+// «آذریان غلام عباس» (نام‌خانوادگی اول) و «غلام عباس آذریان» (نام اول) یکی حساب می‌شوند
+const nameKey = (s: string) => nameTokens(s).sort().join(" ")
 
 function partyDisplayName(p: any) {
-  return norm(`${p?.name ?? p?.Name ?? ""} ${p?.lastName ?? p?.LastName ?? ""}`)
+  const first = p?.name ?? p?.Name ?? ""
+  const last = p?.lastName ?? p?.LastName ?? ""
+  return `${first} ${last}`
 }
 
 export function buildCreatePartyPayload(customer: {
@@ -50,46 +67,133 @@ export function buildCreatePartyPayload(customer: {
   }
 }
 
-let partyCache: { at: number; list: any[] } | null = null
-let partyInflight: Promise<any[]> | null = null
+// ───────────── لیست طرف‌حساب‌ها (کش ۱۰ دقیقه‌ای) ─────────────
+// هم مشتری‌ها و هم طرف‌حساب‌هایی که «مشتری» نیستند خوانده می‌شوند، چون کد/شناسه‌ی یکتا
+// بین همه‌ی طرف‌حساب‌ها مشترک است و ممکن است تکراری از نوع دیگری باشد.
+const MAX_PAGES = 400 // × ۵۰ ردیف = حداکثر ۲۰٬۰۰۰ طرف‌حساب
 
-async function loadParties() {
+type PartyRow = any
+
+let partyCache: { at: number; list: PartyRow[] } | null = null
+let partyInflight: Promise<PartyRow[]> | null = null
+
+async function loadParties(): Promise<PartyRow[]> {
   if (partyCache && Date.now() - partyCache.at < 10 * 60_000) return partyCache.list
   if (!partyInflight) {
-    partyInflight = getAll("/api/sepidar/v1/Parties/GetAllParty", { IsCustomer: true }, 100)
-      .then((list) => {
-        partyCache = { at: Date.now(), list }
-        return list
-      })
-      .finally(() => {
-        partyInflight = null
-      })
+    partyInflight = (async () => {
+      const customers = await getAll(
+        "/api/sepidar/v1/Parties/GetAllParty",
+        { IsCustomer: true },
+        MAX_PAGES
+      )
+      let others: any[] = []
+      try {
+        others = await getAll(
+          "/api/sepidar/v1/Parties/GetAllParty",
+          { IsCustomer: false },
+          MAX_PAGES
+        )
+      } catch (e) {
+        // اگر سپیدار این فیلتر را نپذیرفت، فقط لیست مشتری‌ها کافی است
+        console.error("Sepidar: خواندن طرف‌حساب‌های غیرمشتری ممکن نشد", e)
+      }
+      const list = [
+        ...customers.map((p) => ({ ...p, __src: "customer" })),
+        ...others.map((p) => ({ ...p, __src: "other" })),
+      ]
+      partyCache = { at: Date.now(), list }
+      return list
+    })().finally(() => {
+      partyInflight = null
+    })
   }
   return partyInflight
 }
 
-async function findExistingParty(name: string, phone?: string | null) {
-  const parties = await loadParties()
-  const target = norm(name)
-  const matches = parties.filter((p) => partyDisplayName(p) === target)
-  if (matches.length === 0) return null
-  if (matches.length > 1 && phone) {
+function pickBest(matches: PartyRow[], phone?: string | null): PartyRow {
+  // اول مشتری‌ها، بعد تطبیق تلفن
+  const customers = matches.filter((p) => p.__src === "customer")
+  const pool = customers.length ? customers : matches
+  if (pool.length > 1 && phone) {
     const d = digits(phone)
-    const byPhone = matches.find((p) =>
-      JSON.stringify(p?.phones ?? p?.Phones ?? "").includes(d.slice(-7))
-    )
-    if (byPhone) return byPhone
+    if (d.length >= 7) {
+      const byPhone = pool.find((p) =>
+        digits(JSON.stringify(p?.phones ?? p?.Phones ?? "")).includes(d.slice(-7))
+      )
+      if (byPhone) return byPhone
+    }
   }
-  return matches[0]
+  return pool[0]
 }
 
-/**
- * مشتری اخوان را در سپیدار تضمین می‌کند:
- * 1) اگر قبلاً لینک شده همان را برمی‌گرداند
- * 2) اگر طرف‌حسابی با همین نام در سپیدار هست، به آن لینک می‌کند (بدون ساخت تکراری)
- * 3) در غیر این صورت با CreateParty (همراه آدرس و تلفن) می‌سازد
- */
-export async function ensureSepidarParty(customerId: string) {
+async function findExistingParty(
+  name: string,
+  phone?: string | null,
+  opts: { fuzzy?: boolean } = {}
+): Promise<{ match: PartyRow | null; candidates: PartyRow[] }> {
+  const parties = await loadParties()
+  const key = nameKey(name)
+  if (!key) return { match: null, candidates: [] }
+
+  const exact = parties.filter((p) => nameKey(partyDisplayName(p)) === key)
+  if (exact.length) return { match: pickBest(exact, phone), candidates: exact }
+
+  if (!opts.fuzzy) return { match: null, candidates: [] }
+
+  // تطبیق نرم (فقط وقتی سپیدار صراحتاً «تکراری» گفته): همه‌ی کلمات یکی از دو نام در دیگری باشد
+  const mine = nameTokens(name)
+  if (mine.length < 2) return { match: null, candidates: [] }
+  const candidates = parties.filter((p) => {
+    const theirs = nameTokens(partyDisplayName(p))
+    if (theirs.length < 2) return false
+    return theirs.every((t) => mine.includes(t)) || mine.every((t) => theirs.includes(t))
+  })
+  return { match: candidates.length === 1 ? candidates[0] : null, candidates }
+}
+
+function isDuplicateError(e: any) {
+  const m = String(e?.message || e || "")
+  return /VALIDATION_ERROR/.test(m) && /تکراری|duplicate/i.test(m)
+}
+
+async function linkToCustomer(customerId: string, party: PartyRow) {
+  const id = pickId(party, PARTY_ID_KEYS)
+  if (!id) {
+    throw new Error(
+      `طرف‌حساب در سپیدار پیدا شد ولی شناسه‌اش مشخص نیست. کلیدها: ${Object.keys(party).join(", ")}`
+    )
+  }
+  await prisma.customer.update({
+    where: { id: customerId },
+    data: { sepidarPartyRef: Number(id) } as any,
+  })
+  return {
+    partyRef: Number(id),
+    created: false,
+    linked: true,
+    // اگر طرف‌حساب پیداشده «مشتری» نباشد، ثبت فاکتور فروش برای او ممکن است خطا بدهد
+    warning: party.__src === "other" ? "طرف‌حساب پیداشده در سپیدار از نوع مشتری نیست" : undefined,
+  }
+}
+
+// اتصال دستی مشتری به یک طرف‌حساب سپیدار (وقتی تطبیق خودکار ممکن نیست)
+export async function linkCustomerToSepidarParty(customerId: string, partyRef: number) {
+  await prisma.customer.update({
+    where: { id: customerId },
+    data: { sepidarPartyRef: Number(partyRef) } as any,
+  })
+  return { partyRef: Number(partyRef) }
+}
+
+type EnsureResult = {
+  partyRef: number
+  created: boolean
+  linked: boolean
+  mock?: boolean
+  warning?: string
+}
+
+async function doEnsure(customerId: string): Promise<EnsureResult> {
   const customer = await prisma.customer.findUnique({ where: { id: customerId } })
   if (!customer) throw new Error("مشتری یافت نشد")
 
@@ -102,30 +206,43 @@ export async function ensureSepidarParty(customerId: string) {
     return { partyRef: 1, created: false, linked: false, mock: true }
   }
 
-  const existing = await findExistingParty(c.name, c.phone)
-  if (existing) {
-    const id = pickId(existing, PARTY_ID_KEYS)
-    if (!id) {
-      throw new Error(
-        `طرف‌حساب در سپیدار پیدا شد ولی شناسه‌اش مشخص نیست. کلیدها: ${Object.keys(existing).join(", ")}`
-      )
-    }
-    await prisma.customer.update({
-      where: { id: customerId },
-      data: { sepidarPartyRef: Number(id) } as any,
-    })
-    return { partyRef: Number(id), created: false, linked: true }
-  }
+  // ۱) اگر در سپیدار هست، فقط لینک می‌کنیم (بدون ساخت تکراری)
+  const found = await findExistingParty(c.name, c.phone)
+  if (found.match) return linkToCustomer(customerId, found.match)
 
+  // ۲) در غیر این صورت می‌سازیم
   const payload = buildCreatePartyPayload(c)
-  const result = await sepidarPost("/api/sepidar/v1/Parties/CreateParty", payload)
+  let result: any
+  try {
+    result = await sepidarPost("/api/sepidar/v1/Parties/CreateParty", payload)
+  } catch (e: any) {
+    if (!isDuplicateError(e)) throw e
+
+    // سپیدار می‌گوید این طرف‌حساب (کد/شناسه‌ی یکتا) از قبل هست ولی با نام پیدایش نکردیم:
+    // لیست را تازه می‌خوانیم و این بار با تطبیق نرم‌تر دنبالش می‌گردیم
+    partyCache = null
+    const retry = await findExistingParty(c.name, c.phone, { fuzzy: true })
+    if (retry.match) return linkToCustomer(customerId, retry.match)
+
+    const sample = retry.candidates
+      .slice(0, 5)
+      .map((p) => `${partyDisplayName(p).trim()} (شناسه: ${pickId(p, PARTY_ID_KEYS) ?? "؟"})`)
+      .join("، ")
+    throw new Error(
+      `سپیدار این مشتری را تکراری می‌داند ولی طرف‌حسابِ مطابق پیدا نشد (نام: «${c.name}»). ` +
+        (sample
+          ? `نزدیک‌ترین‌ها: ${sample}. شناسه‌ی درست را با linkCustomerToSepidarParty دستی وصل کنید.`
+          : "در سپیدار با نام، کد و کد ملی جستجو کنید و شناسه را دستی وصل کنید.") +
+        ` | پیام اصلی: ${e?.message}`
+    )
+  }
   partyCache = null
 
   let id = pickId(result, PARTY_ID_KEYS)
   if (!id) {
     // خروجی CreateParty در مستندات نیامده؛ در صورت نبود شناسه، با نام دوباره جستجو می‌کنیم
     const again = await findExistingParty(c.name, c.phone)
-    id = again ? pickId(again, PARTY_ID_KEYS) : null
+    id = again.match ? pickId(again.match, PARTY_ID_KEYS) : null
   }
   if (!id) {
     throw new Error(
@@ -138,4 +255,24 @@ export async function ensureSepidarParty(customerId: string) {
     data: { sepidarPartyRef: Number(id) } as any,
   })
   return { partyRef: Number(id), created: true, linked: false }
+}
+
+// برای هر مشتری فقط یک عملیات هم‌زمان: ارسال هم‌زمان چند پیش‌فاکتور یک مشتری
+// دیگر دو بار CreateParty نمی‌زند.
+const inflightByCustomer = new Map<string, Promise<EnsureResult>>()
+
+/**
+ * مشتری اخوان را در سپیدار تضمین می‌کند:
+ * 1) اگر قبلاً لینک شده همان را برمی‌گرداند
+ * 2) اگر طرف‌حسابی با همین نام (با هر ترتیب کلمات، هم مشتری و هم غیرمشتری) هست، به آن لینک می‌کند
+ * 3) در غیر این صورت با CreateParty می‌سازد؛ اگر سپیدار «تکراری» گفت، دوباره جستجو و لینک می‌کند
+ */
+export function ensureSepidarParty(customerId: string): Promise<EnsureResult> {
+  const running = inflightByCustomer.get(customerId)
+  if (running) return running
+  const p = doEnsure(customerId).finally(() => {
+    inflightByCustomer.delete(customerId)
+  })
+  inflightByCustomer.set(customerId, p)
+  return p
 }
