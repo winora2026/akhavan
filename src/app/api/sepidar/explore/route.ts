@@ -9,6 +9,9 @@ const METHODS: Record<string, string> = {
   items: "/api/sepidar/v1/Inventory/GetAllItems",
   units: "/api/sepidar/v1/Inventory/GetAllUnits",
   stocks: "/api/sepidar/v1/Inventory/GetAllItemStockSummaries",
+    locations: "/api/sepidar/v1/Generals/GetAllLocation",
+  currencies: "/api/sepidar/v1/Generals/GetAllCurrency",
+  stockList: "/api/sepidar/v1/Inventory/GetAllStocks",
 }
 
 function norm(s: string) {
