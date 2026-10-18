@@ -24,7 +24,6 @@ export async function getAccessToken(force = false): Promise<string> {
     return cachedToken.value
   }
 
-  // فقط فیلدهای تنظیم‌شده ارسال می‌شوند (نه رشته‌ی خالی)
   const body: Record<string, string> = {}
   const add = (k: string, env: string | undefined) => {
     if (env && env.trim()) body[k] = env.trim()
@@ -83,7 +82,6 @@ export async function sepidarFetch(
 
   let res = await doFetch(false)
   if (res.status === 401) {
-    // توکن منقضی شده؛ یک بار توکن تازه می‌گیریم
     cachedToken = null
     res = await doFetch(true)
   }
@@ -125,7 +123,6 @@ export async function sepidarPost(path: string, payload: unknown) {
   return data
 }
 
-// شکل خروجی لیست‌ها در مستندات نیامده؛ هم آرایه و هم {items|data|result|list: []} را می‌پذیریم
 export function extractList(data: any): any[] {
   if (Array.isArray(data)) return data
   if (data && typeof data === "object") {
@@ -156,8 +153,8 @@ function partyRowId(row: any): string | number | null {
 
 /**
  * لیست‌گیری صفحه‌به‌صفحه.
- * - طرف‌حساب‌ها: keyset با AfterPartyId (محدودیت max skip 5000)
- * - بقیه: Page معمولی با سقف امن ۵۰۰۰
+ * طرف‌حساب‌ها: AfterPartyId (محدودیت max skip 5000)
+ * بقیه: Page با سقف امن
  */
 export async function getAll(
   path: string,
@@ -190,7 +187,6 @@ export async function getAll(
       if (lastId == null || list.length < pageSize) break
       afterId = lastId
 
-      // کمی فاصله تا کمتر به rate_limit بخورید
       await new Promise((r) => setTimeout(r, 150))
     }
     return out
@@ -209,4 +205,29 @@ export async function getAll(
     await new Promise((r) => setTimeout(r, 100))
   }
   return out
+}
+
+export function pickId(data: any, keys: string[]): string | null {
+  const tryObj = (o: any) => {
+    if (!o || typeof o !== "object") return null
+    for (const k of keys) {
+      const v = o[k]
+      if (v !== undefined && v !== null && v !== "") return String(v)
+    }
+    return null
+  }
+  if (typeof data === "number" || typeof data === "string") return String(data)
+  return tryObj(data) || tryObj(data?.data) || tryObj(data?.result)
+}
+
+export async function createInvoice(payload: unknown) {
+  if (isMockMode()) {
+    return {
+      mock: true,
+      id: `MOCK-${Date.now()}`,
+      number: `M-${Date.now()}`,
+      payload,
+    }
+  }
+  return sepidarPost("/api/sepidar/v1/Sales/CreateInvoice", payload)
 }
