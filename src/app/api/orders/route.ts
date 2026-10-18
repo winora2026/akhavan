@@ -4,6 +4,10 @@ import { safeDate } from "@/lib/date"
 import { getSession } from "@/lib/auth"
 import { createProductionOrderFromSales } from "@/lib/createProductionOrder"
 
+// شروع شماره‌ی سفارش (برای تست کانورت به سپیدار، تا با شماره‌های سپیدار تکراری نشود)
+// بعد از پایان تست می‌توانید آن را به 500 برگردانید.
+const ORDER_NUMBER_START = 3350
+
 export async function GET() {
   try {
     const orders = await prisma.order.findMany({
@@ -79,11 +83,11 @@ export async function POST(req: NextRequest) {
       select: { orderNumber: true },
     })
 
-    let nextOrderNumber = 500
+    let nextOrderNumber = ORDER_NUMBER_START
 
     const numericNumbers = allOrders
       .map((o: any) => parseInt(String(o.orderNumber)))
-      .filter((n: number) => !isNaN(n) && n >= 500 && n < 100000)
+      .filter((n: number) => !isNaN(n) && n >= ORDER_NUMBER_START && n < 100000)
 
     if (numericNumbers.length > 0) {
       nextOrderNumber = Math.max(...numericNumbers) + 1
