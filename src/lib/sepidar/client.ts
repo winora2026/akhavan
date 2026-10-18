@@ -136,43 +136,77 @@ export function extractList(data: any): any[] {
   return []
 }
 
+function partyRowId(row: any): string | number | null {
+  if (!row || typeof row !== "object") return null
+  for (const k of [
+    "id",
+    "Id",
+    "partyId",
+    "PartyId",
+    "partyRef",
+    "PartyRef",
+    "PartyID",
+  ]) {
+    if (row[k] !== undefined && row[k] !== null && row[k] !== "") {
+      return row[k]
+    }
+  }
+  return null
+}
+
+/**
+ * لیست‌گیری صفحه‌به‌صفحه.
+ * - طرف‌حساب‌ها: keyset با AfterPartyId (محدودیت max skip 5000)
+ * - بقیه: Page معمولی با سقف امن ۵۰۰۰
+ */
 export async function getAll(
   path: string,
   params: Record<string, any> = {},
-  maxPages = 100
+  maxPages = 200
 ) {
-  const pageSize = 100
+  const pageSize = 50
   const out: any[] = []
-  for (let page = 1; page <= maxPages; page++) {
-    const data = await sepidarGet(path, { ...params, Page: page, ItemCount: pageSize })
+  const isParty =
+    path.includes("GetAllParty") ||
+    path.toLowerCase().includes("/parties/")
+
+  if (isParty) {
+    let afterId: string | number | undefined
+    for (let i = 0; i < maxPages; i++) {
+      const p: Record<string, any> = {
+        ...params,
+        Page: 1,
+        ItemCount: pageSize,
+      }
+      if (afterId != null) p.AfterPartyId = afterId
+
+      const data = await sepidarGet(path, p)
+      const list = extractList(data)
+      if (!list.length) break
+
+      out.push(...list)
+
+      const lastId = partyRowId(list[list.length - 1])
+      if (lastId == null || list.length < pageSize) break
+      afterId = lastId
+
+      // کمی فاصله تا کمتر به rate_limit بخورید
+      await new Promise((r) => setTimeout(r, 150))
+    }
+    return out
+  }
+
+  const maxSafePages = Math.min(maxPages, Math.floor(5000 / pageSize))
+  for (let page = 1; page <= maxSafePages; page++) {
+    const data = await sepidarGet(path, {
+      ...params,
+      Page: page,
+      ItemCount: pageSize,
+    })
     const list = extractList(data)
     out.push(...list)
     if (list.length < pageSize) break
+    await new Promise((r) => setTimeout(r, 100))
   }
   return out
-}
-
-export function pickId(data: any, keys: string[]): string | null {
-  const tryObj = (o: any) => {
-    if (!o || typeof o !== "object") return null
-    for (const k of keys) {
-      const v = o[k]
-      if (v !== undefined && v !== null && v !== "") return String(v)
-    }
-    return null
-  }
-  if (typeof data === "number" || typeof data === "string") return String(data)
-  return tryObj(data) || tryObj(data?.data) || tryObj(data?.result)
-}
-
-export async function createInvoice(payload: unknown) {
-  if (isMockMode()) {
-    return {
-      mock: true,
-      id: `MOCK-${Date.now()}`,
-      number: `M-${Date.now()}`,
-      payload,
-    }
-  }
-  return sepidarPost("/api/sepidar/v1/Sales/CreateInvoice", payload)
 }
