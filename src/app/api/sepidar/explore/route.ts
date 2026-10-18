@@ -48,22 +48,17 @@ export async function GET(req: NextRequest) {
 
   try {
     // جستجوی نام در کل طرف‌حساب‌ها: ?m=parties&q=قربانی
-    const q = sp.get("q")
-    if (m === "parties" && q) {
-      const all = await getAll(path, { IsCustomer: sp.get("IsCustomer") || "true" }, 200)
+        const q = sp.get("q")
+    if (q) {
+      const all = await getAll(
+        path,
+        m === "parties" ? { IsCustomer: sp.get("IsCustomer") || "true" } : {},
+        200
+      )
       const nq = norm(q)
       const hit = all
-        .filter((p: any) => norm(`${p?.name ?? ""} ${p?.lastName ?? ""}`).includes(nq))
+        .filter((p: any) => norm(JSON.stringify(p)).includes(nq))
         .slice(0, 20)
-        .map((p: any) => ({
-          partyId: p.partyId,
-          name: p.name,
-          lastName: p.lastName,
-          dlCode: p.dlCode,
-          isCustomer: p.isCustomer,
-          isVendor: p.isVendor,
-          isActive: p.isActive,
-        }))
       return NextResponse.json({
         method: m,
         q,
