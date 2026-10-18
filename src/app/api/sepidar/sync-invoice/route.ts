@@ -2,9 +2,12 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getSession } from "@/lib/auth"
 import { buildCreateInvoicePayload } from "@/lib/sepidar/mapOrder"
-import { createInvoice, isMockMode } from "@/lib/sepidar/client"
+import { createInvoice, isMockMode, pickId } from "@/lib/sepidar/client"
+import { ensureSepidarParty } from "@/lib/sepidar/party"
 
 export async function POST(req: NextRequest) {
+  let orderId = ""
+  let locked = false
   try {
     const session = await getSession()
     if (!session) {
@@ -12,7 +15,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
-    const orderId = String(body.orderId || "").trim()
+    orderId = String(body.orderId || "").trim()
     if (!orderId) {
       return NextResponse.json({ error: "orderId الزامی است" }, { status: 400 })
     }
@@ -37,28 +40,43 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    await prisma.order.update({
-      where: { id: orderId },
-      data: {
-        sepidarSyncStatus: "PENDING",
-        sepidarSyncError: null,
+    // قفل اتمیک: جلوگیری از ارسال همزمان/دوبار کلیک
+    const lock = await prisma.order.updateMany({
+      where: {
+        id: orderId,
+        OR: [
+          { sepidarSyncStatus: null },
+          { sepidarSyncStatus: { notIn: ["PENDING", "SUCCESS"] } },
+        ],
       },
+      data: { sepidarSyncStatus: "PENDING", sepidarSyncError: null },
     })
+    if (lock.count === 0) {
+      return NextResponse.json(
+        { error: "ارسال این فاکتور در حال انجام است" },
+        { status: 409 }
+      )
+    }
+    locked = true
+
+    // اگر مشتری هنوز در سپیدار نیست، اول او را بساز/لینک کن
+    await ensureSepidarParty(existing.customerId)
 
     const { payload } = await buildCreateInvoicePayload(orderId)
-
     const result = await createInvoice(payload)
+    const mock = isMockMode()
 
-    const invoiceId = String(
-      result?.id ?? result?.invoiceId ?? result?.number ?? result?.mock ?? ""
-    )
+    const invoiceId = mock
+      ? null
+      : pickId(result, ["id", "invoiceId", "number", "invoiceNumber"])
 
     await prisma.order.update({
       where: { id: orderId },
       data: {
-        sepidarSyncStatus: "SUCCESS",
-        sepidarInvoiceId: invoiceId || null,
-        sepidarSyncedAt: new Date(),
+        // در حالت آزمایشی SUCCESS ثبت نمی‌شود تا بعداً ارسال واقعی مسدود نشود
+        sepidarSyncStatus: mock ? "MOCK" : "SUCCESS",
+        sepidarInvoiceId: invoiceId,
+        sepidarSyncedAt: mock ? null : new Date(),
         sepidarSyncError: null,
         sepidarLastPayload: JSON.stringify(payload),
       },
@@ -66,26 +84,24 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      mock: isMockMode(),
+      mock,
       sepidarInvoiceId: invoiceId,
       result,
-      payload, // در mock برای بررسی نگاشت
+      payload,
     })
   } catch (e: any) {
     console.error("sepidar sync:", e)
-    try {
-      const body = await req.clone().json().catch(() => ({}))
-      if (body?.orderId) {
+    if (locked && orderId) {
+      try {
         await prisma.order.update({
-          where: { id: String(body.orderId) },
+          where: { id: orderId },
           data: {
             sepidarSyncStatus: "FAILED",
             sepidarSyncError: String(e?.message || e).slice(0, 2000),
           },
         })
-      }
-    } catch {}
-
+      } catch {}
+    }
     return NextResponse.json(
       { error: e?.message || "خطا در ارسال به سپیدار" },
       { status: 500 }
