@@ -20,7 +20,7 @@ export async function getAccessToken(force = false): Promise<string> {
   if (isMockMode()) return "mock-token"
 
   const now = Date.now()
-  if (!force && cachedToken && cachedToken.exp > now + 60_000) {
+  if (!force && cachedToken && cachedToken.exp > now + 20 * 60_000) {
     return cachedToken.value
   }
 
@@ -57,6 +57,15 @@ export async function getAccessToken(force = false): Promise<string> {
   return token
 }
 
+let nextSlot = 0
+async function throttle() {
+  const gap = Number(process.env.SEPIDAR_MIN_GAP_MS || 300)
+  const now = Date.now()
+  const at = Math.max(now, nextSlot)
+  nextSlot = at + gap
+  if (at > now) await new Promise((r) => setTimeout(r, at - now))
+}
+
 export async function sepidarFetch(
   path: string,
   init: RequestInit = {}
@@ -73,6 +82,7 @@ export async function sepidarFetch(
     if (init.body && !headers["Content-Type"]) {
       headers["Content-Type"] = "application/json"
     }
+    await throttle()
     return fetch(url, {
       ...init,
       headers,
@@ -84,6 +94,12 @@ export async function sepidarFetch(
   if (res.status === 401) {
     cachedToken = null
     res = await doFetch(true)
+  }
+  // محدودیت نرخ درگاه (429): با فاصله دوباره تلاش می‌کنیم
+  for (let i = 0; i < 3 && res.status === 429; i++) {
+    const ra = Number(res.headers.get("retry-after"))
+    await new Promise((r) => setTimeout(r, ra > 0 ? ra * 1000 : 2000 * (i + 1)))
+    res = await doFetch(false)
   }
   return res
 }

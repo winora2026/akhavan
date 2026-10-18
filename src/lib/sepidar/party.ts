@@ -50,11 +50,26 @@ export function buildCreatePartyPayload(customer: {
   }
 }
 
+let partyCache: { at: number; list: any[] } | null = null
+let partyInflight: Promise<any[]> | null = null
+
+async function loadParties() {
+  if (partyCache && Date.now() - partyCache.at < 10 * 60_000) return partyCache.list
+  if (!partyInflight) {
+    partyInflight = getAll("/api/sepidar/v1/Parties/GetAllParty", { IsCustomer: true }, 100)
+      .then((list) => {
+        partyCache = { at: Date.now(), list }
+        return list
+      })
+      .finally(() => {
+        partyInflight = null
+      })
+  }
+  return partyInflight
+}
+
 async function findExistingParty(name: string, phone?: string | null) {
-  const parties = await getAll("/api/sepidar/v1/Parties/GetAllParty", {
-    IsCustomer: true,
-    IsPhone: true,
-  })
+  const parties = await loadParties()
   const target = norm(name)
   const matches = parties.filter((p) => partyDisplayName(p) === target)
   if (matches.length === 0) return null
@@ -104,6 +119,7 @@ export async function ensureSepidarParty(customerId: string) {
 
   const payload = buildCreatePartyPayload(c)
   const result = await sepidarPost("/api/sepidar/v1/Parties/CreateParty", payload)
+  partyCache = null
 
   let id = pickId(result, PARTY_ID_KEYS)
   if (!id) {
