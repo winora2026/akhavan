@@ -322,6 +322,11 @@ export async function buildCreateInvoicePayload(orderId: string) {
 
   const invoiceDate = order.invoicedAt || order.orderDate
 
+  // شماره‌ی فاکتور در سپیدار = شماره‌ی سفارش نرم‌افزار
+  // (اجرتی: سریال ۹۰۰xxx، خریداری: سریال چهار رقمی؛ جداسازی این دو سریال داخل خود نرم‌افزار انجام می‌شود)
+  const orderNumberDigits = parseInt(latinDigits(String(order.orderNumber)).replace(/\D/g, ""), 10)
+  const invoiceNumber = Number.isFinite(orderNumberDigits) && orderNumberDigits > 0 ? orderNumberDigits : null
+
   const items: InvoiceItem[] = []
   for (let idx = 0; idx < order.items.length; idx++) {
     const it = order.items[idx]
@@ -378,7 +383,7 @@ export async function buildCreateInvoicePayload(orderId: string) {
     customerRealName: null as string | null,
     customerRealNameEn: null as string | null,
     saleTypeRef: settings.saleTypeRef || 1,
-    number: null as string | null,
+    number: invoiceNumber,
     date: invoiceDate.toISOString().slice(0, 19),
     currencyRef: settings.currencyRef || 1,
     slRef: settings.slRef || 1,

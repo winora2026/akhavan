@@ -4,9 +4,43 @@ import { safeDate } from "@/lib/date"
 import { getSession } from "@/lib/auth"
 import { createProductionOrderFromSales } from "@/lib/createProductionOrder"
 
-// شروع شماره‌ی سفارش (برای تست کانورت به سپیدار، تا با شماره‌های سپیدار تکراری نشود)
+// ───────────── سریال شماره‌ی سفارش ─────────────
+// دو سریال جدا داریم و شماره‌ی سفارش همان شماره‌ی فاکتور سپیدار می‌شود:
+//   خریداری: چهار رقمی (از ۳۳۵۰ به بعد)
+//   اجرتی:   سریال ۹۰۰xxx
+// سفارشی که «خط تولید»ش اجرتی باشد سریال اجرتی می‌گیرد، بقیه سریال خریداری.
+const RENTAL_PRODUCTION_LINE = "اجرتی"
+
+// خریداری: شروع شماره‌ی سفارش (برای تست کانورت به سپیدار، تا با شماره‌های سپیدار تکراری نشود)
 // بعد از پایان تست می‌توانید آن را به 500 برگردانید.
-const ORDER_NUMBER_START = 3350
+const PURCHASE_ORDER_NUMBER_START = 3350
+const PURCHASE_ORDER_NUMBER_MAX = 99999
+
+// اجرتی: شروع سریال. باید از آخرین شماره‌ی اجرتی در سپیدار (۹۰۰۵۶۲) و نرم‌افزار قدیمی
+// (۹۰۰۵۶۱) بزرگ‌تر باشد و اگر نرم‌افزار قدیمی هنوز کار می‌کند، با آن تداخل نکند.
+// عدد را به دلخواه تغییر دهید.
+const RENTAL_ORDER_NUMBER_START = 900600
+const RENTAL_ORDER_NUMBER_MIN = 900000
+const RENTAL_ORDER_NUMBER_MAX = 999999
+
+async function getNextOrderNumber(isRental: boolean) {
+  const all = await prisma.order.findMany({
+    select: { orderNumber: true },
+  })
+
+  const nums = all
+    .map((o: any) => parseInt(String(o.orderNumber), 10))
+    .filter((n: number) => !isNaN(n))
+
+  const start = isRental ? RENTAL_ORDER_NUMBER_START : PURCHASE_ORDER_NUMBER_START
+  const min = isRental ? RENTAL_ORDER_NUMBER_MIN : PURCHASE_ORDER_NUMBER_START
+  const max = isRental ? RENTAL_ORDER_NUMBER_MAX : PURCHASE_ORDER_NUMBER_MAX
+
+  const inSeries = nums.filter((n: number) => n >= min && n <= max)
+  const next = inSeries.length > 0 ? Math.max(...inSeries) + 1 : start
+
+  return Math.max(next, start)
+}
 
 export async function GET() {
   try {
@@ -79,19 +113,8 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    const allOrders = await prisma.order.findMany({
-      select: { orderNumber: true },
-    })
-
-    let nextOrderNumber = ORDER_NUMBER_START
-
-    const numericNumbers = allOrders
-      .map((o: any) => parseInt(String(o.orderNumber)))
-      .filter((n: number) => !isNaN(n) && n >= ORDER_NUMBER_START && n < 100000)
-
-    if (numericNumbers.length > 0) {
-      nextOrderNumber = Math.max(...numericNumbers) + 1
-    }
+    // سریال سفارش: اجرتی (۹۰۰xxx) یا خریداری (چهار رقمی)
+    const isRental = String(productionLine || "").trim() === RENTAL_PRODUCTION_LINE
 
     const customerOrdersCount = await prisma.order.count({
       where: { customerId: customer.id },
@@ -112,62 +135,83 @@ export async function POST(req: NextRequest) {
     const session = await getSession()
     const salesRepName = session?.displayName || null
 
-    const order = await prisma.order.create({
-      data: {
-        salesRep: salesRepName,
-        orderNumber: String(nextOrderNumber),
-        customerId: customer.id,
-        customerOrderNumber: nextCustomerOrderNumber,
-        orderDate: safeDate(orderDate),
-        deliveryDate: deliveryDate ? safeDate(deliveryDate) : null,
-        priority: priority || "عادی",
-        totalMeterage: parseFloat(totalMeterage) || 0,
-        totalQuantity: parseInt(totalQuantity) || 0,
-        hasInstallation: Boolean(hasInstallation),
-        installationDate: installDate ? safeDate(installDate) : null,
-        installationAddress: installAddress || null,
-        installationPhone: installPhone || null,
-        installationNotes: installNotes || null,
-        discountAmount: parseFloat(discountAmount) || 0,
-        discountPercent:
-          discountPercent != null && discountPercent !== ""
-            ? parseFloat(discountPercent)
-            : null,
-        isOfficialInvoice: Boolean(isOfficialInvoice),
-        isStop: false,
-        status: "پیش‌فاکتور",
-        mapImageUrl: resolvedMapImageUrl,
-        mapImages: resolvedMapImages,
-        notes: notes || (productionLine ? `خط تولید: ${productionLine}` : null),
-        items: {
-          create: (items || []).map((item: any, index: number) => ({
-            productName: item.productName || "بدون نام",
-            pieceNumber: item.partNumber || null,
-            installationCode: item.installCode || null,
-            unit: item.unit || null,
-            length: parseFloat(item.length) || 0,
-            width: parseFloat(item.width) || 0,
-            quantity: parseInt(item.quantity) || 1,
-            meterage: parseFloat(item.meterage) || 0,
-            perimeter: parseFloat(item.perimeter) || 0,
-            unitPrice:
-              parseFloat(String(item.unitPrice || "0").replace(/,/g, "")) || 0,
-            totalPrice:
-              parseFloat(String(item.totalPrice || "0").replace(/,/g, "")) || 0,
-            notes: item.description || null,
-            flagged: Boolean(item.flagged),
-            servicesData: item.services?.length
-              ? JSON.stringify(item.services)
-              : null,
-            sortOrder: index,
-          })),
-        },
-      },
-      include: {
-        customer: true,
-        items: true,
-      },
-    })
+    const itemsData = (items || []).map((item: any, index: number) => ({
+      productName: item.productName || "بدون نام",
+      pieceNumber: item.partNumber || null,
+      installationCode: item.installCode || null,
+      unit: item.unit || null,
+      length: parseFloat(item.length) || 0,
+      width: parseFloat(item.width) || 0,
+      quantity: parseInt(item.quantity) || 1,
+      meterage: parseFloat(item.meterage) || 0,
+      perimeter: parseFloat(item.perimeter) || 0,
+      unitPrice:
+        parseFloat(String(item.unitPrice || "0").replace(/,/g, "")) || 0,
+      totalPrice:
+        parseFloat(String(item.totalPrice || "0").replace(/,/g, "")) || 0,
+      notes: item.description || null,
+      flagged: Boolean(item.flagged),
+      servicesData: item.services?.length
+        ? JSON.stringify(item.services)
+        : null,
+      sortOrder: index,
+    }))
+
+    // ساخت سفارش؛ اگر دو نفر هم‌زمان ثبت کنند و شماره تکراری شد، شماره دوباره محاسبه می‌شود
+    let order: any = null
+    let nextOrderNumber = 0
+    let lastError: any = null
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      nextOrderNumber = await getNextOrderNumber(isRental)
+
+      try {
+        order = await prisma.order.create({
+          data: {
+            salesRep: salesRepName,
+            orderNumber: String(nextOrderNumber),
+            customerId: customer.id,
+            customerOrderNumber: nextCustomerOrderNumber,
+            orderDate: safeDate(orderDate),
+            deliveryDate: deliveryDate ? safeDate(deliveryDate) : null,
+            priority: priority || "عادی",
+            totalMeterage: parseFloat(totalMeterage) || 0,
+            totalQuantity: parseInt(totalQuantity) || 0,
+            hasInstallation: Boolean(hasInstallation),
+            installationDate: installDate ? safeDate(installDate) : null,
+            installationAddress: installAddress || null,
+            installationPhone: installPhone || null,
+            installationNotes: installNotes || null,
+            discountAmount: parseFloat(discountAmount) || 0,
+            discountPercent:
+              discountPercent != null && discountPercent !== ""
+                ? parseFloat(discountPercent)
+                : null,
+            isOfficialInvoice: Boolean(isOfficialInvoice),
+            isStop: false,
+            status: "پیش‌فاکتور",
+            mapImageUrl: resolvedMapImageUrl,
+            mapImages: resolvedMapImages,
+            notes:
+              notes || (productionLine ? `خط تولید: ${productionLine}` : null),
+            items: { create: itemsData },
+          },
+          include: {
+            customer: true,
+            items: true,
+          },
+        })
+        break
+      } catch (err: any) {
+        lastError = err
+        // P2002 = شماره‌ی سفارش تکراری؛ دوباره از دیتابیس محاسبه و تلاش می‌کنیم
+        if (err?.code !== "P2002") throw err
+      }
+    }
+
+    if (!order) {
+      throw lastError || new Error("ساخت شماره‌ی سفارش ناموفق بود")
+    }
 
     return NextResponse.json(
       {
@@ -175,6 +219,7 @@ export async function POST(req: NextRequest) {
         order,
         assignedOrderNumber: nextOrderNumber,
         assignedCustomerOrderNumber: nextCustomerOrderNumber,
+        orderKind: isRental ? "اجرتی" : "خریداری",
       },
       { status: 201 }
     )
