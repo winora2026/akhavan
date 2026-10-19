@@ -9,10 +9,14 @@ const METHODS: Record<string, string> = {
   items: "/api/sepidar/v1/Inventory/GetAllItems",
   units: "/api/sepidar/v1/Inventory/GetAllUnits",
   stocks: "/api/sepidar/v1/Inventory/GetAllItemStockSummaries",
-    locations: "/api/sepidar/v1/Generals/GetAllLocation",
+  locations: "/api/sepidar/v1/Generals/GetAllLocation",
   currencies: "/api/sepidar/v1/Generals/GetAllCurrency",
   stockList: "/api/sepidar/v1/Inventory/GetAllStocks",
 }
+
+// مسیر دلخواه برای کشف متدهای دیگر: فقط متدهای خواندنی که اسمشان با Get شروع می‌شود
+// مثال: ?path=/api/sepidar/v1/Sales/GetAllInvoices
+const SAFE_PATH = /^\/api\/sepidar\/v1\/[A-Za-z]+\/Get[A-Za-z]*$/
 
 function norm(s: string) {
   return (s || "")
@@ -22,6 +26,16 @@ function norm(s: string) {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase()
+}
+
+function resolveTarget(sp: URLSearchParams): { key: string; path: string } | null {
+  const m = sp.get("m") || ""
+  if (METHODS[m]) return { key: m, path: METHODS[m] }
+
+  const custom = (sp.get("path") || "").trim()
+  if (custom && SAFE_PATH.test(custom)) return { key: custom, path: custom }
+
+  return null
 }
 
 export async function GET(req: NextRequest) {
@@ -37,18 +51,23 @@ export async function GET(req: NextRequest) {
   }
 
   const sp = req.nextUrl.searchParams
-  const m = sp.get("m") || ""
-  const path = METHODS[m]
-  if (!path) {
+  const target = resolveTarget(sp)
+  if (!target) {
     return NextResponse.json(
-      { error: "پارامتر m نامعتبر است", allowed: Object.keys(METHODS) },
+      {
+        error: "پارامتر m یا path نامعتبر است",
+        allowed: Object.keys(METHODS),
+        hint: "برای متد دیگر: ?path=/api/sepidar/v1/<ماژول>/Get... (فقط متدهای Get)",
+      },
       { status: 400 }
     )
   }
+  const m = target.key
+  const path = target.path
 
   try {
-    // جستجوی نام در کل طرف‌حساب‌ها: ?m=parties&q=قربانی
-        const q = sp.get("q")
+    // جستجوی نام در کل رکوردها: ?m=parties&q=قربانی
+    const q = sp.get("q")
     if (q) {
       const all = await getAll(
         path,
@@ -71,7 +90,7 @@ export async function GET(req: NextRequest) {
     // بقیه‌ی پارامترها (مثل IsCustomer) عیناً به سپیدار پاس داده می‌شوند
     const forward = new URLSearchParams()
     sp.forEach((v, k) => {
-      if (k !== "m" && k !== "limit" && k !== "q") forward.set(k, v)
+      if (k !== "m" && k !== "path" && k !== "limit" && k !== "q") forward.set(k, v)
     })
     const has = (name: string) =>
       [...forward.keys()].some((k) => k.toLowerCase() === name.toLowerCase())

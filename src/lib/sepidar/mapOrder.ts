@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/prisma"
 import { getAll, sepidarGet, extractList } from "./client"
+import productsSeedRaw from "@/app/products/products-seed.json"
+import servicesSeedRaw from "@/app/services/services-seed.json"
 
 // ═══════════════════════════════════════════════════════════════
 //  بخش ۱: نگاشت کالا به آیتم سپیدار
@@ -39,6 +41,23 @@ const itemIdOf = (it: any): number | null => {
 }
 const codeOf = (it: any) => latinDigits(String(it?.Code ?? it?.code ?? "")).trim()
 const titleOf = (it: any) => String(it?.Title ?? it?.title ?? it?.Name ?? it?.name ?? "")
+
+// ───────────── نام → کد (از فایل‌های seed کالا و خدمات) ─────────────
+// ردیف سفارش کد کالا را ذخیره نمی‌کند؛ ولی نام‌ها از همین فایل‌ها آمده‌اند و کد کالا
+// در نرم‌افزار و سپیدار یکی است. اگر یک نام با دو کد مختلف باشد (مبهم)، مقدار null می‌شود.
+function buildCodeByName(list: any[]) {
+  const m = new Map<string, string | null>()
+  for (const x of list) {
+    const k = nameKey(String(x?.name ?? ""))
+    const c = latinDigits(String(x?.code ?? "")).trim()
+    if (!k || !c) continue
+    if (!m.has(k)) m.set(k, c)
+    else if (m.get(k) !== c) m.set(k, null)
+  }
+  return m
+}
+const productCodeByName = buildCodeByName(productsSeedRaw as unknown as any[])
+const serviceCodeByName = buildCodeByName(servicesSeedRaw as unknown as any[])
 
 // ───────────── فهرست آیتم‌های سپیدار (کش ۳۰ دقیقه‌ای) ─────────────
 type ItemIndex = {
@@ -271,8 +290,20 @@ type InvoiceItem = {
   tax: number
   duty: number
   tracingTitle: string
-  stockRef: number
+  stockRef: number | null
   description: string
+}
+
+const parsePrice = (v: unknown) => parseFloat(String(v ?? "").replace(/,/g, "")) || 0
+
+function parseServices(raw: unknown): any[] {
+  if (!raw) return []
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
 }
 
 export async function buildCreateInvoicePayload(orderId: string) {
@@ -323,45 +354,50 @@ export async function buildCreateInvoicePayload(orderId: string) {
   const invoiceDate = order.invoicedAt || order.orderDate
 
   // شماره‌ی فاکتور در سپیدار = شماره‌ی سفارش نرم‌افزار
-  // (اجرتی: سریال ۹۰۰xxx، خریداری: سریال چهار رقمی؛ جداسازی این دو سریال داخل خود نرم‌افزار انجام می‌شود)
+  // (اجرتی: سریال ۹۰۰xxx، خریداری: سریال چهار رقمی)
   const orderNumberDigits = parseInt(latinDigits(String(order.orderNumber)).replace(/\D/g, ""), 10)
   const invoiceNumber = Number.isFinite(orderNumberDigits) && orderNumberDigits > 0 ? orderNumberDigits : null
 
-  const items: InvoiceItem[] = []
-  for (let idx = 0; idx < order.items.length; idx++) {
-    const it = order.items[idx]
-
-    let itemRef: number
-    let mappedStockRef: number | null = null
-
+  // پیدا کردن آیتم سپیدار برای یک کالا یا خدمت
+  let rowNo = 0
+  const resolveRef = async (name: string, code: string | null) => {
+    rowNo++
     if (resolveItem) {
-      // اگر روی ردیف سفارش فیلد کد کالا باشد از آن استفاده می‌شود، وگرنه فقط نام
-      const code =
-        (it as any).productCode ?? (it as any).code ?? (it as any).itemCode ?? null
-      const resolved = await resolveItem(it.productName, code)
-      itemRef = resolved.itemRef
-      mappedStockRef = resolved.stockRef
-    } else {
-      const map = mockMapByKey.get(nameKey(it.productName))
-      itemRef = Number(map?.itemRef) || idx + 1
-      mappedStockRef = map?.stockRef ?? null
+      const r = await resolveItem(name, code)
+      return { itemRef: r.itemRef, stockRef: r.stockRef }
     }
+    const map = mockMapByKey.get(nameKey(name)) as any
+    return { itemRef: Number(map?.itemRef) || rowNo, stockRef: (map?.stockRef ?? null) as number | null }
+  }
+
+  const items: InvoiceItem[] = []
+
+  for (const it of order.items) {
+    // ── ردیف کالا: مقدار = متراژ، فی = قیمت هر واحد، مبلغ = فی × مقدار ──
+    const productCode =
+      (it as any).productCode ??
+      (it as any).code ??
+      (it as any).itemCode ??
+      productCodeByName.get(nameKey(it.productName)) ??
+      null
+
+    const base = await resolveRef(it.productName, productCode)
 
     const fee = Number(it.unitPrice) || 0
-    const qty = Number(it.quantity) || 1
-    const price = Number(it.totalPrice) || fee * qty
+    const meterage = Number(it.meterage) || 0
+    const qty = meterage > 0 ? meterage : Number(it.quantity) || 1
 
     items.push({
-      itemRef,
+      itemRef: base.itemRef,
       quantity: qty,
       secondaryQuantity: null,
       fee,
-      price,
+      price: Math.round(fee * qty),
       discount: 0,
       tax: 0,
       duty: 0,
       tracingTitle: order.orderNumber,
-      stockRef: mappedStockRef ?? settings.defaultStockRef ?? 1,
+      stockRef: base.stockRef ?? settings.defaultStockRef ?? 1,
       description: [
         it.productName,
         it.length && it.width ? `${it.length}*${it.width}` : null,
@@ -371,6 +407,39 @@ export async function buildCreateInvoicePayload(orderId: string) {
         .filter(Boolean)
         .join(" | "),
     })
+
+    // ── هر خدمت این کالا: یک ردیف جدا (بدون انبار) ──
+    for (const s of parseServices((it as any).servicesData)) {
+      const title = String(s?.title || "").trim()
+      if (!title) continue
+
+      const cnt = parseFloat(s.count) || 1
+      const unitQty =
+        s.unit === "عددی" && !String(s.unitQuantity ?? "").trim()
+          ? 1
+          : parseFloat(s.unitQuantity) || 0
+      const amount = cnt * unitQty
+      const sFee = parsePrice(s.unitPrice)
+      const sPrice = Math.round(parsePrice(s.totalPrice) || amount * sFee)
+
+      if (amount <= 0 && sPrice <= 0) continue
+
+      const svc = await resolveRef(title, serviceCodeByName.get(nameKey(title)) ?? null)
+
+      items.push({
+        itemRef: svc.itemRef,
+        quantity: amount > 0 ? amount : 1,
+        secondaryQuantity: null,
+        fee: amount > 0 ? sFee : sPrice,
+        price: sPrice,
+        discount: 0,
+        tax: 0,
+        duty: 0,
+        tracingTitle: order.orderNumber,
+        stockRef: null,
+        description: [`${title} ${it.productName}`, s.note].filter(Boolean).join(" | "),
+      })
+    }
   }
 
   // تخفیف کل سفارش را روی اولین قلم پخش می‌کنیم (ساده؛ بعداً می‌توان دقیق‌تر کرد)
@@ -386,7 +455,9 @@ export async function buildCreateInvoicePayload(orderId: string) {
     number: invoiceNumber,
     date: invoiceDate.toISOString().slice(0, 19),
     currencyRef: settings.currencyRef || 1,
-    slRef: settings.slRef || 1,
+    // حساب معین فاکتور: باید «حساب‌های دریافتنی» باشد. شناسه‌اش را در .env سرور به‌صورت
+    // SEPIDAR_SL_REF بگذارید (یا slRef را در تنظیمات سپیدار پر کنید)
+    slRef: Number(process.env.SEPIDAR_SL_REF) || settings.slRef || 1,
     deliveryLocationRef: settings.deliveryLocationRef || 1,
     state: settings.state || 1,
     settlementType: settings.settlementType || 1,
