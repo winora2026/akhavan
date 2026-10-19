@@ -1,6 +1,10 @@
 import { prisma } from "@/lib/prisma"
 import { getAll, sepidarGet, extractList } from "./client"
 
+// ═══════════════════════════════════════════════════════════════
+//  بخش ۱: نگاشت کالا به آیتم سپیدار
+// ═══════════════════════════════════════════════════════════════
+
 const ITEMS_PATH = "/api/sepidar/v1/Inventory/GetAllItems"
 // getAll خودش سقف ۵۰۰۰ ردیف دارد (محدودیت سپیدار روی Page)؛ عدد زیر فقط بالاترین مقدار مجاز است
 const ITEMS_MAX_PAGES = 100
@@ -251,4 +255,145 @@ export async function syncItemMap(apply: boolean) {
     mismatchedSample: mismatched.slice(0, 30),
     withoutId: noId,
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  بخش ۲: ساخت بدنه‌ی فاکتور سپیدار
+// ═══════════════════════════════════════════════════════════════
+
+type InvoiceItem = {
+  itemRef: number
+  quantity: number
+  secondaryQuantity: number | null
+  fee: number
+  price: number
+  discount: number
+  tax: number
+  duty: number
+  tracingTitle: string
+  stockRef: number
+  description: string
+}
+
+export async function buildCreateInvoicePayload(orderId: string) {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: {
+      customer: true,
+      items: { orderBy: { sortOrder: "asc" } },
+    },
+  })
+
+  if (!order) throw new Error("سفارش یافت نشد")
+  if (order.status !== "فاکتور") {
+    throw new Error("فقط فاکتور قطعی قابل ارسال به سپیدار است")
+  }
+
+  const settings =
+    (await prisma.sepidarSettings.findUnique({ where: { id: "default" } })) ||
+    (await prisma.sepidarSettings.create({
+      data: { id: "default", mockMode: true },
+    }))
+
+  const isReal = process.env.SEPIDAR_MOCK === "false"
+
+  if (!settings.saleTypeRef) {
+    // در حالت mock مقدار پیش‌فرض می‌گذاریم
+    if (isReal) {
+      throw new Error(
+        "saleTypeRef در تنظیمات سپیدار خالی است. بعد از توکن از GetAllSaleTypes پر کنید."
+      )
+    }
+  }
+
+  // حالت واقعی: نگاشت خودکار با نگاشت ذخیره‌شده، کد کالا و نام
+  const resolveItem = isReal ? await createItemResolver() : null
+
+  // حالت آزمایشی: فقط جدول نگاشت (بدون تماس با سپیدار)
+  const mockMaps = isReal ? [] : await prisma.sepidarItemMap.findMany()
+  const mockMapByKey = new Map(mockMaps.map((m) => [nameKey(m.productName), m]))
+
+  const partyRef = order.customer.sepidarPartyRef
+  if (!partyRef && isReal) {
+    throw new Error(
+      `طرف‌حساب سپیدار برای مشتری «${order.customer.name}» تعریف نشده (sepidarPartyRef)`
+    )
+  }
+
+  const invoiceDate = order.invoicedAt || order.orderDate
+
+  const items: InvoiceItem[] = []
+  for (let idx = 0; idx < order.items.length; idx++) {
+    const it = order.items[idx]
+
+    let itemRef: number
+    let mappedStockRef: number | null = null
+
+    if (resolveItem) {
+      // اگر روی ردیف سفارش فیلد کد کالا باشد از آن استفاده می‌شود، وگرنه فقط نام
+      const code =
+        (it as any).productCode ?? (it as any).code ?? (it as any).itemCode ?? null
+      const resolved = await resolveItem(it.productName, code)
+      itemRef = resolved.itemRef
+      mappedStockRef = resolved.stockRef
+    } else {
+      const map = mockMapByKey.get(nameKey(it.productName))
+      itemRef = Number(map?.itemRef) || idx + 1
+      mappedStockRef = map?.stockRef ?? null
+    }
+
+    const fee = Number(it.unitPrice) || 0
+    const qty = Number(it.quantity) || 1
+    const price = Number(it.totalPrice) || fee * qty
+
+    items.push({
+      itemRef,
+      quantity: qty,
+      secondaryQuantity: null,
+      fee,
+      price,
+      discount: 0,
+      tax: 0,
+      duty: 0,
+      tracingTitle: order.orderNumber,
+      stockRef: mappedStockRef ?? settings.defaultStockRef ?? 1,
+      description: [
+        it.productName,
+        it.length && it.width ? `${it.length}*${it.width}` : null,
+        it.meterage ? `م² ${it.meterage}` : null,
+        it.notes,
+      ]
+        .filter(Boolean)
+        .join(" | "),
+    })
+  }
+
+  // تخفیف کل سفارش را روی اولین قلم پخش می‌کنیم (ساده؛ بعداً می‌توان دقیق‌تر کرد)
+  if (order.discountAmount > 0 && items.length > 0) {
+    items[0].discount = Number(order.discountAmount) || 0
+  }
+
+  const payload = {
+    customerPartyRef: partyRef || 1,
+    customerRealName: null as string | null,
+    customerRealNameEn: null as string | null,
+    saleTypeRef: settings.saleTypeRef || 1,
+    number: null as string | null,
+    date: invoiceDate.toISOString().slice(0, 19),
+    currencyRef: settings.currencyRef || 1,
+    slRef: settings.slRef || 1,
+    deliveryLocationRef: settings.deliveryLocationRef || 1,
+    state: settings.state || 1,
+    settlementType: settings.settlementType || 1,
+    rate: settings.rate || 1,
+    description: `فاکتور اخوان ${order.orderNumber}${order.notes ? " | " + order.notes : ""}`,
+    items,
+    extraData: {
+      stringColumn1: order.orderNumber,
+      stringColumn2: order.customer.name,
+      note: order.notes || "",
+    },
+  }
+
+  return { order, payload, settings }
 }
