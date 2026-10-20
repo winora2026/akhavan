@@ -13,6 +13,10 @@ const ITEMS_MAX_PAGES = 100
 const ITEMS_CAP = 5000
 const CACHE_MS = 30 * 60_000
 
+// شناسه‌ی حساب معین «حساب‌های دریافتنی» (کد ۱۱۱۲۰۱) در سپیدار؛ همه‌ی فاکتورهای فروش روی همین حساب می‌روند.
+// با SEPIDAR_SL_REF در .env قابل تغییر است.
+const RECEIVABLE_SL_REF = 420
+
 function latinDigits(s: string) {
   return (s || "")
     .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
@@ -306,6 +310,18 @@ function parseServices(raw: unknown): any[] {
   }
 }
 
+// تاریخ فاکتور به وقت تهران و بدون ساعت (مثل فاکتورهای سیستم قبلی: yyyy-MM-ddT00:00:00).
+// با toISOString ساعت به UTC تبدیل می‌شد و فاکتورهای بین ۰۰:۰۰ تا ۰۳:۳۰ بامداد یک روز عقب می‌افتادند.
+function tehranDateOnly(d: Date) {
+  const day = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tehran",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d)
+  return `${day}T00:00:00`
+}
+
 export async function buildCreateInvoicePayload(orderId: string) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
@@ -453,11 +469,10 @@ export async function buildCreateInvoicePayload(orderId: string) {
     customerRealNameEn: null as string | null,
     saleTypeRef: settings.saleTypeRef || 1,
     number: invoiceNumber,
-    date: invoiceDate.toISOString().slice(0, 19),
+    date: tehranDateOnly(invoiceDate),
     currencyRef: settings.currencyRef || 1,
-    // حساب معین فاکتور: باید «حساب‌های دریافتنی» باشد. شناسه‌اش را در .env سرور به‌صورت
-    // SEPIDAR_SL_REF بگذارید (یا slRef را در تنظیمات سپیدار پر کنید)
-    slRef: Number(process.env.SEPIDAR_SL_REF) || settings.slRef || 1,
+    // حساب معین: همیشه «حساب‌های دریافتنی» (شناسه‌ی ۴۲۰ در سپیدار این شرکت)
+    slRef: Number(process.env.SEPIDAR_SL_REF) || RECEIVABLE_SL_REF,
     deliveryLocationRef: settings.deliveryLocationRef || 1,
     state: settings.state || 1,
     settlementType: settings.settlementType || 1,
