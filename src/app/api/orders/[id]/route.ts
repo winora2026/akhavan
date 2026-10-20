@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { safeDate } from "@/lib/date"
+import { withTotals } from "@/lib/orderTotals"
 
 export async function GET(
   req: NextRequest,
@@ -49,7 +50,8 @@ export async function GET(
       }),
     }
 
-    return NextResponse.json(orderWithParsedServices)
+    // مبالغ (جمع، ارزش افزوده، مبلغ نهایی) همراه سفارش برمی‌گردد
+    return NextResponse.json(withTotals(orderWithParsedServices))
   } catch (error: any) {
     console.error("Error fetching order:", error)
     return NextResponse.json(
@@ -185,7 +187,7 @@ export async function PUT(
       },
     })
 
-    return NextResponse.json({ success: true, order })
+    return NextResponse.json({ success: true, order: withTotals(order) })
   } catch (error: any) {
     console.error("Error updating order:", error)
     return NextResponse.json(

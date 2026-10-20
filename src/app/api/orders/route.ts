@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma"
 import { safeDate } from "@/lib/date"
 import { getSession } from "@/lib/auth"
 import { createProductionOrderFromSales } from "@/lib/createProductionOrder"
+import { withTotals } from "@/lib/orderTotals"
 
 // ───────────── سریال شماره‌ی سفارش ─────────────
 // دو سریال جدا داریم و شماره‌ی سفارش همان شماره‌ی فاکتور سپیدار می‌شود:
@@ -54,7 +55,8 @@ export async function GET() {
       },
     })
 
-    return NextResponse.json(orders)
+    // هر سفارش با subtotalAmount / totalAfterDiscount / vatAmount / finalTotal برمی‌گردد
+    return NextResponse.json(orders.map((o: any) => withTotals(o)))
   } catch (error: any) {
     console.error("Error fetching orders:", error)
     return NextResponse.json(
@@ -216,7 +218,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         success: true,
-        order,
+        order: withTotals(order),
         assignedOrderNumber: nextOrderNumber,
         assignedCustomerOrderNumber: nextCustomerOrderNumber,
         orderKind: isRental ? "اجرتی" : "خریداری",
@@ -354,7 +356,7 @@ export async function PATCH(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      order,
+      order: withTotals(order),
       productionOrder,
       productionError,
     })
