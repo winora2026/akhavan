@@ -64,6 +64,7 @@ type SortKey =
   | "totalQuantity"
   | "totalPrice"
   | "discountAmount"
+  | "vatAmount"
   | "installationDate"
   | "salesRep"
   | "registrar"
@@ -381,15 +382,24 @@ export default function InvoicesPage() {
     ]
   }, [orders])
 
-  // قیمت کل: برای فاکتور رسمی، مبلغ قابل پرداخت با ارزش افزوده (۱۰٪ بعد از تخفیف)
-  // برای غیررسمی، همان جمع اقلام مثل قبل
+  // جمع اقلام (کالا + خدمات) بدون تخفیف و ارزش افزوده
+  const getSubtotal = (order: OrderFromApi) =>
+    order.items?.reduce((sum, item) => sum + (item.totalPrice || 0), 0) || 0
+
+  // ارزش افزوده: فقط برای فاکتور رسمی، ۱۰٪ بعد از کسر تخفیف
+  const getVatAmount = (order: OrderFromApi) => {
+    if (!order.isOfficialInvoice) return 0
+    if (typeof order.vatAmount === "number") return order.vatAmount
+    const afterDiscount = getSubtotal(order) - (order.discountAmount || 0)
+    return Math.round(afterDiscount * 0.1)
+  }
+
+  // قیمت کل: برای فاکتور رسمی، مبلغ قابل پرداخت با ارزش افزوده؛ برای غیررسمی همان جمع اقلام
   const getTotalPrice = (order: OrderFromApi) => {
-    const subtotal =
-      order.items?.reduce((sum, item) => sum + (item.totalPrice || 0), 0) || 0
+    const subtotal = getSubtotal(order)
     if (!order.isOfficialInvoice) return subtotal
     if (typeof order.finalTotal === "number") return order.finalTotal
-    const afterDiscount = subtotal - (order.discountAmount || 0)
-    return afterDiscount + Math.round(afterDiscount * 0.1)
+    return subtotal - (order.discountAmount || 0) + getVatAmount(order)
   }
 
   const toggleSort = (key: SortKey) => {
@@ -511,6 +521,8 @@ export default function InvoicesPage() {
           return dir * (priceA - priceB)
         case "discountAmount":
           return dir * ((a.discountAmount || 0) - (b.discountAmount || 0))
+        case "vatAmount":
+          return dir * (getVatAmount(a) - getVatAmount(b))
         case "installationDate": {
           const da = parseOrderDate(a.installationDate)?.getTime() || 0
           const db = parseOrderDate(b.installationDate)?.getTime() || 0
@@ -842,6 +854,12 @@ export default function InvoicesPage() {
                   </th>
                   <th
                     className={thClass}
+                    onClick={() => toggleSort("vatAmount")}
+                  >
+                    ارزش افزوده{sortIndicator("vatAmount")}
+                  </th>
+                  <th
+                    className={thClass}
                     onClick={() => toggleSort("installationDate")}
                   >
                     تاریخ نصب{sortIndicator("installationDate")}
@@ -860,164 +878,162 @@ export default function InvoicesPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((item, index) => (
-                  <tr
-                    key={item.id}
-                    className="border-b border-teal-500/10 transition-colors hover:bg-teal-400/20 bg-white/30 cursor-pointer"
-                    title="دبل‌کلیک: نمایش کامل پیش‌فاکتور"
-                    onDoubleClick={() => setPreviewId(item.id)}
-                  >
-                    {canSyncSepidar && (
+                {filtered.map((item, index) => {
+                  const vat = getVatAmount(item)
+                  return (
+                    <tr
+                      key={item.id}
+                      className="border-b border-teal-500/10 transition-colors hover:bg-teal-400/20 bg-white/30 cursor-pointer"
+                      title="دبل‌کلیک: نمایش کامل پیش‌فاکتور"
+                      onDoubleClick={() => setPreviewId(item.id)}
+                    >
+                      {canSyncSepidar && (
+                        <td
+                          className="p-3 text-center"
+                          onClick={(e) => e.stopPropagation()}
+                          onDoubleClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(item.id)}
+                            disabled={isAlreadySynced(item)}
+                            onChange={() => toggleSelectOne(item.id)}
+                            className="w-4 h-4 cursor-pointer disabled:opacity-40"
+                          />
+                        </td>
+                      )}
+                      <td className="p-3 text-center font-bold">{index + 1}</td>
+                      <td className="p-3 font-bold whitespace-nowrap">
+                        {item.customer?.name || "—"}
+                      </td>
+                      <td className="p-3 font-semibold text-center">
+                        {item.orderNumber}
+                      </td>
+                      <td className="p-3 font-semibold text-center">
+                        {item.customerOrderNumber || "—"}
+                      </td>
+                      <td className="p-3 whitespace-nowrap text-center">
+                        {formatDate(getPreInvoiceDate(item))}
+                      </td>
+                      <td className="p-3 whitespace-nowrap text-center font-semibold text-teal-800">
+                        {formatDate(getInvoiceDate(item))}
+                      </td>
+                      <td className="p-3 whitespace-nowrap text-center">
+                        {formatDate(item.deliveryDate)}
+                      </td>
+                      <td className="p-3 text-center">
+                        {item.priority || "عادی"}
+                      </td>
+                      <td className="p-3 text-center font-semibold">
+                        {item.totalMeterage?.toFixed(4) || "0"}
+                      </td>
+                      <td className="p-3 text-center font-semibold">
+                        {item.totalQuantity || 0}
+                      </td>
+                      <td className="p-3 text-left font-bold text-teal-800 whitespace-nowrap">
+                        {formatPrice(getTotalPrice(item))}
+                      </td>
+                      <td className="p-3 text-left font-semibold text-orange-700 whitespace-nowrap">
+                        {item.discountAmount
+                          ? formatPrice(item.discountAmount)
+                          : "—"}
+                      </td>
+                      <td className="p-3 text-left font-semibold text-amber-700 whitespace-nowrap">
+                        {vat ? formatPrice(vat) : "—"}
+                      </td>
+                      <td className="p-3 text-center whitespace-nowrap">
+                        {item.installationDate
+                          ? formatDate(item.installationDate)
+                          : "—"}
+                      </td>
+                      <td className="p-3 text-center text-xs font-semibold text-blue-800">
+                        {item.salesRep || "—"}
+                      </td>
+                      <td className="p-3 text-center text-xs font-semibold text-blue-800">
+                        {getInvoiceExpert(item)}
+                      </td>
                       <td
                         className="p-3 text-center"
-                        onClick={(e) => e.stopPropagation()}
                         onDoubleClick={(e) => e.stopPropagation()}
                       >
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.includes(item.id)}
-                          disabled={isAlreadySynced(item)}
-                          onChange={() => toggleSelectOne(item.id)}
-                          className="w-4 h-4 cursor-pointer disabled:opacity-40"
-                        />
+                        {item.sepidarSyncStatus === "SUCCESS" ? (
+                          <span
+                            className="inline-block rounded-lg bg-green-100 text-green-800 text-xs font-bold px-2 py-1"
+                            title={item.sepidarInvoiceId || ""}
+                          >
+                            ✓ ارسال‌شده
+                          </span>
+                        ) : item.sepidarSyncStatus === "FAILED" ? (
+                          <span
+                            className="inline-block rounded-lg bg-red-100 text-red-800 text-xs font-bold px-2 py-1"
+                            title={item.sepidarSyncError || ""}
+                          >
+                            خطا
+                          </span>
+                        ) : item.sepidarSyncStatus === "PENDING" ? (
+                          <span className="text-xs font-bold text-amber-700">
+                            در حال ارسال…
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-500">—</span>
+                        )}
                       </td>
-                    )}
-                    <td className="p-3 text-center font-bold">{index + 1}</td>
-                    <td className="p-3 font-bold whitespace-nowrap">
-                      {item.customer?.name || "—"}
-                    </td>
-                    <td className="p-3 font-semibold text-center">
-                      {item.orderNumber}
-                    </td>
-                    <td className="p-3 font-semibold text-center">
-                      {item.customerOrderNumber || "—"}
-                    </td>
-                    <td className="p-3 whitespace-nowrap text-center">
-                      {formatDate(getPreInvoiceDate(item))}
-                    </td>
-                    <td className="p-3 whitespace-nowrap text-center font-semibold text-teal-800">
-                      {formatDate(getInvoiceDate(item))}
-                    </td>
-                    <td className="p-3 whitespace-nowrap text-center">
-                      {formatDate(item.deliveryDate)}
-                    </td>
-                    <td className="p-3 text-center">
-                      {item.priority || "عادی"}
-                    </td>
-                    <td className="p-3 text-center font-semibold">
-                      {item.totalMeterage?.toFixed(4) || "0"}
-                    </td>
-                    <td className="p-3 text-center font-semibold">
-                      {item.totalQuantity || 0}
-                    </td>
-                    <td className="p-3 text-left font-bold text-teal-800 whitespace-nowrap">
-                      {formatPrice(getTotalPrice(item))}
-                      {item.isOfficialInvoice && (
-                        <span
-                          className="mr-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800"
-                          title="شامل ۱۰٪ ارزش افزوده"
-                        >
-                          +ارزش افزوده
-                        </span>
-                      )}
-                    </td>
-                    <td className="p-3 text-left font-semibold text-orange-700 whitespace-nowrap">
-                      {item.discountAmount
-                        ? formatPrice(item.discountAmount)
-                        : "—"}
-                    </td>
-                    <td className="p-3 text-center whitespace-nowrap">
-                      {item.installationDate
-                        ? formatDate(item.installationDate)
-                        : "—"}
-                    </td>
-                    <td className="p-3 text-center text-xs font-semibold text-blue-800">
-                      {item.salesRep || "—"}
-                    </td>
-                    <td className="p-3 text-center text-xs font-semibold text-blue-800">
-                      {getInvoiceExpert(item)}
-                    </td>
-                    <td
-                      className="p-3 text-center"
-                      onDoubleClick={(e) => e.stopPropagation()}
-                    >
-                      {item.sepidarSyncStatus === "SUCCESS" ? (
-                        <span
-                          className="inline-block rounded-lg bg-green-100 text-green-800 text-xs font-bold px-2 py-1"
-                          title={item.sepidarInvoiceId || ""}
-                        >
-                          ✓ ارسال‌شده
-                        </span>
-                      ) : item.sepidarSyncStatus === "FAILED" ? (
-                        <span
-                          className="inline-block rounded-lg bg-red-100 text-red-800 text-xs font-bold px-2 py-1"
-                          title={item.sepidarSyncError || ""}
-                        >
-                          خطا
-                        </span>
-                      ) : item.sepidarSyncStatus === "PENDING" ? (
-                        <span className="text-xs font-bold text-amber-700">
-                          در حال ارسال…
-                        </span>
-                      ) : (
-                        <span className="text-xs text-gray-500">—</span>
-                      )}
-                    </td>
-                    <td
-                      className="p-3 text-center"
-                      onDoubleClick={(e) => e.stopPropagation()}
-                    >
-                      <div className="flex flex-col gap-1 items-center">
-                        <Link
-                          href={`/order/new?edit=${item.id}`}
-                          className="inline-block rounded-lg bg-blue-500/20 hover:bg-blue-500/40 px-3 py-1.5 text-xs font-bold text-blue-900 transition focus:ring-2 focus:ring-blue-400"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          ویرایش
-                        </Link>
-                        {canSyncSepidar && (
+                      <td
+                        className="p-3 text-center"
+                        onDoubleClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="flex flex-col gap-1 items-center">
+                          <Link
+                            href={`/order/new?edit=${item.id}`}
+                            className="inline-block rounded-lg bg-blue-500/20 hover:bg-blue-500/40 px-3 py-1.5 text-xs font-bold text-blue-900 transition focus:ring-2 focus:ring-blue-400"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            ویرایش
+                          </Link>
+                          {canSyncSepidar && (
+                            <button
+                              type="button"
+                              disabled={
+                                syncingId === item.id ||
+                                bulkSyncing ||
+                                item.sepidarSyncStatus === "SUCCESS"
+                              }
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                sendToSepidar(item)
+                              }}
+                              className="rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed px-3 py-1.5 text-xs font-bold text-white transition focus:ring-2 focus:ring-indigo-400"
+                              title={
+                                item.sepidarSyncStatus === "SUCCESS"
+                                  ? `ارسال‌شده: ${item.sepidarInvoiceId}`
+                                  : item.sepidarSyncError ||
+                                    "ارسال دستی به سپیدار"
+                              }
+                            >
+                              {syncingId === item.id
+                                ? "..."
+                                : item.sepidarSyncStatus === "SUCCESS"
+                                  ? "✓ سپیدار"
+                                  : item.sepidarSyncStatus === "FAILED"
+                                    ? "تلاش مجدد سپیدار"
+                                    : "ارسال سپیدار"}
+                            </button>
+                          )}
                           <button
                             type="button"
-                            disabled={
-                              syncingId === item.id ||
-                              bulkSyncing ||
-                              item.sepidarSyncStatus === "SUCCESS"
-                            }
                             onClick={(e) => {
                               e.stopPropagation()
-                              sendToSepidar(item)
+                              setRevertItem(item)
                             }}
-                            className="rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed px-3 py-1.5 text-xs font-bold text-white transition focus:ring-2 focus:ring-indigo-400"
-                            title={
-                              item.sepidarSyncStatus === "SUCCESS"
-                                ? `ارسال‌شده: ${item.sepidarInvoiceId}`
-                                : item.sepidarSyncError ||
-                                  "ارسال دستی به سپیدار"
-                            }
+                            className="rounded-lg bg-amber-500/30 hover:bg-amber-500/50 px-3 py-1.5 text-xs font-bold text-amber-900 transition focus:ring-2 focus:ring-amber-400"
                           >
-                            {syncingId === item.id
-                              ? "..."
-                              : item.sepidarSyncStatus === "SUCCESS"
-                                ? "✓ سپیدار"
-                                : item.sepidarSyncStatus === "FAILED"
-                                  ? "تلاش مجدد سپیدار"
-                                  : "ارسال سپیدار"}
+                            برگشت به پیش‌فاکتور
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setRevertItem(item)
-                          }}
-                          className="rounded-lg bg-amber-500/30 hover:bg-amber-500/50 px-3 py-1.5 text-xs font-bold text-amber-900 transition focus:ring-2 focus:ring-amber-400"
-                        >
-                          برگشت به پیش‌فاکتور
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           )}

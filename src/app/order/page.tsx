@@ -52,6 +52,7 @@ type SortKey =
   | "totalQuantity"
   | "totalPrice"
   | "discountAmount"
+  | "vatAmount"
   | "installationDate"
   | "salesRep"
   | "status"
@@ -204,6 +205,8 @@ export default function PreInvoicesPage() {
   const [sortKey, setSortKey] = useState<SortKey>("orderDate")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
   const [currentUserName, setCurrentUserName] = useState<string | null>(null)
+  // پیش‌نمایش کامل پیش‌فاکتور با دبل‌کلیک روی ردیف (iframe همان صفحه‌ی ثبت سفارش در حالت preview)
+  const [previewId, setPreviewId] = useState<string | null>(null)
 
   useEffect(() => {
     fetchOrders()
@@ -218,6 +221,27 @@ export default function PreInvoicesPage() {
       } catch {}
     })()
   }, [])
+
+  useEffect(() => {
+    if (!previewId) return
+    const onMessage = (e: MessageEvent) => {
+      if (
+        e.origin === window.location.origin &&
+        e.data?.type === "invoice-preview-close"
+      ) {
+        setPreviewId(null)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPreviewId(null)
+    }
+    window.addEventListener("message", onMessage)
+    window.addEventListener("keydown", onKey)
+    return () => {
+      window.removeEventListener("message", onMessage)
+      window.removeEventListener("keydown", onKey)
+    }
+  }, [previewId])
 
   const fetchOrders = async () => {
     try {
@@ -245,15 +269,24 @@ export default function PreInvoicesPage() {
     ]
   }, [orders])
 
-  // قیمت کل: برای فاکتور رسمی، مبلغ قابل پرداخت با ارزش افزوده (۱۰٪ بعد از تخفیف)
-  // برای غیررسمی، همان جمع اقلام مثل قبل
+  // جمع اقلام (کالا + خدمات) بدون تخفیف و ارزش افزوده
+  const getSubtotal = (order: OrderFromApi) =>
+    order.items?.reduce((sum, item) => sum + (item.totalPrice || 0), 0) || 0
+
+  // ارزش افزوده: فقط برای فاکتور رسمی، ۱۰٪ بعد از کسر تخفیف
+  const getVatAmount = (order: OrderFromApi) => {
+    if (!order.isOfficialInvoice) return 0
+    if (typeof order.vatAmount === "number") return order.vatAmount
+    const afterDiscount = getSubtotal(order) - (order.discountAmount || 0)
+    return Math.round(afterDiscount * 0.1)
+  }
+
+  // قیمت کل: برای فاکتور رسمی، مبلغ قابل پرداخت با ارزش افزوده؛ برای غیررسمی همان جمع اقلام
   const getTotalPrice = (order: OrderFromApi) => {
-    const subtotal =
-      order.items?.reduce((sum, item) => sum + (item.totalPrice || 0), 0) || 0
+    const subtotal = getSubtotal(order)
     if (!order.isOfficialInvoice) return subtotal
     if (typeof order.finalTotal === "number") return order.finalTotal
-    const afterDiscount = subtotal - (order.discountAmount || 0)
-    return afterDiscount + Math.round(afterDiscount * 0.1)
+    return subtotal - (order.discountAmount || 0) + getVatAmount(order)
   }
 
   const toggleSort = (key: SortKey) => {
@@ -402,6 +435,8 @@ export default function PreInvoicesPage() {
           return dir * (priceA - priceB)
         case "discountAmount":
           return dir * ((a.discountAmount || 0) - (b.discountAmount || 0))
+        case "vatAmount":
+          return dir * (getVatAmount(a) - getVatAmount(b))
         case "installationDate": {
           const da = parseOrderDate(a.installationDate)?.getTime() || 0
           const db = parseOrderDate(b.installationDate)?.getTime() || 0
@@ -760,6 +795,12 @@ export default function PreInvoicesPage() {
                   </th>
                   <th
                     className={thClass}
+                    onClick={() => toggleSort("vatAmount")}
+                  >
+                    ارزش افزوده{sortIndicator("vatAmount")}
+                  </th>
+                  <th
+                    className={thClass}
                     onClick={() => toggleSort("installationDate")}
                   >
                     تاریخ نصب{sortIndicator("installationDate")}
@@ -774,10 +815,13 @@ export default function PreInvoicesPage() {
               <tbody>
                 {filtered.map((item, index) => {
                   const isInv = isInvoiceStatus(item.status)
+                  const vat = getVatAmount(item)
                   return (
                     <tr
                       key={item.id}
-                      className={`border-b border-teal-500/10 transition-colors hover:bg-teal-400/20 ${
+                      title="دبل‌کلیک: نمایش کامل پیش‌فاکتور"
+                      onDoubleClick={() => setPreviewId(item.id)}
+                      className={`border-b border-teal-500/10 transition-colors hover:bg-teal-400/20 cursor-pointer ${
                         isInv ? "bg-amber-50/40" : "bg-white/30"
                       }`}
                     >
@@ -819,19 +863,14 @@ export default function PreInvoicesPage() {
                       </td>
                       <td className="p-3 text-left font-bold text-teal-800 whitespace-nowrap">
                         {formatPrice(getTotalPrice(item))}
-                        {item.isOfficialInvoice && (
-                          <span
-                            className="mr-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800"
-                            title="شامل ۱۰٪ ارزش افزوده"
-                          >
-                            +ارزش افزوده
-                          </span>
-                        )}
                       </td>
                       <td className="p-3 text-left font-semibold text-orange-700 whitespace-nowrap">
                         {item.discountAmount
                           ? formatPrice(item.discountAmount)
                           : "—"}
+                      </td>
+                      <td className="p-3 text-left font-semibold text-amber-700 whitespace-nowrap">
+                        {vat ? formatPrice(vat) : "—"}
                       </td>
                       <td className="p-3 text-center whitespace-nowrap">
                         {item.installationDate
@@ -843,7 +882,10 @@ export default function PreInvoicesPage() {
                           ? item.convertedBy || item.salesRep || "—"
                           : item.salesRep || "—"}
                       </td>
-                      <td className="p-3 text-center">
+                      <td
+                        className="p-3 text-center"
+                        onDoubleClick={(e) => e.stopPropagation()}
+                      >
                         {!isInv ? (
                           <Link
                             href={`/order/new?edit=${item.id}`}
@@ -860,7 +902,10 @@ export default function PreInvoicesPage() {
                           </Link>
                         )}
                       </td>
-                      <td className="p-3 text-center">
+                      <td
+                        className="p-3 text-center"
+                        onDoubleClick={(e) => e.stopPropagation()}
+                      >
                         {!isInv ? (
                           <button
                             onClick={() => setConfirmItem(item)}
@@ -920,6 +965,24 @@ export default function PreInvoicesPage() {
           </div>
         )}
       </div>
+
+      {previewId && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+          <iframe
+            key={previewId}
+            src={`/order/new?edit=${previewId}&preview=1`}
+            title="پیش‌نمایش پیش‌فاکتور"
+            className="h-full w-full border-0"
+            style={{ background: "transparent" }}
+          />
+          <Link
+            href={`/order/new?edit=${previewId}`}
+            className="fixed bottom-3 left-1/2 z-[60] -translate-x-1/2 rounded-xl bg-blue-600 hover:bg-blue-700 px-5 py-2 text-sm font-bold text-white shadow-lg"
+          >
+            باز کردن برای ویرایش
+          </Link>
+        </div>
+      )}
 
       {confirmItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
