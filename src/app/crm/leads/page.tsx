@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
+import DatePicker, { DateObject } from "react-multi-date-picker"
+import persian from "react-date-object/calendars/persian"
+import persian_fa from "react-date-object/locales/persian_fa"
 
 type Lead = {
   id: string
@@ -21,15 +24,25 @@ type Lead = {
 }
 
 const SOURCES = [
-  "همه",
-  "Phone",
-  "WhatsApp",
-  "Instagram",
-  "Website",
-  "Referral",
-  "Walk-in",
-  "Other",
+  { value: "همه", label: "همه" },
+  { value: "Phone", label: "تلفن" },
+  { value: "WhatsApp", label: "واتساپ" },
+  { value: "Instagram", label: "اینستاگرام" },
+  { value: "Website", label: "وب‌سایت" },
+  { value: "Referral", label: "معرفی" },
+  { value: "Walk-in", label: "حضوری" },
+  { value: "Other", label: "سایر" },
 ]
+
+const SOURCE_LABEL: Record<string, string> = {
+  Phone: "تلفن",
+  WhatsApp: "واتساپ",
+  Instagram: "اینستاگرام",
+  Website: "وب‌سایت",
+  Referral: "معرفی",
+  "Walk-in": "حضوری",
+  Other: "سایر",
+}
 
 const STATUSES = [
   { value: "همه", label: "همه وضعیت‌ها" },
@@ -89,9 +102,13 @@ export default function CrmLeadsPage() {
     productInterest: "",
     description: "",
     nextAction: "تماس اولیه",
-    nextActionDate: "",
+    nextActionDate: "" as string,
     estimatedValue: "",
   })
+
+  const [nextActionPicker, setNextActionPicker] = useState<DateObject | null>(
+    null
+  )
 
   const load = async () => {
     setLoading(true)
@@ -134,6 +151,22 @@ export default function CrmLeadsPage() {
     return { total, overdue, today }
   }, [leads])
 
+  const resetForm = () => {
+    setForm({
+      name: "",
+      mobile: "",
+      companyName: "",
+      city: "",
+      source: "Phone",
+      productInterest: "",
+      description: "",
+      nextAction: "تماس اولیه",
+      nextActionDate: "",
+      estimatedValue: "",
+    })
+    setNextActionPicker(null)
+  }
+
   const onCreate = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!form.name.trim()) {
@@ -167,18 +200,7 @@ export default function CrmLeadsPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "خطا در ذخیره")
       setShowForm(false)
-      setForm({
-        name: "",
-        mobile: "",
-        companyName: "",
-        city: "",
-        source: "Phone",
-        productInterest: "",
-        description: "",
-        nextAction: "تماس اولیه",
-        nextActionDate: "",
-        estimatedValue: "",
-      })
+      resetForm()
       await load()
     } catch (err: any) {
       alert(err.message || "خطا")
@@ -202,12 +224,14 @@ export default function CrmLeadsPage() {
       <div className="max-w-7xl mx-auto">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div>
-            <h1 className="text-2xl font-black text-blue-950">CRM · سرنخ‌ها (Lead)</h1>
+            <h1 className="text-2xl font-black text-blue-950">
+              CRM · سرنخ‌ها (Lead)
+            </h1>
             <p className="text-sm text-blue-800 mt-1">
               هیچ سرنخی بدون اقدام بعدی نماند
             </p>
           </div>
-                   <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2">
             <Link
               href="/crm"
               className="rounded-xl border border-teal-300 bg-white/80 px-4 py-2 font-bold text-blue-900"
@@ -253,7 +277,9 @@ export default function CrmLeadsPage() {
 
         <div className="rounded-2xl bg-white/90 border border-teal-200 p-4 mb-4 flex flex-wrap gap-3 items-end">
           <div className="flex-1 min-w-[160px]">
-            <label className="block text-xs font-bold text-blue-900 mb-1">جستجو</label>
+            <label className="block text-xs font-bold text-blue-900 mb-1">
+              جستجو
+            </label>
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -262,7 +288,9 @@ export default function CrmLeadsPage() {
             />
           </div>
           <div>
-            <label className="block text-xs font-bold text-blue-900 mb-1">وضعیت</label>
+            <label className="block text-xs font-bold text-blue-900 mb-1">
+              وضعیت
+            </label>
             <select
               value={status}
               onChange={(e) => setStatus(e.target.value)}
@@ -276,15 +304,17 @@ export default function CrmLeadsPage() {
             </select>
           </div>
           <div>
-            <label className="block text-xs font-bold text-blue-900 mb-1">منبع</label>
+            <label className="block text-xs font-bold text-blue-900 mb-1">
+              منبع
+            </label>
             <select
               value={source}
               onChange={(e) => setSource(e.target.value)}
               className="rounded-xl border border-teal-300 px-3 py-2 font-semibold"
             >
               {SOURCES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
+                <option key={s.value} value={s.value}>
+                  {s.label}
                 </option>
               ))}
             </select>
@@ -306,9 +336,13 @@ export default function CrmLeadsPage() {
 
         <div className="rounded-2xl bg-white/90 border border-teal-200 overflow-x-auto">
           {loading ? (
-            <p className="p-6 text-center font-bold text-blue-800">در حال بارگذاری...</p>
+            <p className="p-6 text-center font-bold text-blue-800">
+              در حال بارگذاری...
+            </p>
           ) : leads.length === 0 ? (
-            <p className="p-6 text-center font-bold text-blue-800">سرنخی یافت نشد</p>
+            <p className="p-6 text-center font-bold text-blue-800">
+              سرنخی یافت نشد
+            </p>
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -327,9 +361,12 @@ export default function CrmLeadsPage() {
                 {leads.map((l) => {
                   const overdue = isOverdue(l.nextActionDate)
                   return (
-                    <tr
+                                        <tr
                       key={l.id}
-                      className={`border-b border-teal-100 ${
+                      onClick={() => {
+                        window.location.href = `/crm/leads/${l.id}`
+                      }}
+                      className={`border-b border-teal-100 cursor-pointer ${
                         overdue ? "bg-red-50" : "hover:bg-teal-50/50"
                       }`}
                     >
@@ -345,9 +382,15 @@ export default function CrmLeadsPage() {
                         {l.mobile || l.phone || "—"}
                       </td>
                       <td className="p-3">{l.city || "—"}</td>
-                      <td className="p-3">{l.source}</td>
-                      <td className="p-3">{STATUS_LABEL[l.status] || l.status}</td>
-                      <td className="p-3 font-semibold">{l.nextAction || "—"}</td>
+                      <td className="p-3">
+                        {SOURCE_LABEL[l.source] || l.source}
+                      </td>
+                      <td className="p-3">
+                        {STATUS_LABEL[l.status] || l.status}
+                      </td>
+                      <td className="p-3 font-semibold">
+                        {l.nextAction || "—"}
+                      </td>
                       <td
                         className={`p-3 font-bold ${
                           overdue ? "text-red-600" : "text-blue-900"
@@ -391,7 +434,9 @@ export default function CrmLeadsPage() {
                   <input
                     className="w-full rounded-xl border border-teal-300 px-3 py-2"
                     value={form.mobile}
-                    onChange={(e) => setForm({ ...form, mobile: e.target.value })}
+                    onChange={(e) =>
+                      setForm({ ...form, mobile: e.target.value })
+                    }
                     dir="ltr"
                   />
                 </div>
@@ -420,11 +465,13 @@ export default function CrmLeadsPage() {
                   <select
                     className="w-full rounded-xl border border-teal-300 px-3 py-2"
                     value={form.source}
-                    onChange={(e) => setForm({ ...form, source: e.target.value })}
+                    onChange={(e) =>
+                      setForm({ ...form, source: e.target.value })
+                    }
                   >
-                    {SOURCES.filter((s) => s !== "همه").map((s) => (
-                      <option key={s} value={s}>
-                        {s}
+                    {SOURCES.filter((s) => s.value !== "همه").map((s) => (
+                      <option key={s.value} value={s.value}>
+                        {s.label}
                       </option>
                     ))}
                   </select>
@@ -466,14 +513,27 @@ export default function CrmLeadsPage() {
                 </div>
                 <div>
                   <label className="text-xs font-bold">موعد اقدام *</label>
-                  <input
-                    type="datetime-local"
-                    className="w-full rounded-xl border border-teal-300 px-3 py-2"
-                    value={form.nextActionDate}
-                    onChange={(e) =>
-                      setForm({ ...form, nextActionDate: e.target.value })
-                    }
-                    required
+                  <DatePicker
+                    value={nextActionPicker}
+                    onChange={(d: DateObject | DateObject[] | null) => {
+                      const dateObj = Array.isArray(d) ? d[0] : d
+                      setNextActionPicker(dateObj || null)
+                      if (!dateObj) {
+                        setForm({ ...form, nextActionDate: "" })
+                        return
+                      }
+                      const js = dateObj.toDate()
+                      setForm({
+                        ...form,
+                        nextActionDate: js.toISOString(),
+                      })
+                    }}
+                    calendar={persian}
+                    locale={persian_fa}
+                    format="YYYY/MM/DD"
+                    inputClass="w-full rounded-xl border border-teal-300 px-3 py-2 font-semibold"
+                    containerClassName="w-full"
+                    calendarPosition="bottom-right"
                   />
                 </div>
               </div>
@@ -493,7 +553,10 @@ export default function CrmLeadsPage() {
             <div className="mt-5 flex gap-2 justify-end">
               <button
                 type="button"
-                onClick={() => setShowForm(false)}
+                onClick={() => {
+                  setShowForm(false)
+                  resetForm()
+                }}
                 className="rounded-xl border px-4 py-2 font-bold"
               >
                 انصراف

@@ -533,7 +533,22 @@ export default function NewOrderClient() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
+  // پر کردن نام مشتری از CRM (بعد از تبدیل سرنخ / دکمه ثبت پیش‌فاکتور)
+  useEffect(() => {
+    if (searchParams.get("fromCrm") !== "1") return
+    try {
+      const raw = localStorage.getItem("crmLeadTransfer")
+      if (!raw) return
+      const data = JSON.parse(raw)
+      if (data.customerName) {
+        setCustomerName(data.customerName)
+        setCustomerSearch(data.customerName)
+      }
+      localStorage.removeItem("crmLeadTransfer")
+    } catch (err) {
+      console.error(err)
+    }
+  }, [searchParams])
   // ذخیره‌ی خودکار (و با تأخیر کوتاه) پیش‌نویس سفارش در حال تکمیل — با هر تغییری در فرم
   // (چه وسط ثبت، چه بعد از تکمیل) اجرا می‌شود تا در صورت بسته‌شدن اشتباهیِ صفحه چیزی از
   // بین نرود. در حالت ویرایش سفارش موجود (editId) چیزی نوشته نمی‌شود.
