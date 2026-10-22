@@ -207,12 +207,24 @@ export default function CrmLeadsPage() {
               هیچ سرنخی بدون اقدام بعدی نماند
             </p>
           </div>
-          <div className="flex gap-2">
+                   <div className="flex flex-wrap gap-2">
             <Link
-              href="/"
+              href="/crm"
               className="rounded-xl border border-teal-300 bg-white/80 px-4 py-2 font-bold text-blue-900"
             >
-              داشبورد
+              داشبورد CRM
+            </Link>
+            <Link
+              href="/crm/follow-ups"
+              className="rounded-xl border border-orange-300 bg-white/80 px-4 py-2 font-bold text-orange-800"
+            >
+              کارتابل پیگیری
+            </Link>
+            <Link
+              href="/"
+              className="rounded-xl border border-gray-300 bg-white/80 px-4 py-2 font-bold text-blue-900"
+            >
+              خانه
             </Link>
             <button
               type="button"
