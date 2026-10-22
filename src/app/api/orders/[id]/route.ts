@@ -159,6 +159,7 @@ export async function PUT(
         items: {
           create: (items || []).map((item: any, index: number) => ({
             productName: item.productName || "بدون نام",
+            productCode: item.productCode ? String(item.productCode).trim() : null,
             pieceNumber: item.partNumber || null,
             installationCode: item.installCode || null,
             unit: item.unit || null,

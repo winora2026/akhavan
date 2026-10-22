@@ -47,8 +47,8 @@ const codeOf = (it: any) => latinDigits(String(it?.Code ?? it?.code ?? "")).trim
 const titleOf = (it: any) => String(it?.Title ?? it?.title ?? it?.Name ?? it?.name ?? "")
 
 // ───────────── نام → کد (از فایل‌های seed کالا و خدمات) ─────────────
-// ردیف سفارش کد کالا را ذخیره نمی‌کند؛ ولی نام‌ها از همین فایل‌ها آمده‌اند و کد کالا
-// در نرم‌افزار و سپیدار یکی است. اگر یک نام با دو کد مختلف باشد (مبهم)، مقدار null می‌شود.
+// برای سفارش‌های قدیمی که کد کالا روی ردیفشان ذخیره نشده. اگر یک نام با دو کد مختلف باشد
+// (مبهم)، مقدار null می‌شود و نگاشت با نام انجام می‌شود.
 function buildCodeByName(list: any[]) {
   const m = new Map<string, string | null>()
   for (const x of list) {
@@ -133,8 +133,12 @@ export type ResolvedItem = {
 
 /**
  * نگاشت کالا/خدمت نرم‌افزار → آیتم سپیدار.
- * ترتیب: ۱) ردیف ذخیره‌شده در SepidarItemMap  ۲) کد کالا  ۳) نام نرمال‌شده  ۴) جستجوی مستقیم با کد
- * هر چه پیدا شود در SepidarItemMap ذخیره می‌شود تا دفعه‌ی بعد مستقیم از دیتابیس خوانده شود.
+ * ترتیب:
+ *  ۱) کد کالا (دقیق‌ترین راه؛ کد کالا در نرم‌افزار و سپیدار یکی است و حتی برای نام‌های تکراری جواب می‌دهد)
+ *  ۲) ردیف ذخیره‌شده در SepidarItemMap با نام (از جمله نگاشت دستی)
+ *  ۳) نام نرمال‌شده، فقط اگر دقیقاً یک آیتم با همین نام در سپیدار باشد
+ * نگاشت خودکار فقط برای نام‌های یکتا در SepidarItemMap ذخیره می‌شود؛ برای نام‌های تکراری ذخیره نمی‌شود
+ * تا نگاشت یک کد، کالاهای هم‌نامِ دیگر را خراب نکند.
  */
 export async function createItemResolver() {
   const maps = (await prisma.sepidarItemMap.findMany()) as any[]
@@ -162,25 +166,36 @@ export async function createItemResolver() {
     productCode?: string | null
   ): Promise<ResolvedItem> {
     const key = nameKey(productName)
-
-    // ۱) نگاشت ذخیره‌شده
+    const code = latinDigits(String(productCode || "")).trim()
     const saved = mapByKey.get(key)
+
+    // ۱) با کد کالا
+    if (code) {
+      const index = await loadItemIndex()
+      let hit: any = index.byCode.get(code) ?? null
+      let via: ResolvedItem["via"] = "code"
+      if (!hit) {
+        hit = await lookupByCode(code)
+        via = "code-lookup"
+      }
+      const id = hit ? itemIdOf(hit) : null
+      if (id) {
+        const sameName = index.byKey.get(key)
+        if (!saved && (!sameName || sameName.length <= 1)) {
+          await persist(productName, id)
+        }
+        const savedStock = saved && Number(saved.itemRef) === id ? saved.stockRef ?? null : null
+        return { itemRef: id, stockRef: savedStock, via }
+      }
+      // کد در سپیدار پیدا نشد (کد قدیمی/اشتباه)؛ با نام ادامه می‌دهیم
+    }
+
+    // ۲) نگاشت ذخیره‌شده با نام
     if (saved) {
       return { itemRef: Number(saved.itemRef), stockRef: saved.stockRef ?? null, via: "map" }
     }
 
     const index = await loadItemIndex()
-    const code = latinDigits(String(productCode || "")).trim()
-
-    // ۲) با کد کالا (کد کالا در نرم‌افزار و سپیدار یکی است)
-    if (code) {
-      const hit = index.byCode.get(code)
-      const id = hit ? itemIdOf(hit) : null
-      if (id) {
-        await persist(productName, id)
-        return { itemRef: id, stockRef: null, via: "code" }
-      }
-    }
 
     // ۳) با نام نرمال‌شده، فقط اگر دقیقاً یک آیتم با همین نام باشد
     const byName = index.byKey.get(key)
@@ -195,18 +210,8 @@ export async function createItemResolver() {
       throw new Error(
         `برای «${productName}» چند آیتم هم‌نام در سپیدار هست (${byName
           .map((it) => `کد ${codeOf(it)}`)
-          .join("، ")}). کد کالا روی سفارش ثبت نشده تا بشود بینشان انتخاب کرد؛ نگاشت را دستی در SepidarItemMap وارد کنید.`
+          .join("، ")}). کد کالا روی این سفارش ثبت نشده؛ در ویرایش سفارش کالا را دوباره از لیست انتخاب و ذخیره کنید، یا نگاشت را دستی در SepidarItemMap وارد کنید.`
       )
-    }
-
-    // ۴) جستجوی مستقیم با کد (برای کالاهای بعد از ۵۰۰۰ ردیف اول)
-    if (code) {
-      const hit = await lookupByCode(code)
-      const id = hit ? itemIdOf(hit) : null
-      if (id) {
-        await persist(productName, id)
-        return { itemRef: id, stockRef: null, via: "code-lookup" }
-      }
     }
 
     const near = suggest(index.list, productName)
@@ -353,7 +358,7 @@ export async function buildCreateInvoicePayload(orderId: string) {
     }
   }
 
-  // حالت واقعی: نگاشت خودکار با نگاشت ذخیره‌شده، کد کالا و نام
+  // حالت واقعی: نگاشت خودکار با کد کالا، نگاشت ذخیره‌شده و نام
   const resolveItem = isReal ? await createItemResolver() : null
 
   // حالت آزمایشی: فقط جدول نگاشت (بدون تماس با سپیدار)
@@ -390,11 +395,12 @@ export async function buildCreateInvoicePayload(orderId: string) {
 
   for (const it of order.items) {
     // ── ردیف کالا: مقدار = متراژ، فی = قیمت هر واحد، مبلغ = فی × مقدار ──
+    // کد کالای ذخیره‌شده روی ردیف سفارش اولویت دارد؛ برای سفارش‌های قدیمی از seed (بر اساس نام) خوانده می‌شود
     const productCode =
-      (it as any).productCode ??
-      (it as any).code ??
-      (it as any).itemCode ??
-      productCodeByName.get(nameKey(it.productName)) ??
+      (it as any).productCode ||
+      (it as any).code ||
+      (it as any).itemCode ||
+      productCodeByName.get(nameKey(it.productName)) ||
       null
 
     const base = await resolveRef(it.productName, productCode)

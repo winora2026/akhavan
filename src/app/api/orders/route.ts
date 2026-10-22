@@ -139,6 +139,8 @@ export async function POST(req: NextRequest) {
 
     const itemsData = (items || []).map((item: any, index: number) => ({
       productName: item.productName || "بدون نام",
+      // کد کالا (برای تشخیص آیتم درست در سپیدار، مخصوصاً وقتی دو کالا هم‌نام هستند)
+      productCode: item.productCode ? String(item.productCode).trim() : null,
       pieceNumber: item.partNumber || null,
       installationCode: item.installCode || null,
       unit: item.unit || null,
