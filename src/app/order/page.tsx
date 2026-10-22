@@ -22,6 +22,9 @@ type OrderFromApi = {
   createdAt: string
   discountAmount: number | null
   discountPercent: number | null
+  isOfficialInvoice?: boolean
+  vatAmount?: number
+  finalTotal?: number
   salesRep?: string | null
   convertedBy?: string | null
   invoicedAt?: string | null
@@ -242,8 +245,16 @@ export default function PreInvoicesPage() {
     ]
   }, [orders])
 
-  const getTotalPrice = (order: OrderFromApi) =>
-    order.items?.reduce((sum, item) => sum + (item.totalPrice || 0), 0) || 0
+  // قیمت کل: برای فاکتور رسمی، مبلغ قابل پرداخت با ارزش افزوده (۱۰٪ بعد از تخفیف)
+  // برای غیررسمی، همان جمع اقلام مثل قبل
+  const getTotalPrice = (order: OrderFromApi) => {
+    const subtotal =
+      order.items?.reduce((sum, item) => sum + (item.totalPrice || 0), 0) || 0
+    if (!order.isOfficialInvoice) return subtotal
+    if (typeof order.finalTotal === "number") return order.finalTotal
+    const afterDiscount = subtotal - (order.discountAmount || 0)
+    return afterDiscount + Math.round(afterDiscount * 0.1)
+  }
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -808,6 +819,14 @@ export default function PreInvoicesPage() {
                       </td>
                       <td className="p-3 text-left font-bold text-teal-800 whitespace-nowrap">
                         {formatPrice(getTotalPrice(item))}
+                        {item.isOfficialInvoice && (
+                          <span
+                            className="mr-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800"
+                            title="شامل ۱۰٪ ارزش افزوده"
+                          >
+                            +ارزش افزوده
+                          </span>
+                        )}
                       </td>
                       <td className="p-3 text-left font-semibold text-orange-700 whitespace-nowrap">
                         {item.discountAmount
