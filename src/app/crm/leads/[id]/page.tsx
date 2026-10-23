@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
+import DatePicker, { DateObject } from "react-multi-date-picker"
+import persian from "react-date-object/calendars/persian"
+import persian_fa from "react-date-object/locales/persian_fa"
 
 const STATUS_LABEL: Record<string, string> = {
   NEW: "جدید",
@@ -48,6 +51,13 @@ export default function LeadDetailPage() {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState("")
   const [status, setStatus] = useState("")
+  const [nextAction, setNextAction] = useState("")
+  const [nextPicker, setNextPicker] = useState<DateObject | null>(null)
+  const [nextActionDateIso, setNextActionDateIso] = useState("")
+  const [lostReasons, setLostReasons] = useState<
+    { id: string; name: string }[]
+  >([])
+  const [lostReasonId, setLostReasonId] = useState("")
 
   const load = async () => {
     setLoading(true)
@@ -57,6 +67,18 @@ export default function LeadDetailPage() {
       if (!res.ok) throw new Error(data.error || "خطا")
       setLead(data)
       setStatus(data.status)
+      setNextAction(data.nextAction || "")
+      setLostReasonId(data.lostReasonId || "")
+      if (data.nextActionDate) {
+        const d = new Date(data.nextActionDate)
+        setNextActionDateIso(d.toISOString())
+        setNextPicker(
+          new DateObject({ date: d, calendar: persian, locale: persian_fa })
+        )
+      } else {
+        setNextActionDateIso("")
+        setNextPicker(null)
+      }
     } catch (e: any) {
       alert(e.message || "خطا")
     } finally {
@@ -66,20 +88,61 @@ export default function LeadDetailPage() {
 
   useEffect(() => {
     if (id) load()
+    ;(async () => {
+      try {
+        const res = await fetch("/api/crm/lost-reasons")
+        const data = await res.json()
+        if (res.ok) setLostReasons(Array.isArray(data) ? data : [])
+      } catch {}
+    })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
   const saveStatus = async () => {
+    if (status === "LOST" && !lostReasonId) {
+      alert("برای وضعیت از دست رفته، دلیل را انتخاب کنید")
+      return
+    }
     setBusy(true)
     try {
       const res = await fetch(`/api/crm/leads/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({
+          status,
+          lostReasonId: status === "LOST" ? lostReasonId : null,
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "خطا")
       await load()
+    } catch (e: any) {
+      alert(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveNextAction = async () => {
+    if (!nextAction.trim() || !nextActionDateIso) {
+      alert("اقدام بعدی و موعد الزامی است")
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await fetch(`/api/crm/leads/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nextAction: nextAction.trim(),
+          nextActionDate: nextActionDateIso,
+          createFollowUp: true,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "خطا")
+      await load()
+      alert("اقدام بعدی ثبت شد")
     } catch (e: any) {
       alert(e.message)
     } finally {
@@ -111,6 +174,28 @@ export default function LeadDetailPage() {
     }
   }
 
+  const markFollowDone = async (followId: string) => {
+    setBusy(true)
+    try {
+      const res = await fetch("/api/crm/follow-ups", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: followId,
+          status: "DONE",
+          result: "انجام شد",
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "خطا")
+      await load()
+    } catch (e: any) {
+      alert(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const convert = async () => {
     if (!confirm("این سرنخ به مشتری فروش تبدیل شود؟")) return
     setBusy(true)
@@ -129,11 +214,10 @@ export default function LeadDetailPage() {
     }
   }
 
-  /** آماده‌سازی ثبت پیش‌فاکتور با نام مشتری */
   const goToPreInvoice = () => {
     const name = lead?.customer?.name || lead?.name
     if (!name) {
-      alert("ابتدا به مشتری تبدیل کنید یا نام سرنخ را بررسی کنید")
+      alert("ابتدا به مشتری تبدیل کنید یا نام را بررسی کنید")
       return
     }
     try {
@@ -151,7 +235,10 @@ export default function LeadDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center font-bold" dir="rtl">
+      <div
+        className="min-h-screen flex items-center justify-center font-bold"
+        dir="rtl"
+      >
         در حال بارگذاری...
       </div>
     )
@@ -177,10 +264,16 @@ export default function LeadDetailPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Link href="/crm/leads" className="rounded-xl border px-4 py-2 font-bold bg-white">
+            <Link
+              href="/crm/leads"
+              className="rounded-xl border px-4 py-2 font-bold bg-white"
+            >
               لیست سرنخ‌ها
             </Link>
-            <Link href="/crm/follow-ups" className="rounded-xl border px-4 py-2 font-bold bg-white">
+            <Link
+              href="/crm/follow-ups"
+              className="rounded-xl border px-4 py-2 font-bold bg-white"
+            >
               کارتابل
             </Link>
           </div>
@@ -188,14 +281,17 @@ export default function LeadDetailPage() {
 
         <div className="rounded-2xl border border-teal-200 bg-white/95 p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
           <p>
-            <span className="text-xs text-gray-500">وضعیت فعلی: </span>
+            <span className="text-xs text-gray-500">وضعیت: </span>
             <strong>{STATUS_LABEL[lead.status] || lead.status}</strong>
           </p>
           <p>
             <span className="text-xs text-gray-500">اقدام بعدی: </span>
             <strong>{lead.nextAction || "—"}</strong>
             {lead.nextActionDate ? (
-              <span className="text-xs text-gray-500"> ({formatFa(lead.nextActionDate)})</span>
+              <span className="text-xs text-gray-500">
+                {" "}
+                ({formatFa(lead.nextActionDate)})
+              </span>
             ) : null}
           </p>
           <p>
@@ -206,6 +302,11 @@ export default function LeadDetailPage() {
             <span className="text-xs text-gray-500">کارشناس: </span>
             <strong>{lead.assignedTo?.displayName || "—"}</strong>
           </p>
+          {lead.lostReason?.name && (
+            <p className="sm:col-span-2 text-red-700">
+              دلیل باخت: <strong>{lead.lostReason.name}</strong>
+            </p>
+          )}
           {lead.productInterest && (
             <p className="sm:col-span-2">
               <span className="text-xs text-gray-500">علاقه محصول: </span>
@@ -213,10 +314,13 @@ export default function LeadDetailPage() {
             </p>
           )}
           {lead.description && (
-            <p className="sm:col-span-2 text-sm text-gray-700">{lead.description}</p>
+            <p className="sm:col-span-2 text-sm text-gray-700">
+              {lead.description}
+            </p>
           )}
         </div>
 
+        {/* وضعیت + دلیل باخت */}
         <div className="rounded-2xl border border-teal-200 bg-white/95 p-4 flex flex-wrap gap-2 items-end">
           <div>
             <label className="text-xs font-bold block mb-1">تغییر وضعیت</label>
@@ -232,6 +336,23 @@ export default function LeadDetailPage() {
               ))}
             </select>
           </div>
+          {status === "LOST" && (
+            <div>
+              <label className="text-xs font-bold block mb-1">دلیل باخت</label>
+              <select
+                value={lostReasonId}
+                onChange={(e) => setLostReasonId(e.target.value)}
+                className="rounded-xl border border-red-300 px-3 py-2 font-semibold"
+              >
+                <option value="">انتخاب کنید</option>
+                {lostReasons.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <button
             type="button"
             disabled={busy}
@@ -260,6 +381,51 @@ export default function LeadDetailPage() {
           </button>
         </div>
 
+        {/* اقدام بعدی جدید */}
+        <div className="rounded-2xl border border-orange-200 bg-white/95 p-4">
+          <h2 className="font-black text-blue-950 mb-3">تعیین اقدام بعدی</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-bold block mb-1">اقدام</label>
+              <input
+                className="w-full rounded-xl border border-teal-300 px-3 py-2 font-semibold"
+                value={nextAction}
+                onChange={(e) => setNextAction(e.target.value)}
+                placeholder="مثلاً تماس مجدد / ارسال قیمت"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold block mb-1">موعد</label>
+              <DatePicker
+                value={nextPicker}
+                onChange={(d: DateObject | DateObject[] | null) => {
+                  const dateObj = Array.isArray(d) ? d[0] : d
+                  setNextPicker(dateObj || null)
+                  if (!dateObj) {
+                    setNextActionDateIso("")
+                    return
+                  }
+                  setNextActionDateIso(dateObj.toDate().toISOString())
+                }}
+                calendar={persian}
+                locale={persian_fa}
+                format="YYYY/MM/DD"
+                inputClass="w-full rounded-xl border border-teal-300 px-3 py-2 font-semibold"
+                containerClassName="w-full"
+                calendarPosition="bottom-right"
+              />
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={saveNextAction}
+            className="mt-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold px-4 py-2 disabled:opacity-50"
+          >
+            ثبت اقدام + پیگیری در کارتابل
+          </button>
+        </div>
+
         <div className="rounded-2xl border border-teal-200 bg-white/95 p-4">
           <h2 className="font-black text-blue-950 mb-2">ثبت یادداشت / تماس</h2>
           <textarea
@@ -277,6 +443,40 @@ export default function LeadDetailPage() {
           >
             ذخیره فعالیت
           </button>
+        </div>
+
+        <div className="rounded-2xl border border-orange-200 bg-white/95 p-4">
+          <h2 className="font-black text-blue-950 mb-3">پیگیری‌ها</h2>
+          {!lead.followUps?.length ? (
+            <p className="text-gray-500 text-sm">پیگیری ثبت نشده</p>
+          ) : (
+            <ul className="space-y-2">
+              {lead.followUps.map((f: any) => (
+                <li
+                  key={f.id}
+                  className="flex flex-wrap justify-between gap-2 items-center text-sm border-b border-gray-100 pb-2"
+                >
+                  <span>
+                    {f.description || f.type}{" "}
+                    <span className="text-xs text-gray-500">
+                      ({f.status === "DONE" ? "انجام‌شده" : "باز"}) ·{" "}
+                      {formatFa(f.dueDate)}
+                    </span>
+                  </span>
+                  {f.status === "PENDING" && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => markFollowDone(f.id)}
+                      className="rounded-lg bg-green-600 text-white text-xs font-bold px-3 py-1.5 disabled:opacity-50"
+                    >
+                      انجام شد
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         <div className="rounded-2xl border border-teal-200 bg-white/95 p-4">
@@ -304,30 +504,6 @@ export default function LeadDetailPage() {
                       {a.createdBy.displayName}
                     </p>
                   )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div className="rounded-2xl border border-orange-200 bg-white/95 p-4">
-          <h2 className="font-black text-blue-950 mb-3">پیگیری‌ها</h2>
-          {!lead.followUps?.length ? (
-            <p className="text-gray-500 text-sm">پیگیری ثبت نشده</p>
-          ) : (
-            <ul className="space-y-2">
-              {lead.followUps.map((f: any) => (
-                <li
-                  key={f.id}
-                  className="flex justify-between gap-2 text-sm border-b border-gray-100 pb-2"
-                >
-                  <span>
-                    {f.description || f.type}{" "}
-                    <span className="text-xs text-gray-500">
-                      ({f.status === "DONE" ? "انجام‌شده" : "باز"})
-                    </span>
-                  </span>
-                  <span className="text-xs">{formatFa(f.dueDate)}</span>
                 </li>
               ))}
             </ul>

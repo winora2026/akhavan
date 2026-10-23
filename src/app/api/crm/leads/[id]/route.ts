@@ -74,6 +74,12 @@ export async function PATCH(
     if (body.estimatedValue != null && body.estimatedValue !== "") {
       data.estimatedValue = Number(body.estimatedValue)
     }
+    if (body.lostReasonId !== undefined) {
+      data.lostReasonId =
+        body.lostReasonId === "" || body.lostReasonId === null
+          ? null
+          : String(body.lostReasonId)
+    }
     data.lastActivityAt = new Date()
 
     const lead = await prisma.lead.update({
@@ -84,6 +90,7 @@ export async function PATCH(
           select: { id: true, displayName: true, username: true },
         },
         customer: true,
+        lostReason: true,
       },
     })
 
@@ -100,7 +107,6 @@ export async function PATCH(
       })
     }
 
-    // اگر اقدام بعدی جدید فرستاده شد، یک FollowUp باز بساز
     if (body.createFollowUp && body.nextAction && body.nextActionDate) {
       const due = new Date(body.nextActionDate)
       if (!isNaN(due.getTime())) {
