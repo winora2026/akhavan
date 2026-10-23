@@ -50,6 +50,7 @@ model Order {
   installationNotes      String?
   discountAmount         Float              @default(0)
   discountPercent        Float?
+  extraAmount            Float              @default(0)
   isOfficialInvoice      Boolean            @default(false)
   isStop                 Boolean            @default(false)
   status                 String             @default("ثبت‌شده")

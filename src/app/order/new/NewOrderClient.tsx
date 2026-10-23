@@ -259,6 +259,8 @@ const productsList = (productsSeedRaw as any[]).map((p: any) => {
     code,
     name,
     unit: p.unit || "",
+    // قیمت پیش‌فرض کالا از فایل seed (۰ یعنی قیمتی ثبت نشده)
+    price: Number(p.price) || 0,
     normalizedCode: normalizeText(code),
     normalizedName: normalizeText(name),
   }
@@ -273,9 +275,23 @@ const servicesList = (servicesSeedRaw as any[]).map((s: any) => {
     code,
     name,
     unit: s.unit || "",
+    // قیمت پیش‌فرض خدمت بر اساس ضخامت شیشه، مثلاً { "4": 1550000, "6": 1800000 } (اختیاری)
+    prices: (s.prices || null) as Record<string, number> | null,
     normalizedCode: normalizeText(code),
     normalizedName: normalizeText(name),
   }
+})
+
+// ضخامت شیشه (میل) از روی نام کالا، مثلاً «6 میل آینه سفید» → "6"
+const getThicknessFromName = (productName: string): string => {
+  const m = normalizeText(productName || "").match(/(\d+(?:\.\d+)?)\s*میل/)
+  return m ? m[1] : ""
+}
+
+// خدمت‌ها بر اساس نام → اطلاعات خدمت (برای پیدا کردن قیمت پیش‌فرض)
+const servicesByName = new Map<string, (typeof servicesList)[number]>()
+servicesList.forEach((s) => {
+  if (!servicesByName.has(s.name)) servicesByName.set(s.name, s)
 })
 
 // دسته‌بندی خودکار هر خدمت بر اساس کلیدواژه‌های موجود در نامش — همان پنج
@@ -394,6 +410,9 @@ export default function NewOrderClient() {
   const [invoiceMode, setInvoiceMode] = useState<"detailed" | "summary" | "breakdown">("detailed")
   const [isOfficialInvoice, setIsOfficialInvoice] = useState(false)
   const [hasDiscount, setHasDiscount] = useState(false)
+  // «اضافات»: مبلغ دلخواهی که دستی به پیش‌فاکتور اضافه می‌شود و در مبلغ نهایی جمع می‌خورد
+  const [hasExtra, setHasExtra] = useState(false)
+  const [extraAmount, setExtraAmount] = useState("")
   const [discountPercent, setDiscountPercent] = useState(5)
   const [discountMode, setDiscountMode] = useState<"percent" | "manual">("percent")
   const [manualDiscountAmount, setManualDiscountAmount] = useState("")
@@ -522,6 +541,8 @@ export default function NewOrderClient() {
         if (d.discountMode) setDiscountMode(d.discountMode)
         if (d.manualDiscountAmount) setManualDiscountAmount(d.manualDiscountAmount)
         if (d.isOfficialInvoice) setIsOfficialInvoice(true)
+        if (d.hasExtra) setHasExtra(true)
+        if (d.extraAmount) setExtraAmount(d.extraAmount)
       } else {
         setOrderDate(new DateObject({ calendar: persian, locale: persian_fa }))
       }
@@ -587,6 +608,8 @@ export default function NewOrderClient() {
           discountMode,
           manualDiscountAmount,
           isOfficialInvoice,
+          hasExtra,
+          extraAmount,
         }
         localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft))
       } catch (err) {
@@ -620,6 +643,8 @@ export default function NewOrderClient() {
     discountMode,
     manualDiscountAmount,
     isOfficialInvoice,
+    hasExtra,
+    extraAmount,
   ])
 
   // محاسبه‌ی خودکار تاریخ تحویل بر اساس تاریخ سفارش و گزینه‌ی انتخاب‌شده (۴/۷/۱۰/۱۵/۳۰ روز
@@ -679,6 +704,10 @@ export default function NewOrderClient() {
           }
         }
         setIsOfficialInvoice(order.isOfficialInvoice || false)
+        if (order.extraAmount > 0) {
+          setHasExtra(true)
+          setExtraAmount(order.extraAmount.toLocaleString("en-US"))
+        }
 
         setItems(
           order.items.map((it: any) => ({
@@ -837,8 +866,11 @@ export default function NewOrderClient() {
     : 0
   const discountDisplayPercent = grandTotal > 0 ? ((discountAmount / grandTotal) * 100).toFixed(1) : "0"
   const totalAfterDiscount = grandTotal - discountAmount
-  const vatAmount = isOfficialInvoice ? Math.round(totalAfterDiscount * 0.1) : 0
-  const finalTotal = totalAfterDiscount + vatAmount
+  // اضافات (مبلغ دستی) بعد از تخفیف جمع می‌شود و مشمول ارزش افزوده هم هست
+  const extraAmountValue = hasExtra ? parsePrice(extraAmount) : 0
+  const totalAfterExtra = totalAfterDiscount + extraAmountValue
+  const vatAmount = isOfficialInvoice ? Math.round(totalAfterExtra * 0.1) : 0
+  const finalTotal = totalAfterExtra + vatAmount
 
   const quantityMismatch = manualTotalQuantity !== "" && Number(manualTotalQuantity) !== calculatedTotalQuantity
   const meterageMismatch = manualTotalMeterage !== "" && Number(manualTotalMeterage) !== Number(calculatedTotalMeterage)
@@ -1147,10 +1179,27 @@ export default function NewOrderClient() {
     setNewProduct(p.name)
     setNewProductCode(p.code)
     setDebouncedProductQuery(p.name)
-    setNewUnitPrice("")
+    // اگر برای کالا قیمت ثبت شده باشد، خودکار در «قیمت واحد» گذاشته می‌شود؛
+    // قیمت قابل ویرایش/پاک‌کردن است و فوکوس با متنِ انتخاب‌شده می‌آید تا تایپ مستقیم جایش را بگیرد
+    const price = (p as { price?: number }).price || 0
+    setNewUnitPrice(price > 0 ? formatWithCommas(String(Math.round(price))) : "")
     setShowProductDropdown(false)
     setProductActiveIndex(0)
-    setTimeout(() => unitPriceRef.current?.focus(), 0)
+    setTimeout(() => {
+      unitPriceRef.current?.focus()
+      unitPriceRef.current?.select()
+    }, 0)
+  }
+
+  // انتخاب عنوان خدمت: اگر برای این خدمت و ضخامتِ شیشه‌ی همین قلم قیمتی ثبت شده باشد،
+  // خودکار در «قیمت واحد» خدمت گذاشته می‌شود (در غیر این‌صورت خالی می‌ماند و دستی نوشته می‌شود)
+  const pickService = (name: string) => {
+    setSvcTitle(name)
+    const svc = name ? servicesByName.get(name) : undefined
+    const item = items.find((i) => i.id === currentItemId)
+    const thickness = item ? getThicknessFromName(item.productName) : ""
+    const price = svc?.prices && thickness ? svc.prices[thickness] || 0 : 0
+    setSvcUnitPrice(price > 0 ? formatWithCommas(String(Math.round(price))) : "")
   }
 
   // شروع ویرایش یک قلم موجود (کلیک روی ردیف جدول، مشابه رفتار ویرایش خدمات)
@@ -1669,6 +1718,7 @@ export default function NewOrderClient() {
         installPhone,
         installNotes,
         discountAmount,
+        extraAmount: extraAmountValue,
         discountPercent: hasDiscount && discountMode === "percent" ? discountPercent : null,
         isOfficialInvoice,
         totalQuantity: manualTotalQuantity || calculatedTotalQuantity,
@@ -2172,6 +2222,18 @@ export default function NewOrderClient() {
                   </tr>
                 )}
 
+                {hasExtra && extraAmountValue > 0 && (
+                  <tr className="bg-sky-50">
+                    <td colSpan={7} className="border border-gray-300 p-2.5 text-left font-bold text-sky-700">
+                      اضافات
+                    </td>
+                    <td className="border border-gray-300 p-2.5 text-left font-bold text-sky-700">
+                      +{extraAmountValue.toLocaleString("en-US")}
+                    </td>
+                    <td className="border border-gray-300 p-2.5"></td>
+                  </tr>
+                )}
+
                 {isOfficialInvoice && (
                   <tr className="bg-amber-50">
                     <td colSpan={7} className="border border-gray-300 p-2.5 text-left font-bold text-amber-700">
@@ -2252,6 +2314,18 @@ export default function NewOrderClient() {
                     </td>
                     <td className="border border-gray-300 p-2.5 text-left font-bold text-rose-700">
                       -{discountAmount.toLocaleString("en-US")}
+                    </td>
+                    <td className="border border-gray-300 p-2.5"></td>
+                  </tr>
+                )}
+
+                {hasExtra && extraAmountValue > 0 && (
+                  <tr className="bg-sky-50">
+                    <td colSpan={6} className="border border-gray-300 p-2.5 text-left font-bold text-sky-700">
+                      اضافات
+                    </td>
+                    <td className="border border-gray-300 p-2.5 text-left font-bold text-sky-700">
+                      +{extraAmountValue.toLocaleString("en-US")}
                     </td>
                     <td className="border border-gray-300 p-2.5"></td>
                   </tr>
@@ -2371,6 +2445,18 @@ export default function NewOrderClient() {
                     </td>
                     <td className="border border-gray-300 p-2.5 text-left font-bold text-rose-700">
                       -{discountAmount.toLocaleString("en-US")}
+                    </td>
+                    <td className="border border-gray-300 p-2.5"></td>
+                  </tr>
+                )}
+
+                {hasExtra && extraAmountValue > 0 && (
+                  <tr className="bg-sky-50">
+                    <td colSpan={9} className="border border-gray-300 p-2.5 text-left font-bold text-sky-700">
+                      اضافات
+                    </td>
+                    <td className="border border-gray-300 p-2.5 text-left font-bold text-sky-700">
+                      +{extraAmountValue.toLocaleString("en-US")}
                     </td>
                     <td className="border border-gray-300 p-2.5"></td>
                   </tr>
@@ -3302,7 +3388,18 @@ export default function NewOrderClient() {
                         </span>
                       </>
                     )}
-                    {(hasDiscount || isOfficialInvoice) && (
+                    {hasExtra && extraAmountValue > 0 && (
+                      <>
+                        <span className="text-gray-300">|</span>
+                        <span>
+                          اضافات:{" "}
+                          <span className="text-sky-700">
+                            +{extraAmountValue.toLocaleString("en-US")}
+                          </span>
+                        </span>
+                      </>
+                    )}
+                    {(hasDiscount || isOfficialInvoice || (hasExtra && extraAmountValue > 0)) && (
                       <>
                         <span className="text-gray-300">|</span>
                         <span>
@@ -3598,7 +3695,7 @@ export default function NewOrderClient() {
                           if (listOpen) {
                             // خدمتِ هایلایت‌شده (با کیبورد) بدون نیاز به موس انتخاب می‌شود
                             const picked = allFilteredServices[Math.min(serviceActiveIndex, allFilteredServices.length - 1)]
-                            setSvcTitle(picked.name)
+                            pickService(picked.name)
                             setServiceSearch("")
                             setServiceActiveIndex(0)
                             setTimeout(() => focusRef(svcUnitRef), 0)
@@ -3634,7 +3731,7 @@ export default function NewOrderClient() {
                                       if (el && idx === serviceActiveIndex) el.scrollIntoView({ block: "nearest" })
                                     }}
                                     onClick={() => {
-                                      setSvcTitle(s.name)
+                                      pickService(s.name)
                                       setServiceSearch("")
                                       setServiceActiveIndex(0)
                                     }}
@@ -3665,7 +3762,7 @@ export default function NewOrderClient() {
                         <select
                           ref={svcTitleRef}
                           value={svcTitle}
-                          onChange={(e) => setSvcTitle(e.target.value)}
+                          onChange={(e) => pickService(e.target.value)}
                           onKeyDown={(e) => handleEnter(e, svcUnitRef)}
                           className={selectClass}
                         >
@@ -4107,6 +4204,29 @@ export default function NewOrderClient() {
                         />
                         فاکتور رسمی (+۱۰٪)
                       </label>
+
+                      <span className="hidden sm:block w-px h-6 bg-white/20" />
+
+                      <div className="flex items-center gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                        <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={hasExtra}
+                            onChange={(e) => setHasExtra(e.target.checked)}
+                            className="accent-white cursor-pointer"
+                          />
+                          اضافات
+                        </label>
+                        {hasExtra && (
+                          <input
+                            type="text"
+                            value={extraAmount}
+                            onChange={(e) => setExtraAmount(formatWithCommas(e.target.value))}
+                            placeholder="مبلغ به ریال"
+                            className="w-32 rounded-md px-2 py-1.5 text-xs font-bold text-teal-900 focus:outline-none"
+                          />
+                        )}
+                      </div>
                     </div>
                     )}
                   </div>

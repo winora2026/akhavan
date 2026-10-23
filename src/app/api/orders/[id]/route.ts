@@ -83,6 +83,7 @@ export async function PUT(
       installNotes,
       discountAmount,
       discountPercent,
+      extraAmount,
       isOfficialInvoice,
       totalQuantity,
       totalMeterage,
@@ -152,6 +153,7 @@ export async function PUT(
           discountPercent != null && discountPercent !== ""
             ? parseFloat(discountPercent)
             : null,
+        extraAmount: parseFloat(extraAmount) || 0,
         isOfficialInvoice: Boolean(isOfficialInvoice),
         mapImageUrl: resolvedMapImageUrl,
         mapImages: resolvedMapImages,

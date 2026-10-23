@@ -72,6 +72,58 @@ function toPersianDigits(value: string | number): string {
   return String(value).replace(/[0-9]/g, (d) => PERSIAN_DIGITS[parseInt(d)])
 }
 
+// یکسان‌سازی حروف برای جستجو: «ي» عربی = «ی»، «ك» عربی = «ک»، ارقام فارسی/عربی = انگلیسی،
+// و حذف کشیده و نیم‌فاصله؛ تا مثلاً «حسینی» و «حسيني» یکی حساب شوند
+function normalizeFa(value: string): string {
+  return value
+    .replace(/[يىئ]/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/[أإٱ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/[ۀ]/g, "ه")
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\u200c\u0640]/g, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+}
+
+// استخراج شماره تلفن‌ها از یک خانه‌ی اکسل (چند شماره با - / * و ... جدا شده‌اند)
+function extractPhones(cell: string): string[] {
+  const result: string[] = []
+  const tokens = toEnglishDigits(cell).match(/\+?\d(?:[\d ]*\d)?/g) || []
+  for (const token of tokens) {
+    let d = token.replace(/\D/g, "")
+    if (d.startsWith("0098")) d = "0" + d.slice(4)
+    else if (d.startsWith("98") && d.length === 12) d = "0" + d.slice(2)
+    if (d.length === 10 && d[0] === "9") d = "0" + d
+    if (d.length >= 5 && !/^0+$/.test(d) && !result.includes(d)) result.push(d)
+  }
+  // شماره‌های ناقص (مثلاً ۹ رقمیِ بدون رقم آخر) که نسخه‌ی کامل‌شان هم هست حذف می‌شوند
+  return result.filter(
+    (p) => !result.some((q) => q !== p && q.length > p.length && (q.startsWith(p) || q.startsWith("0" + p)))
+  )
+}
+
+// کد سریالِ بعدی مشتری: بزرگ‌ترین کد در سری ۵۰۰۰۰ تا ۵۹۹۹۹ + ۱
+function getNextCustomerCode(list: { code: string }[]): string {
+  let max = 50000
+  for (const c of list) {
+    if (/^\d{5}$/.test(c.code)) {
+      const n = parseInt(c.code)
+      if (n >= 50000 && n <= 59999 && n > max) max = n
+    }
+  }
+  return String(max + 1)
+}
+
+// تبدیل ارقام فارسی و عربی به انگلیسی (مثلاً برای تاریخ تولد در فایل اکسل)
+function toEnglishDigits(value: string): string {
+  return value
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+}
+
 function isJalaliLeapYear(year: number): boolean {
   const remainders = [1, 5, 9, 13, 17, 22, 26, 30]
   return remainders.includes(((year % 33) + 33) % 33)
@@ -195,10 +247,10 @@ function CustomersContent() {
   const [birthdayTarget, setBirthdayTarget] = useState<Customer | null>(null)
 
   useEffect(() => {
-    if (searchParams.get("new") === "1") {
+    if (searchParams.get("new") === "1" && !seedLoading) {
       openAddModal()
     }
-  }, [searchParams])
+  }, [searchParams, seedLoading])
 
   // خواندن lazy فایل seed مشتریان؛ import() پویا باعث می‌شود Next.js این
   // فایل را به‌صورت یک chunk جدا بسازد و فقط بعد از mount شدن صفحه،
@@ -221,33 +273,61 @@ function CustomersContent() {
     return () => clearTimeout(timer)
   }, [search])
 
+  // متن‌های قابل جستجوی هر مشتری فقط یک‌بار (با تغییر data) نرمال می‌شود، نه با هر ضربه کلید
+  const searchIndex = useMemo(
+    () =>
+      data.map((item) => ({
+        item,
+        name: normalizeFa(getDisplayName(item)),
+        code: normalizeFa(item.code),
+        national: normalizeFa(item.nationalCode + item.companyNationalId),
+        nationalCode: normalizeFa(item.nationalCode),
+        companyNationalId: normalizeFa(item.companyNationalId),
+        phones: item.phones.map(normalizeFa),
+        phonesJoined: normalizeFa(item.phones.join(" ")),
+        social: item.socialLinks.map(normalizeFa),
+        tags: item.tags.map(normalizeFa),
+        tagsJoined: normalizeFa(item.tags.join(" ")),
+        address: normalizeFa(item.address1),
+      })),
+    [data]
+  )
+
   const filtered = useMemo(() => {
-    return data.filter((item) => {
-      const displayName = getDisplayName(item)
-      const q = debouncedSearch.trim().toLowerCase()
-      const matchSearch =
-        !q ||
-        displayName.toLowerCase().includes(q) ||
-        item.code.includes(q) ||
-        item.nationalCode.includes(q) ||
-        item.companyNationalId.includes(q) ||
-        item.phones.some((p) => p.includes(q)) ||
-        item.socialLinks.some((s) => s.toLowerCase().includes(q)) ||
-        item.tags.some((t) => t.toLowerCase().includes(q))
+    const q = normalizeFa(debouncedSearch.trim())
+    const fCode = normalizeFa(colFilters.code.trim())
+    const fName = normalizeFa(colFilters.name.trim())
+    const fNational = normalizeFa(colFilters.nationalCode.trim())
+    const fPhone = normalizeFa(colFilters.phone.trim())
+    const fAddress = normalizeFa(colFilters.address.trim())
+    const fTags = normalizeFa(colFilters.tags.trim())
 
-      const matchGroup = groupFilter === "all" || item.group === groupFilter
+    return searchIndex
+      .filter((x) => {
+        const matchSearch =
+          !q ||
+          x.name.includes(q) ||
+          x.code.includes(q) ||
+          x.nationalCode.includes(q) ||
+          x.companyNationalId.includes(q) ||
+          x.phones.some((p) => p.includes(q)) ||
+          x.social.some((s) => s.includes(q)) ||
+          x.tags.some((t) => t.includes(q))
 
-      const matchCol =
-        item.code.includes(colFilters.code.trim()) &&
-        displayName.toLowerCase().includes(colFilters.name.trim().toLowerCase()) &&
-        (item.nationalCode + item.companyNationalId).includes(colFilters.nationalCode.trim()) &&
-        item.phones.join(" ").includes(colFilters.phone.trim()) &&
-        item.address1.toLowerCase().includes(colFilters.address.trim().toLowerCase()) &&
-        item.tags.join(" ").toLowerCase().includes(colFilters.tags.trim().toLowerCase())
+        const matchGroup = groupFilter === "all" || x.item.group === groupFilter
 
-      return matchSearch && matchGroup && matchCol
-    })
-  }, [data, debouncedSearch, groupFilter, colFilters])
+        const matchCol =
+          x.code.includes(fCode) &&
+          x.name.includes(fName) &&
+          x.national.includes(fNational) &&
+          x.phonesJoined.includes(fPhone) &&
+          x.address.includes(fAddress) &&
+          x.tagsJoined.includes(fTags)
+
+        return matchSearch && matchGroup && matchCol
+      })
+      .map((x) => x.item)
+  }, [searchIndex, debouncedSearch, groupFilter, colFilters])
 
   // هر بار که فیلترها تغییر کنند، برمی‌گردیم به صفحه‌ی اول
   useEffect(() => {
@@ -340,12 +420,59 @@ function CustomersContent() {
       if (isLegacyUtf16Export) {
         const text = new TextDecoder("utf-16le").decode(buffer.slice(2))
         const lines = text.split(/\r\n|\n/)
+
+        // پیدا کردن جای ستون‌ها از روی سطر عنوان (نام، کد مشتری، کد ملی، ..., آدرس، تاریخ تولد)؛
+        // اگر عنوان پیدا نشد، ترتیب پیش‌فرض خروجی نرم‌افزار حسابداری استفاده می‌شود
+        const headerCols = (lines[0] || "").split("\t").map((c) => c.trim())
+        const colIndex = (title: string, fallback: number) => {
+          const i = headerCols.indexOf(title)
+          return i >= 0 ? i : fallback
+        }
+        const nationalIdx = colIndex("کد ملی", 2)
+        const addressIdx = colIndex("آدرس", 5)
+        const birthIdx = colIndex("تاریخ تولد", 6)
+        const creditIdx = colIndex("میزان اعتبار", 3)
+        const phoneIdx = colIndex("تلفن", 4)
+
         for (const line of lines) {
           const cols = line.split("\t").map((c) => c.trim())
           const name = cols[0] || ""
           const code = cols[1] || ""
+          if (code === "کد مشتری") continue // سطر عنوان
           if (/[آ-ی]/.test(name) && code) {
-            rows.push({ "نام کامل": name.replace(/\*$/, "").trim(), "کد مشتری": code, "کد ملی": cols[2] || "" })
+            // آدرس: فقط اگر حداقل یک حرف داشته باشد (ستون آدرس گاهی فقط شماره تلفن یا «0» دارد)
+            const rawAddress = (cols[addressIdx] || "").replace(/\s+/g, " ").trim()
+            const address = /[A-Za-z؀-ۿ]/.test(rawAddress) ? rawAddress : ""
+
+            // تلفن‌ها؛ اگر خانه‌ی آدرس فقط عدد (شماره تلفن) داشته باشد آن هم به تلفن‌ها اضافه می‌شود
+            const phones = extractPhones(cols[phoneIdx] || "")
+            if (rawAddress && !address) {
+              for (const p of extractPhones(rawAddress)) if (!phones.includes(p)) phones.push(p)
+            }
+            const creditValue = parseInt(toEnglishDigits(cols[creditIdx] || "").replace(/[^\d]/g, "")) || 0
+
+            // تاریخ تولد: فقط اگر یک تاریخ شمسی معتبر باشد، با فرمت yyyy/mm/dd
+            const rawBirth = toEnglishDigits(cols[birthIdx] || "")
+            const parsedBirth = parseJalaliDate(rawBirth)
+            const birthDate =
+              parsedBirth &&
+              parsedBirth.year >= 1300 &&
+              parsedBirth.month >= 1 &&
+              parsedBirth.month <= 12 &&
+              parsedBirth.day >= 1 &&
+              parsedBirth.day <= daysInJalaliMonth(parsedBirth.year, parsedBirth.month)
+                ? formatJalaliDate(parsedBirth.year, parsedBirth.month, parsedBirth.day)
+                : ""
+
+            rows.push({
+              "نام کامل": name.replace(/[\s*]+$/, ""),
+              "کد مشتری": code,
+              "کد ملی": cols[nationalIdx] || "",
+              "آدرس": address,
+              "تاریخ تولد": birthDate,
+              "تلفن": phones.join(","),
+              "اعتبار": creditValue ? String(creditValue) : "",
+            })
           }
         }
       } else {
@@ -397,7 +524,7 @@ function CustomersContent() {
           const customer: Customer = {
             id: Date.now() + idx,
             row: data.length + idx + 1,
-            code: code || `imp-${Date.now()}-${idx}`,
+            code,
             customerType,
             firstName,
             lastName,
@@ -439,7 +566,7 @@ function CustomersContent() {
 
   const openAddModal = () => {
     setEditingId(null)
-    setForm({ ...emptyForm, phones: [""], socialLinks: [""], tags: [], photoUrl: "" })
+    setForm({ ...emptyForm, code: getNextCustomerCode(data), phones: [""], socialLinks: [""], tags: [], photoUrl: "" })
     setTagInput("")
     setPhotoPreview("")
     setNationalCodeError("")
@@ -527,10 +654,7 @@ function CustomersContent() {
   const removeTag = (tag: string) => setForm((prev) => ({ ...prev, tags: prev.tags.filter((t) => t !== tag) }))
 
   const saveCustomer = () => {
-    if (!form.code.trim()) {
-      alert("کد مشتری الزامی است")
-      return
-    }
+    // کد مشتری اختیاری است: برای مشتری جدیدِ پیش‌فاکتور می‌توان بدون کد ثبت کرد و بعداً کد داد
     if (form.customerType === "حقوقی" && !form.companyName.trim()) {
       alert("نام شرکت برای مشتری حقوقی الزامی است")
       return
@@ -751,7 +875,9 @@ function CustomersContent() {
                   {paginated.map((customer, index) => (
                     <tr key={customer.id} className="border-b border-teal-100 hover:bg-yellow-50/50 bg-white/40">
                       <td className="p-3 text-center font-bold">{(page - 1) * PAGE_SIZE + index + 1}</td>
-                      <td className="p-3 font-mono text-xs">{customer.code}</td>
+                      <td className="p-3 font-mono text-xs">
+                        {customer.code || <span className="text-amber-700 font-sans">بدون کد</span>}
+                      </td>
                       <td className="p-3 font-bold">{getDisplayName(customer)}</td>
                       <td className="p-3">
                         <span className={`px-2 py-1 rounded-lg text-xs font-bold ${customer.group === "همکار" ? "bg-teal-100 text-teal-800" : "bg-amber-100 text-amber-800"}`}>
@@ -913,14 +1039,26 @@ function CustomersContent() {
               {/* کد و نام */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
-                  <label className="mb-1 block text-sm font-bold text-blue-900">کد مشتری *</label>
+                  <div className="mb-1 flex items-center justify-between">
+                    <label className="text-sm font-bold text-blue-900">کد مشتری</label>
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, code: getNextCustomerCode(data) })}
+                      className="text-xs font-bold text-teal-600"
+                    >
+                      کد خودکار
+                    </button>
+                  </div>
                   <input
                     type="text"
                     value={form.code}
                     onChange={(e) => setForm({ ...form, code: e.target.value })}
                     className="w-full rounded-xl border border-teal-500/40 px-3 py-2.5 text-base font-medium focus:border-teal-500 focus:outline-none"
-                    placeholder="مثال: 12070"
+                    placeholder="خالی = بدون کد"
                   />
+                  {!form.code.trim() && (
+                    <p className="mt-1 text-xs text-amber-700">بدون کد ثبت می‌شود؛ بعداً از ویرایش می‌توانید کد بدهید.</p>
+                  )}
                 </div>
 
                 {form.customerType === "حقیقی" ? (
