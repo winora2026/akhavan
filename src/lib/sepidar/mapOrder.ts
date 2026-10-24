@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma"
+import { computeOrderTotals } from "@/lib/orderTotals"
 import { getAll, sepidarGet, extractList } from "./client"
 import productsSeedRaw from "@/app/products/products-seed.json"
 import servicesSeedRaw from "@/app/services/services-seed.json"
@@ -300,10 +301,13 @@ type InvoiceItem = {
   duty: number
   tracingTitle: string
   stockRef: number | null
-  description: string
+  description: string | null
 }
 
 const parsePrice = (v: unknown) => parseFloat(String(v ?? "").replace(/,/g, "")) || 0
+
+// حذف خطای جمع اعداد اعشاری (۳۴.۳۱۹۹۹۹۹ → ۳۴.۳۲)؛ متراژها در نرم‌افزار تا ۵ رقم اعشار ذخیره می‌شوند
+const round5 = (n: number) => Math.round(n * 100000) / 100000
 
 function parseServices(raw: unknown): any[] {
   if (!raw) return []
@@ -325,6 +329,26 @@ function tehranDateOnly(d: Date) {
     day: "2-digit",
   }).format(d)
   return `${day}T00:00:00`
+}
+
+// گروه‌بندی مثل حالت «کلی» پیش‌فاکتور: همه‌ی سایزهای یک کالا یک ردیف، هر خدمتِ آن کالا هم یک ردیف
+type ServiceGroup = {
+  title: string
+  unit: string
+  fee: number
+  note: string
+  amount: number // جمع (تعداد × تعداد واحد)
+  total: number // جمع مبلغ خدمت
+}
+
+type ProductGroup = {
+  name: string
+  code: string | null
+  unit: string
+  fee: number
+  quantity: number // جمع متراژ
+  descriptions: string[]
+  services: Map<string, ServiceGroup>
 }
 
 export async function buildCreateInvoicePayload(orderId: string) {
@@ -356,6 +380,14 @@ export async function buildCreateInvoicePayload(orderId: string) {
         "saleTypeRef در تنظیمات سپیدار خالی است. بعد از توکن از GetAllSaleTypes پر کنید."
       )
     }
+  }
+
+  // مبالغ سفارش با همان فرمولی که لیست فاکتورها و پیش‌فاکتور استفاده می‌کنند
+  const totals = computeOrderTotals(order as any)
+  if (totals.extra > 0) {
+    throw new Error(
+      "این سفارش «اضافات» دارد و فیلدی برای اضافات در فاکتور سپیدار پشتیبانی نمی‌شود؛ ارسال متوقف شد تا مبلغ سپیدار با نرم‌افزار مغایرت پیدا نکند."
+    )
   }
 
   // حالت واقعی: نگاشت خودکار با کد کالا، نگاشت ذخیره‌شده و نام
@@ -391,10 +423,11 @@ export async function buildCreateInvoicePayload(orderId: string) {
     return { itemRef: Number(map?.itemRef) || rowNo, stockRef: (map?.stockRef ?? null) as number | null }
   }
 
-  const items: InvoiceItem[] = []
+  // ── مرحله ۱: گروه‌بندی اقلام (نام + کد + واحد + قیمت واحد) و خدماتشان ──
+  const groups: ProductGroup[] = []
+  const groupMap = new Map<string, ProductGroup>()
 
   for (const it of order.items) {
-    // ── ردیف کالا: مقدار = متراژ، فی = قیمت هر واحد، مبلغ = فی × مقدار ──
     // کد کالای ذخیره‌شده روی ردیف سفارش اولویت دارد؛ برای سفارش‌های قدیمی از seed (بر اساس نام) خوانده می‌شود
     const productCode =
       (it as any).productCode ||
@@ -403,34 +436,32 @@ export async function buildCreateInvoicePayload(orderId: string) {
       productCodeByName.get(nameKey(it.productName)) ||
       null
 
-    const base = await resolveRef(it.productName, productCode)
-
     const fee = Number(it.unitPrice) || 0
+    const unit = String(it.unit || "")
+    const key = [nameKey(it.productName), productCode || "", unit, fee].join("|")
+
+    let g = groupMap.get(key)
+    if (!g) {
+      g = {
+        name: it.productName,
+        code: productCode,
+        unit,
+        fee,
+        quantity: 0,
+        descriptions: [],
+        services: new Map<string, ServiceGroup>(),
+      }
+      groupMap.set(key, g)
+      groups.push(g)
+    }
+
     const meterage = Number(it.meterage) || 0
-    const qty = meterage > 0 ? meterage : Number(it.quantity) || 1
+    g.quantity += meterage > 0 ? meterage : Number(it.quantity) || 1
 
-    items.push({
-      itemRef: base.itemRef,
-      quantity: qty,
-      secondaryQuantity: null,
-      fee,
-      price: Math.round(fee * qty),
-      discount: 0,
-      tax: 0,
-      duty: 0,
-      tracingTitle: order.orderNumber,
-      stockRef: base.stockRef ?? settings.defaultStockRef ?? 1,
-      description: [
-        it.productName,
-        it.length && it.width ? `${it.length}*${it.width}` : null,
-        it.meterage ? `م² ${it.meterage}` : null,
-        it.notes,
-      ]
-        .filter(Boolean)
-        .join(" | "),
-    })
+    // فقط توضیحاتی که خود کاربر روی قلم نوشته (یکتا)
+    const desc = String(it.notes || "").trim()
+    if (desc && !g.descriptions.includes(desc)) g.descriptions.push(desc)
 
-    // ── هر خدمت این کالا: یک ردیف جدا (بدون انبار) ──
     for (const s of parseServices((it as any).servicesData)) {
       const title = String(s?.title || "").trim()
       if (!title) continue
@@ -442,31 +473,75 @@ export async function buildCreateInvoicePayload(orderId: string) {
           : parseFloat(s.unitQuantity) || 0
       const amount = cnt * unitQty
       const sFee = parsePrice(s.unitPrice)
-      const sPrice = Math.round(parsePrice(s.totalPrice) || amount * sFee)
+      const sTotal = parsePrice(s.totalPrice) || amount * sFee
+      const note = String(s.note || "").trim()
 
-      if (amount <= 0 && sPrice <= 0) continue
+      const sKey = [nameKey(title), String(s.unit || ""), sFee, note].join("|")
+      const existing = g.services.get(sKey)
+      if (existing) {
+        existing.amount += amount
+        existing.total += sTotal
+      } else {
+        g.services.set(sKey, {
+          title,
+          unit: String(s.unit || ""),
+          fee: sFee,
+          note,
+          amount,
+          total: sTotal,
+        })
+      }
+    }
+  }
 
-      const svc = await resolveRef(title, serviceCodeByName.get(nameKey(title)) ?? null)
+  // ── مرحله ۲: ساخت ردیف‌ها؛ برای هر کالا اول ردیف خودش، بعد ردیف خدماتش ──
+  const items: InvoiceItem[] = []
+
+  for (const g of groups) {
+    const base = await resolveRef(g.name, g.code)
+    const qty = round5(g.quantity)
+
+    items.push({
+      itemRef: base.itemRef,
+      quantity: qty,
+      secondaryQuantity: null,
+      fee: g.fee,
+      price: Math.round(g.fee * qty),
+      discount: 0,
+      tax: 0,
+      duty: 0,
+      tracingTitle: order.orderNumber,
+      stockRef: base.stockRef ?? settings.defaultStockRef ?? 1,
+      description: g.descriptions.join("، ") || null,
+    })
+
+    for (const sg of g.services.values()) {
+      const amount = round5(sg.amount)
+      const price = Math.round(sg.total)
+      if (amount <= 0 && price <= 0) continue
+
+      const svc = await resolveRef(sg.title, serviceCodeByName.get(nameKey(sg.title)) ?? null)
 
       items.push({
         itemRef: svc.itemRef,
         quantity: amount > 0 ? amount : 1,
         secondaryQuantity: null,
-        fee: amount > 0 ? sFee : sPrice,
-        price: sPrice,
+        fee: amount > 0 ? sg.fee : price,
+        price,
         discount: 0,
         tax: 0,
         duty: 0,
         tracingTitle: order.orderNumber,
         stockRef: null,
-        description: [`${title} ${it.productName}`, s.note].filter(Boolean).join(" | "),
+        description: [`${sg.title} ${g.name}`, sg.note].filter(Boolean).join(" | "),
       })
     }
   }
 
-  // تخفیف کل سفارش را روی اولین قلم پخش می‌کنیم (ساده؛ بعداً می‌توان دقیق‌تر کرد)
-  if (order.discountAmount > 0 && items.length > 0) {
-    items[0].discount = Number(order.discountAmount) || 0
+  // تخفیف و ارزش افزوده‌ی کل فاکتور روی ردیف اول (مثل فاکتورهای رسمی سیستم قبلی در سپیدار)
+  if (items.length > 0) {
+    items[0].discount = totals.discount
+    items[0].tax = totals.vat
   }
 
   const payload = {
