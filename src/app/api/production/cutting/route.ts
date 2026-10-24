@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { buildServicesText } from "@/lib/production/servicesText"
+import { isRentalOrderNumber } from "@/lib/rentalOrder"
 
 /** پیدا کردن OrderItem متناظر — اول با id، بعد با نام کالا */
 function resolveSalesItem(
@@ -66,6 +67,19 @@ function pickServicesRaw(salesItem: any, prodItem: any): any {
   return null
 }
 
+const itemInclude = {
+  productionOrder: {
+    include: {
+      order: {
+        include: {
+          customer: true,
+          items: true,
+        },
+      },
+    },
+  },
+}
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
@@ -82,6 +96,7 @@ export async function GET(req: Request) {
       )
     }
 
+    // ۱) قطعاتی که در ایستگاه برش منتظر یا در حال انجام هستند
     const rows = await prisma.productionItemStation.findMany({
       where: {
         stationId: cutStation.id,
@@ -89,27 +104,38 @@ export async function GET(req: Request) {
       },
       include: {
         productionItem: {
-          include: {
-            productionOrder: {
-              include: {
-                order: {
-                  include: {
-                    customer: true,
-                    items: true,
-                  },
-                },
-              },
-            },
-          },
+          include: itemInclude,
         },
       },
       orderBy: { createdAt: "asc" },
     })
 
+    // ۲) قطعات سفارش‌های اجرتی که «اجرت برش» ندارند (ایستگاه برش ندارند):
+    //    فقط برای چاپ لیبل در همین صفحه نشان داده می‌شوند، نه برای برگه‌ی برنامه‌ریزی
+    const labelOnlyCandidates = await prisma.productionItem.findMany({
+      where: {
+        status: { not: "تکمیل شده" },
+        productionOrder: { order: { orderNumber: { startsWith: "9" } } },
+        stations: { none: { stationId: cutStation.id } },
+      },
+      include: itemInclude,
+      orderBy: { createdAt: "asc" },
+    })
+    const labelOnlyItems = labelOnlyCandidates.filter((it: any) =>
+      isRentalOrderNumber(it.productionOrder?.order?.orderNumber)
+    )
+
     const rawDebug: any[] = []
 
-    const result = rows.map((row) => {
-      const item = row.productionItem
+    const toRow = (
+      item: any,
+      meta: {
+        itemStationId: string
+        itemStationStatus: string
+        sequence: number
+        labelOnly: boolean
+      }
+    ) => {
       const order = item.productionOrder
       const salesOrder = order.order
       const salesItem = resolveSalesItem(salesOrder, item)
@@ -123,6 +149,7 @@ export async function GET(req: Request) {
           orderNumber: salesOrder?.orderNumber,
           productName: item.productName,
           orderItemId: item.orderItemId,
+          labelOnly: meta.labelOnly,
           salesItemFound: !!salesItem,
           salesItemId: salesItem?.id ?? null,
           rawServices,
@@ -141,9 +168,10 @@ export async function GET(req: Request) {
       }
 
       return {
-        itemStationId: row.id,
-        itemStationStatus: row.status,
-        sequence: row.sequence,
+        itemStationId: meta.itemStationId,
+        itemStationStatus: meta.itemStationStatus,
+        sequence: meta.sequence,
+        labelOnly: meta.labelOnly,
         productionItemId: item.id,
         productName: item.productName,
         barcode: item.barcode,
@@ -171,9 +199,29 @@ export async function GET(req: Request) {
           ? salesOrder.deliveryDate.toISOString()
           : null,
       }
-    })
+    }
 
-    const allNames = rows.map((r) => r.productionItem.productName)
+    const cutRows = rows.map((row) =>
+      toRow(row.productionItem, {
+        itemStationId: row.id,
+        itemStationStatus: row.status,
+        sequence: row.sequence,
+        labelOnly: false,
+      })
+    )
+
+    const labelOnlyRows = labelOnlyItems.map((item: any) =>
+      toRow(item, {
+        itemStationId: `label-only-${item.id}`,
+        itemStationStatus: "فقط لیبل",
+        sequence: 0,
+        labelOnly: true,
+      })
+    )
+
+    const result = [...cutRows, ...labelOnlyRows]
+
+    const allNames = result.map((r) => r.productName)
     const productNames = Array.from(new Set(allNames)).sort()
 
     return NextResponse.json({

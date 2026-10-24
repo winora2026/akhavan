@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma"
+import { isRentalOrderNumber, hasCuttingWage } from "@/lib/rentalOrder"
 
 function norm(s: string) {
   return (s || "")
@@ -143,8 +144,9 @@ function collectServiceNames(salesItem: any): string[] {
   return names
 }
 
-function buildRouteStationNames(salesItem: any): string[] {
-  const route: string[] = ["برش"]
+// includeCut = false → ایستگاه «برش» در مسیر قرار نمی‌گیرد (سفارش اجرتیِ بدون «اجرت برش»)
+function buildRouteStationNames(salesItem: any, includeCut = true): string[] {
+  const route: string[] = includeCut ? ["برش"] : []
   const serviceStationSet = new Set<string>()
   let hasPackaging = false
 
@@ -340,6 +342,9 @@ export async function createProductionOrderFromSales(
     }
   }
 
+  // سفارش اجرتی (سریال ۹۰۰xxx): فقط قلم‌هایی که «اجرت برش» دارند وارد ایستگاه برش می‌شوند
+  const isRental = isRentalOrderNumber(order.orderNumber)
+
   const productionNumber = await getNextProductionNumber()
 
   const productionOrder = await prisma.productionOrder.create({
@@ -377,7 +382,8 @@ export async function createProductionOrderFromSales(
     const salesItem = order.items.find((i) => i.id === prodItem.orderItemId)
     if (!salesItem) continue
 
-    const routeStationNames = buildRouteStationNames(salesItem)
+    const includeCut = !isRental || hasCuttingWage(salesItem)
+    const routeStationNames = buildRouteStationNames(salesItem, includeCut)
     let sequence = 1
     for (const stationName of routeStationNames) {
       const stationId = findStationId(allStations, stationName)

@@ -34,6 +34,8 @@ type CuttingItem = {
   servicesText?: string
   pieceNumber?: string | number | null
   installationCode?: string | null
+  // قطعه‌ی سفارش اجرتی بدون «اجرت برش»: فقط لیبل دارد، نه برگه‌ی برنامه‌ریزی
+  labelOnly?: boolean
 }
 
 type WasteRow = {
@@ -72,6 +74,22 @@ type SortKey =
 // ───────────── اندازه لیبل: ۹ سانتی‌متر عرض × ۶ سانتی‌متر ارتفاع (افقی) ─────────────
 const LABEL_W_MM = 90
 const LABEL_H_MM = 60
+
+// ───────────── ثابت‌های قابل تنظیم لیبل (اگر روی کاغذ واقعی کم/زیاد بود، فقط اینها را عوض کنید) ─────────────
+// فاصله‌ی بالای لیبل تا اولین خط تاریخ‌ها (هرچه بیشتر، تاریخ‌ها پایین‌تر می‌آیند)
+const LABEL_PAD_TOP_MM = 4.5
+// ارتفاع بلوک تاریخ‌ها؛ خط‌چین جداکننده دقیقاً زیر آن است (هرچه کمتر، خط‌چین بالاتر می‌رود)
+const LABEL_TOP_BLOCK_MM = 14.5
+// اندازه‌ی ردیف ابعاد (مثل 262 * 90=1) نسبت به فونت بقیه‌ی متن‌ها
+const LABEL_DIMS_SCALE = 1.6
+// عرض هر میله‌ی بارکد: ۰.۲۵ میلی‌متر = ۲ نقطه روی چاپگر ۲۰۳dpi (خروجی تمیز و غیربولد)
+const BARCODE_MODULE_MM = 0.25
+// ارتفاع میله‌های بارکد
+const BARCODE_HEIGHT_MM = 8
+// حداکثر عرض بارکد (ستون چپ لیبل)؛ اگر بارکد بلندتر شد، میله‌ها کمی باریک‌تر می‌شوند
+const BARCODE_MAX_WIDTH_MM = 37
+
+const MM_TO_PX = 96 / 25.4
 
 const LABEL_REPRINT_REASONS = [
   "پارگی لیبل",
@@ -163,30 +181,45 @@ const labelText = (v: unknown) =>
     .trim()
 
 // بارکد را بدون متن می‌کشد و ارقام را به‌صورت HTML زیر آن می‌گذارد؛
-// رقم اول و آخر دقیقاً زیر ابتدا و انتهای میله‌ها قرار می‌گیرند
+// رقم اول و آخر دقیقاً زیر ابتدا و انتهای میله‌ها قرار می‌گیرند.
+// عرض هر میله بر حسب میلی‌متر تنظیم می‌شود (ضریب درست نقطه‌های چاپگر) و رندر
+// crispEdges است تا میله‌ها تمیز و غیربولد چاپ شوند و اسکن راحت باشد.
 const drawBarcode = (
   JsBarcode: any,
   svg: Element,
   value: string,
-  opts: { moduleW: number; barH: number; fontPx: number; fontWeight?: string }
+  opts: {
+    moduleMm: number
+    barHeightMm: number
+    maxWidthMm: number
+    fontPx: number
+    fontWeight?: string
+  }
 ) => {
   const s = svg as SVGSVGElement
   s.innerHTML = ""
   JsBarcode(s, value, {
     format: "CODE128",
-    width: opts.moduleW,
-    height: opts.barH,
+    width: 1,
+    height: 100,
     displayValue: false,
     margin: 0,
     background: "transparent",
     lineColor: "#000000",
   })
-  const w = parseFloat(s.getAttribute("width") || "0")
-  const h = parseFloat(s.getAttribute("height") || "0")
-  if (!w || !h) return
+  // عرض خروجی JsBarcode با width=1 برابر تعداد کل مدول‌های بارکد است
+  const units = parseFloat(s.getAttribute("width") || "0")
+  if (!units) return
+
+  const moduleMm = Math.min(opts.moduleMm, opts.maxWidthMm / units)
+  const wMm = units * moduleMm
+  const wPx = wMm * MM_TO_PX
+
+  s.setAttribute("preserveAspectRatio", "none")
+  s.setAttribute("shape-rendering", "crispEdges")
   s.style.display = "block"
-  s.style.width = `${w}px`
-  s.style.height = `${h}px`
+  s.style.width = `${wMm}mm`
+  s.style.height = `${opts.barHeightMm}mm`
   s.style.maxWidth = "none"
 
   const parent = s.parentElement
@@ -199,13 +232,13 @@ const drawBarcode = (
   digits.style.cssText = [
     "display:flex",
     "justify-content:space-between",
-    `width:${w}px`,
+    `width:${wMm}mm`,
     "margin:0",
     "white-space:nowrap",
     "line-height:1.1",
     "overflow:hidden",
     "font-family:Arial,Helvetica,sans-serif",
-    `font-weight:${opts.fontWeight || "700"}`,
+    `font-weight:${opts.fontWeight || "400"}`,
     "color:#000",
   ].join(";")
   // همان ترازِ افقی SVG (چپ‌چین در لیبل، وسط‌چین در برگه)
@@ -222,7 +255,7 @@ const drawBarcode = (
   // اگر ارقام از عرض میله‌ها بیشتر شدند، فونت کم می‌شود
   let px = opts.fontPx
   digits.style.fontSize = `${px}px`
-  while (digits.scrollWidth > w + 0.5 && px > 6) {
+  while (digits.scrollWidth > wPx + 0.5 && px > 6) {
     px -= 0.5
     digits.style.fontSize = `${px}px`
   }
@@ -448,8 +481,9 @@ export default function CuttingPlanningPage() {
         if (!el) return
         try {
           drawBarcode(JsBarcode, el, String(label.barcode), {
-            moduleW: 1,
-            barH: 28,
+            moduleMm: BARCODE_MODULE_MM,
+            barHeightMm: BARCODE_HEIGHT_MM,
+            maxWidthMm: BARCODE_MAX_WIDTH_MM,
             fontPx: 18,
             fontWeight: "400",
           })
@@ -565,8 +599,12 @@ export default function CuttingPlanningPage() {
     return list
   }, [items, productName, labelStatus, priority, search, sortKey, sortDir])
 
+  // قطعات «فقط لیبل» (اجرتیِ بدون اجرت برش) وارد برگه‌ی برنامه‌ریزی نمی‌شوند
   const reportRows = useMemo(
-    () => filtered.filter((i) => selectedIds.includes(i.productionItemId)),
+    () =>
+      filtered.filter(
+        (i) => selectedIds.includes(i.productionItemId) && !i.labelOnly
+      ),
     [filtered, selectedIds]
   )
 
@@ -1054,7 +1092,7 @@ export default function CuttingPlanningPage() {
         max-width: none !important;
         max-height: none !important;
         margin: 0 !important;
-        padding: 2mm 3mm 0.5mm !important;
+        padding: ${LABEL_PAD_TOP_MM}mm 3mm 0.5mm !important;
         background: #F0E000 !important;
         border: none !important;
         overflow: hidden !important;
@@ -1080,7 +1118,7 @@ export default function CuttingPlanningPage() {
       box-sizing: border-box;
       width: ${LABEL_W_MM}mm;
       height: ${LABEL_H_MM}mm;
-      padding: 2.5mm 4mm 1mm;
+      padding: ${LABEL_PAD_TOP_MM}mm 4mm 1mm;
       background: #F0E000;
       border: 1px solid #c4a000;
       color: #000;
@@ -1094,7 +1132,7 @@ export default function CuttingPlanningPage() {
       direction: ltr;
       display: flex;
       justify-content: flex-start;
-      height: 18.5mm;
+      height: ${LABEL_TOP_BLOCK_MM}mm;
       flex: none;
     }
     .label-dates {
@@ -1172,10 +1210,10 @@ export default function CuttingPlanningPage() {
       direction: rtl;
       text-align: right;
     }
-    /* ابعاد: یک سطر کامل و درشت */
+    /* ابعاد: یک سطر کامل (کمی کوچک‌تر از قبل) */
     .label-dims {
       flex: none;
-      font-size: calc(var(--fs, 14pt) * 2);
+      font-size: calc(var(--fs, 14pt) * ${LABEL_DIMS_SCALE});
       font-weight: 900;
       line-height: 1.15;
       direction: ltr;
@@ -1192,7 +1230,7 @@ export default function CuttingPlanningPage() {
       unicode-bidi: plaintext;
     }
     .label-barcode { margin-top: auto; direction: ltr; line-height: 0; }
-    .label-barcode svg { display: block; max-width: 100%; }
+    .label-barcode svg { display: block; max-width: none; shape-rendering: crispEdges; }
     .label-customer {
       font-weight: 900;
       line-height: 1.35;
@@ -1364,6 +1402,20 @@ export default function CuttingPlanningPage() {
                 alert("حداقل یک مورد را انتخاب کنید")
                 return
               }
+              const labelOnlyCount = items.filter(
+                (i) => selectedIds.includes(i.productionItemId) && i.labelOnly
+              ).length
+              if (labelOnlyCount === selectedIds.length) {
+                alert("قطعات انتخاب‌شده «فقط لیبل» هستند و برگه‌ی برنامه‌ریزی ندارند")
+                return
+              }
+              if (
+                labelOnlyCount > 0 &&
+                !confirm(
+                  `${labelOnlyCount} قطعه‌ی «فقط لیبل» از برگه‌ی برنامه‌ریزی حذف می‌شود. ادامه می‌دهید؟`
+                )
+              )
+                return
               setShowReportPreview(true)
             }}
             disabled={selectedIds.length === 0}
@@ -1480,7 +1532,14 @@ export default function CuttingPlanningPage() {
                     <td className="px-1.5 py-3 text-center font-bold text-teal-800 text-xs whitespace-nowrap">
                       {item.barcode || "—"}
                     </td>
-                    <td className="p-3 font-bold">{item.productName}</td>
+                    <td className="p-3 font-bold">
+                      {item.productName}
+                      {item.labelOnly && (
+                        <span className="mr-2 rounded-full bg-purple-100 px-2 py-0.5 text-xs font-bold text-purple-800">
+                          فقط لیبل
+                        </span>
+                      )}
+                    </td>
                     <td className="p-3 text-center">{item.width ?? "—"}</td>
                     <td className="p-3 text-center">{item.length ?? "—"}</td>
                     <td className="p-3 text-center font-semibold">
