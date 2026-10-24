@@ -56,6 +56,27 @@ function isStationClosed(status: string) {
   return status === "تکمیل شده" || status === "انجام در ایستگاه دیگر"
 }
 
+/** یادداشتی که هنگام «رد گروهی از انبار نیمه‌ساخته» روی ایستگاه‌ها ثبت می‌شود */
+const GROUP_PASS_NOTE = "رد گروهی از انبار کالای نیمه‌ساخته"
+
+/**
+ * اولین ایستگاهِ بعدی که این قطعه را (توسط اپراتور) رد کرده یا در حال انجام است.
+ * تا وقتی چنین ایستگاهی وجود دارد، رد ایستگاه فعلی قابل برگشت نیست.
+ * ایستگاه‌هایی که فقط به‌صورت گروهی/خودکار بسته شده‌اند حساب نمی‌شوند.
+ */
+function findPassedLaterStation(stations: any[], current: any) {
+  return (
+    stations.find((s: any) => {
+      if (s.id === current.id) return false
+      if ((s.sequence ?? 0) <= (current.sequence ?? 0)) return false
+      if (s.notes === GROUP_PASS_NOTE) return false
+      if (s.status === "تکمیل شده") return true
+      if (s.status === "در حال انجام" && (s.quantityOut || 0) > 0) return true
+      return false
+    }) || null
+  )
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -127,9 +148,28 @@ export async function POST(req: Request) {
         )
       }
 
+      // رد بارگیری به برگه‌ی خروج وصل است؛ از این مسیر برنمی‌گردد
+      if (isLoading(stationRow.station.name)) {
+        return NextResponse.json(
+          { error: "رد ایستگاه بارگیری از اینجا قابل برگشت نیست" },
+          { status: 400 }
+        )
+      }
+
+      // اگر ایستگاه بعدی قطعه را رد کرده باشد، برگشت ممکن نیست
+      const passedLater = findPassedLaterStation(item.stations, stationRow)
+      if (passedLater) {
+        return NextResponse.json(
+          {
+            error: `ایستگاه «${passedLater.station.name}» این قطعه را رد کرده است؛ ابتدا باید رد آن ایستگاه برگردانده شود`,
+          },
+          { status: 400 }
+        )
+      }
+
+      // تعداد کل (رد شده + باقی‌مانده) به ایستگاه برمی‌گردد
       const qtyBack =
-        stationRow.quantityOut ||
-        stationRow.quantityIn ||
+        (stationRow.quantityIn || 0) + (stationRow.quantityOut || 0) ||
         item.quantity ||
         1
 
@@ -163,6 +203,30 @@ export async function POST(req: Request) {
                 startedAt: null,
                 quantityOut: null,
                 quantityIn: item.quantity || 1,
+                notes: null,
+              },
+            })
+          }
+        }
+      }
+
+      // برگشت انبار نیمه‌ساخته: ایستگاه‌هایی که با رد گروهی بسته شده بودند هم برمی‌گردند
+      if (isSemiFinishedWh(stationRow.station.name)) {
+        for (const s of item.stations) {
+          if (
+            s.id !== stationRow.id &&
+            s.notes === GROUP_PASS_NOTE &&
+            s.status === "تکمیل شده"
+          ) {
+            await prisma.productionItemStation.update({
+              where: { id: s.id },
+              data: {
+                status: "در انتظار",
+                completedAt: null,
+                startedAt: null,
+                quantityOut: null,
+                quantityIn: s.quantityOut || item.quantity || 1,
+                operatorId: null,
                 notes: null,
               },
             })
@@ -283,10 +347,11 @@ export async function POST(req: Request) {
       )
     }
 
-    // فقط برش قبل از بقیه اجباری است
+    // فقط برش قبل از بقیه اجباری است. قطعه‌ای که ایستگاه برش ندارد
+    // (سفارش اجرتیِ بدون «اجرت برش») مستقیم از ایستگاه اولش رد می‌شود.
     if (!isCutStation(stationRow.station.name)) {
       const cut = item.stations.find((s) => isCutStation(s.station.name))
-      if (!cut || cut.status !== "تکمیل شده") {
+      if (cut && cut.status !== "تکمیل شده") {
         return NextResponse.json(
           {
             error: "ابتدا ایستگاه برش باید تکمیل شود",
@@ -416,7 +481,7 @@ export async function POST(req: Request) {
               completedAt: now,
               startedAt: s.startedAt || now,
               operatorId: operatorName || null,
-              notes: "رد گروهی از انبار کالای نیمه‌ساخته",
+              notes: GROUP_PASS_NOTE,
             },
           })
           await prisma.productionHistory.create({

@@ -366,7 +366,7 @@ export default function HomePage() {
             >
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 gap-2">
                 {menuItems.map((item) => {
-                  const locked =
+                  const blockedForProduction =
                     isProductionOnly &&
                     (item.isSales || (item as any).lockedForProduction)
 
@@ -377,20 +377,14 @@ export default function HomePage() {
                           type="button"
                           aria-haspopup={canOpenSales ? "menu" : undefined}
                           aria-expanded={canOpenSales ? showSalesMenu : false}
-                          aria-disabled={locked}
-                          disabled={locked}
                           onClick={() => {
                             if (!canOpenSales) return
                             setShowProductionMenu(false)
                             setShowSalesMenu((prev) => !prev)
                           }}
-                          className={`w-full flex flex-col items-center gap-2.5 p-3 rounded-xl transition group focus:outline-none focus:ring-2 focus:ring-teal-500 ${
-                            locked
-                              ? "opacity-40 cursor-not-allowed"
-                              : "hover:bg-white/30 focus:bg-white/30"
-                          }`}
+                          className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition group"
                         >
-                          <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20 relative">
+                          <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
                             <svg
                               className="w-7 h-7 text-teal-700"
                               fill="none"
@@ -404,11 +398,6 @@ export default function HomePage() {
                                 d={item.icon}
                               />
                             </svg>
-                            {locked && (
-                              <span className="absolute -bottom-1 -left-1 text-[10px] bg-gray-700 text-white rounded px-1">
-                                🔒
-                              </span>
-                            )}
                           </div>
                           <span className="text-sm sm:text-base font-bold text-gray-800 text-center">
                             {item.title}
@@ -467,15 +456,16 @@ export default function HomePage() {
                     )
                   }
 
-                  // داشبورد و بقیه
-                  if (locked) {
+                  // انبار / مالی / گزارش / تنظیمات — برای تولید فقط کلیک بی‌اثر
+                  if (blockedForProduction) {
                     return (
-                      <div
+                      <button
                         key={item.title}
-                        className="flex flex-col items-center gap-2.5 p-3 rounded-xl opacity-40 cursor-not-allowed"
-                        aria-disabled
+                        type="button"
+                        onClick={() => {}}
+                        className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
                       >
-                        <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20 relative">
+                        <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
                           <svg
                             className="w-7 h-7 text-teal-700"
                             fill="none"
@@ -489,14 +479,11 @@ export default function HomePage() {
                               d={item.icon}
                             />
                           </svg>
-                          <span className="absolute -bottom-1 -left-1 text-[10px] bg-gray-700 text-white rounded px-1">
-                            🔒
-                          </span>
                         </div>
                         <span className="text-sm sm:text-base font-bold text-gray-800 text-center">
                           {item.title}
                         </span>
-                      </div>
+                      </button>
                     )
                   }
 

@@ -7,18 +7,18 @@ import { withTotals } from "@/lib/orderTotals"
 
 // ───────────── سریال شماره‌ی سفارش ─────────────
 // دو سریال جدا داریم و شماره‌ی سفارش همان شماره‌ی فاکتور سپیدار می‌شود:
-//   خریداری: چهار رقمی (از ۳۳۷۹ به بعد)
-//   اجرتی:   سریال ۹۰۰xxx (از ۹۰۰۵۷۰ به بعد)
+//   خریداری: چهار رقمی (از ۳۳۹۶ به بعد)
+//   اجرتی:   سریال ۹۰۰xxx (از ۹۰۰۵۷۴ به بعد)
 // سفارشی که «خط تولید»ش اجرتی باشد سریال اجرتی می‌گیرد، بقیه سریال خریداری.
 const RENTAL_PRODUCTION_LINE = "اجرتی"
 
 // خریداری: شروع شماره‌ی سفارش
-const PURCHASE_ORDER_NUMBER_START = 3379
+const PURCHASE_ORDER_NUMBER_START = 3396
 const PURCHASE_ORDER_NUMBER_MAX = 99999
 
 // اجرتی: شروع سریال. باید از آخرین شماره‌ی اجرتی در سپیدار و نرم‌افزار قدیمی
 // بزرگ‌تر باشد و اگر نرم‌افزار قدیمی هنوز کار می‌کند، با آن تداخل نکند.
-const RENTAL_ORDER_NUMBER_START = 900570
+const RENTAL_ORDER_NUMBER_START = 900574
 const RENTAL_ORDER_NUMBER_MIN = 900000
 const RENTAL_ORDER_NUMBER_MAX = 999999
 

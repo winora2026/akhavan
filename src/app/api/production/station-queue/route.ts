@@ -39,6 +39,23 @@ function isLoading(name: string) {
   return norm(name).includes("بارگیری")
 }
 
+/** یادداشت رد گروهی از انبار نیمه‌ساخته (باید با scan/route.ts یکی باشد) */
+const GROUP_PASS_NOTE = "رد گروهی از انبار کالای نیمه‌ساخته"
+
+/** اولین ایستگاهِ بعدی که قطعه را رد کرده؛ تا وجود دارد، برگشت ممکن نیست */
+function findPassedLaterStation(stations: any[], current: any) {
+  return (
+    stations.find((s: any) => {
+      if (s.id === current.id) return false
+      if ((s.sequence ?? 0) <= (current.sequence ?? 0)) return false
+      if (s.notes === GROUP_PASS_NOTE) return false
+      if (s.status === "تکمیل شده") return true
+      if (s.status === "در حال انجام" && (s.quantityOut || 0) > 0) return true
+      return false
+    }) || null
+  )
+}
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
@@ -87,6 +104,41 @@ export async function GET(req: Request) {
       orderBy: { createdAt: "asc" },
     })
 
+    // رد شده‌های اخیر همین ایستگاه که ایستگاه بعدی هنوز رد نکرده (قابل برگشت)
+    let doneRows: typeof rows = []
+    if (!isLoading(station.name)) {
+      doneRows = await prisma.productionItemStation.findMany({
+        where: {
+          stationId,
+          status: "تکمیل شده",
+          completedAt: { not: null },
+        },
+        include: {
+          station: true,
+          productionItem: {
+            include: {
+              stations: {
+                include: { station: true },
+                orderBy: { sequence: "asc" },
+              },
+              productionOrder: {
+                include: {
+                  order: {
+                    include: {
+                      customer: true,
+                      items: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        orderBy: { completedAt: "desc" },
+        take: 150,
+      })
+    }
+
     const filteredRows = rows.filter((row) => {
       const all = row.productionItem.stations
       const cut = all.find((s) => isCut(s.station.name))
@@ -94,8 +146,10 @@ export async function GET(req: Request) {
       // برش: همیشه در صف تا رد شود
       if (isCut(station.name)) return true
 
-      // بقیه: فقط بعد از تکمیل برش
-      if (!cut || cut.status !== "تکمیل شده") return false
+      // بقیه: اگر قطعه ایستگاه برش دارد، فقط بعد از تکمیل برش نمایش داده می‌شود.
+      // قطعه‌ی بدون ایستگاه برش (سفارش اجرتیِ بدون «اجرت برش») از همان ابتدا
+      // در کارتابل ایستگاه‌های خودش (مثلاً دیاموند) دیده می‌شود.
+      if (cut && cut.status !== "تکمیل شده") return false
 
       // انبار آماده تحویل: وقتی نیمه‌ساخته رد شده یا همه میانی‌ها تمام شده
       if (isReadyWh(station.name)) {
@@ -116,11 +170,11 @@ export async function GET(req: Request) {
         return !!ready && ready.status === "تکمیل شده"
       }
 
-      // خدمات + انبار نیمه‌ساخته: بعد از برش هم‌زمان در صف
+      // خدمات + انبار نیمه‌ساخته: بعد از برش (یا از ابتدا، اگر برش ندارد) هم‌زمان در صف
       return true
     })
 
-    const items = filteredRows.map((row) => {
+    const buildItem = (row: (typeof rows)[number]) => {
       const item = row.productionItem
       const order = item.productionOrder
       const salesOrder = order.order
@@ -132,6 +186,11 @@ export async function GET(req: Request) {
         sequence: row.sequence,
         status: row.status,
         quantityIn: row.quantityIn,
+        quantityOut: row.quantityOut ?? 0,
+        completedAt: row.completedAt ? row.completedAt.toISOString() : null,
+        canUndo:
+          !isLoading(station.name) &&
+          !findPassedLaterStation(row.productionItem.stations, row),
         station: { id: row.station.id, name: row.station.name },
         productionItem: {
           id: item.id,
@@ -166,7 +225,15 @@ export async function GET(req: Request) {
           },
         },
       }
-    })
+    }
+
+    const items = filteredRows.map(buildItem)
+
+    const undoable = doneRows
+      .filter((r) => r.notes !== GROUP_PASS_NOTE)
+      .filter((r) => !findPassedLaterStation(r.productionItem.stations, r))
+      .slice(0, 60)
+      .map(buildItem)
 
     const totalMeterage = items.reduce(
       (sum, r) => sum + (Number(r.productionItem.meterage) || 0),
@@ -179,6 +246,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       items,
+      undoable,
       summary: {
         stationName: station.name,
         count: items.length,

@@ -14,6 +14,9 @@ type QueueItem = {
   sequence: number
   status: string
   quantityIn: number | null
+  quantityOut?: number | null
+  completedAt?: string | null
+  canUndo?: boolean
   station: { id: string; name: string }
   productionItem: {
     id: string
@@ -141,6 +144,8 @@ export default function StationQueuePage() {
   const [selectedStationId, setSelectedStationId] = useState("")
   const [stationLocked, setStationLocked] = useState(false)
   const [queue, setQueue] = useState<QueueItem[]>([])
+  const [undoable, setUndoable] = useState<QueueItem[]>([])
+  const [showUndoList, setShowUndoList] = useState(false)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(false)
   const [operatorName, setOperatorName] = useState("")
@@ -209,6 +214,7 @@ export default function StationQueuePage() {
     if (selectedStationId) fetchQueue()
     else {
       setQueue([])
+      setUndoable([])
       setSummary(null)
     }
   }, [selectedStationId])
@@ -311,6 +317,7 @@ export default function StationQueuePage() {
             ? data
             : []
       )
+      setUndoable(Array.isArray(data.undoable) ? data.undoable : [])
       setSummary(data.summary || null)
     } catch (e) {
       console.error(e)
@@ -573,6 +580,25 @@ export default function StationQueuePage() {
     return result
   }, [queue, productFilter, search])
 
+  // رد شده‌های قابل برگشت (با همان فیلترهای بالا)
+  const filteredUndoable = useMemo(() => {
+    const p = productFilter.trim().toLowerCase()
+    const s = search.trim().toLowerCase()
+    return undoable.filter((q) => {
+      const it = q.productionItem
+      if (p && !it.productName.toLowerCase().includes(p)) return false
+      if (s) {
+        const hit =
+          it.productionOrder.order?.orderNumber?.toLowerCase().includes(s) ||
+          it.productionOrder.order?.customer?.name?.toLowerCase().includes(s) ||
+          it.productName?.toLowerCase().includes(s) ||
+          (it.barcode || "").toLowerCase().includes(s)
+        if (!hit) return false
+      }
+      return true
+    })
+  }, [undoable, productFilter, search])
+
   const exportStationExcel = () => {
     if (!filtered.length) {
       alert("ردیفی برای خروجی نیست")
@@ -718,6 +744,10 @@ export default function StationQueuePage() {
   }
 
   const undoStation = async (row: QueueItem) => {
+    if (!row.productionItem.barcode) {
+      alert("این ردیف بارکد ندارد")
+      return
+    }
     if (
       !confirm(
         `آیا رد ایستگاه «${selectedStationName}» برای «${row.productionItem.productName}» برگردانده شود؟`
@@ -765,6 +795,19 @@ export default function StationQueuePage() {
       meterage: list.reduce((s, i) => s + (Number(i.meterage) || 0), 0),
     }
   }, [currentSlip])
+
+  const detailMapUrl: string | null = detail
+    ? detail.mapImageUrl ||
+      (Array.isArray(detail.mapImages) ? detail.mapImages[0] : null) ||
+      null
+    : null
+
+  const closeDetail = () => {
+    setDetail(null)
+    setBarcode("")
+    if (inputRef.current) inputRef.current.value = ""
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }
 
   return (
     <div
@@ -916,6 +959,11 @@ export default function StationQueuePage() {
               </div>
               {lastResult?.type === "err" && (
                 <div className="mt-3 rounded-xl bg-red-100 border border-red-300 px-4 py-3 font-bold text-red-800 text-sm">
+                  {lastResult.text}
+                </div>
+              )}
+              {lastResult?.type === "ok" && (
+                <div className="mt-3 rounded-xl bg-green-100 border border-green-300 px-4 py-3 font-bold text-green-800 text-sm">
                   {lastResult.text}
                 </div>
               )}
@@ -1075,6 +1123,19 @@ export default function StationQueuePage() {
                             >
                               رد
                             </button>
+                            {row.canUndo && (row.quantityOut || 0) > 0 && (
+                              <button
+                                type="button"
+                                disabled={scanLoading}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  undoStation(row)
+                                }}
+                                className="rounded-lg bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 text-xs font-bold disabled:opacity-50"
+                              >
+                                برگشت
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1083,6 +1144,90 @@ export default function StationQueuePage() {
                 </table>
               )}
             </div>
+
+            {undoable.length > 0 && (
+              <div className="mt-4 rounded-2xl bg-white shadow-md p-4 border border-amber-300">
+                <button
+                  type="button"
+                  onClick={() => setShowUndoList((v) => !v)}
+                  className="w-full flex items-center justify-between gap-2 font-black text-blue-950"
+                >
+                  <span>
+                    رد شده‌های اخیر این ایستگاه — قابل برگشت به کارتابل (
+                    {filteredUndoable.length})
+                  </span>
+                  <span className="text-sm text-teal-700">
+                    {showUndoList ? "بستن ▲" : "نمایش ▼"}
+                  </span>
+                </button>
+                {showUndoList && (
+                  <div className="mt-3 overflow-x-auto">
+                    <p className="text-xs text-blue-700 mb-2">
+                      فقط قطعه‌هایی نمایش داده می‌شوند که ایستگاه بعدی هنوز آن‌ها را رد نکرده است.
+                    </p>
+                    {filteredUndoable.length === 0 ? (
+                      <p className="text-center py-6 font-bold">موردی نیست</p>
+                    ) : (
+                      <table className="w-full text-sm border-collapse border border-gray-400">
+                        <thead>
+                          <tr className="bg-amber-100">
+                            <th className="p-2 border border-gray-400">ش سفارش</th>
+                            <th className="p-2 border border-gray-400">مشتری</th>
+                            <th className="p-2 border border-gray-400">کالا</th>
+                            <th className="p-2 border border-gray-400">بارکد</th>
+                            <th className="p-2 border border-gray-400">ابعاد</th>
+                            <th className="p-2 border border-gray-400">تعداد</th>
+                            <th className="p-2 border border-gray-400">زمان رد</th>
+                            <th className="p-2 border border-gray-400">عملیات</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredUndoable.map((row) => (
+                            <tr key={row.id} className="border border-gray-400 bg-white">
+                              <td className="p-2 border border-gray-400 text-center font-bold text-teal-800">
+                                {row.productionItem.productionOrder.order?.orderNumber || "—"}
+                              </td>
+                              <td className="p-2 border border-gray-400 font-bold">
+                                {row.productionItem.productionOrder.order?.customer?.name || "—"}
+                              </td>
+                              <td className="p-2 border border-gray-400 font-bold">
+                                {row.productionItem.productName}
+                              </td>
+                              <td className="p-2 border border-gray-400 text-center font-bold">
+                                {row.productionItem.barcode || "—"}
+                              </td>
+                              <td className="p-2 border border-gray-400 text-center font-black">
+                                {row.productionItem.length && row.productionItem.width
+                                  ? `${row.productionItem.length}×${row.productionItem.width}`
+                                  : "—"}
+                              </td>
+                              <td className="p-2 border border-gray-400 text-center font-black">
+                                {row.quantityOut ?? row.productionItem.quantity}
+                              </td>
+                              <td className="p-2 border border-gray-400 text-center text-xs">
+                                {row.completedAt
+                                  ? new Date(row.completedAt).toLocaleString("fa-IR")
+                                  : "—"}
+                              </td>
+                              <td className="p-2 border border-gray-400 text-center">
+                                <button
+                                  type="button"
+                                  disabled={scanLoading}
+                                  onClick={() => undoStation(row)}
+                                  className="rounded-lg bg-amber-500 hover:bg-amber-600 text-white px-3 py-1 text-xs font-bold disabled:opacity-50"
+                                >
+                                  برگشت به کارتابل
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
 
@@ -1290,155 +1435,165 @@ export default function StationQueuePage() {
       </div>
 
       {detail && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4 print:hidden">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3 print:hidden">
           <div
-            className="w-full max-w-xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-teal-200"
+            className="w-full max-w-6xl max-h-[96vh] flex flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-teal-200"
             dir="rtl"
           >
-            <div className="sticky top-0 z-10 bg-teal-600 text-white px-5 py-3 flex items-center justify-between">
+            <div className="bg-teal-600 text-white px-5 py-3 flex items-center justify-between gap-3">
               <h2 className="text-lg font-black">جزئیات — رد ایستگاه</h2>
-              <span className="text-sm font-bold opacity-95">
-                {detail.stationName || selectedStationName || "—"}
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-bold opacity-95">
+                  {detail.stationName || selectedStationName || "—"}
+                </span>
+                <button
+                  type="button"
+                  onClick={closeDetail}
+                  title="بستن (Esc)"
+                  aria-label="بستن"
+                  className="rounded-full bg-white/20 hover:bg-white/30 text-white w-9 h-9 flex items-center justify-center text-xl font-black leading-none"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4">
+              <div
+                className={`grid gap-4 ${
+                  detailMapUrl ? "lg:grid-cols-2" : "grid-cols-1"
+                }`}
+              >
+                <div className="space-y-3">
+                  <div className="text-center rounded-xl bg-orange-50 border border-orange-200 p-4">
+                    <p className="text-3xl sm:text-4xl font-black text-blue-950 tracking-wide">
+                      {detail.length ?? "—"} × {detail.width ?? "—"}
+                    </p>
+                    <p className="text-2xl sm:text-3xl font-black text-orange-600 mt-2">
+                      تعداد: {detail.quantity}
+                      {detail.remaining != null && Number(detail.remaining) > 0
+                        ? ` (باقی: ${detail.remaining})`
+                        : ""}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-teal-50 border border-teal-100 p-3">
+                    <p className="text-xs text-blue-700 mb-1">نام کالا</p>
+                    <p className="font-black text-blue-950 text-base">
+                      {detail.productName || "—"}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+                    <div className="rounded-xl bg-teal-50 border border-teal-100 p-3 col-span-2">
+                      <p className="text-xs text-blue-700 mb-1">مشتری</p>
+                      <p className="font-bold text-blue-950">
+                        {detail.customerName || "—"}
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-white border border-teal-100 p-3">
+                      <p className="text-xs text-blue-700 mb-1">شماره سفارش</p>
+                      <p className="font-bold">{detail.orderNumber || "—"}</p>
+                    </div>
+                    <div className="rounded-xl bg-white border border-teal-100 p-3">
+                      <p className="text-xs text-blue-700 mb-1">بارکد</p>
+                      <p className="font-bold font-mono" dir="ltr">
+                        {detail.barcode || "—"}
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-white border border-teal-100 p-3">
+                      <p className="text-xs text-blue-700 mb-1">کد نصب</p>
+                      <p className="font-bold">
+                        {detail.installationCode || "—"}
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-white border border-teal-100 p-3">
+                      <p className="text-xs text-blue-700 mb-1">متراژ</p>
+                      <p className="font-bold">
+                        {detail.meterage != null
+                          ? Number(detail.meterage).toFixed(4)
+                          : "—"}
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-white border border-teal-100 p-3">
+                      <p className="text-xs text-blue-700 mb-1">اولویت</p>
+                      <p className="font-bold">{detail.priority || "—"}</p>
+                    </div>
+                    <div className="rounded-xl bg-white border border-teal-100 p-3">
+                      <p className="text-xs text-blue-700 mb-1">تاریخ سفارش</p>
+                      <p className="font-bold">
+                        {formatFaDate(detail.orderDate)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-white border border-teal-100 p-3">
+                      <p className="text-xs text-blue-700 mb-1">تاریخ تحویل</p>
+                      <p className="font-bold">
+                        {formatFaDate(detail.deliveryDate)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {detail.servicesText ? (
+                    <div className="rounded-xl border border-teal-200 bg-white p-3">
+                      <p className="text-xs text-blue-700 mb-1 font-bold">
+                        خدمات
+                      </p>
+                      <p className="font-black text-blue-950 whitespace-pre-line text-base">
+                        {detail.servicesText}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {detail.notes ? (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                      <p className="text-xs text-amber-800 mb-1 font-bold">
+                        توضیحات
+                      </p>
+                      <p className="font-semibold text-blue-950">
+                        {detail.notes}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {detail.message ? (
+                    <p className="text-center text-sm font-bold text-teal-700">
+                      {detail.message}
+                    </p>
+                  ) : null}
+                </div>
+
+                {detailMapUrl && (
+                  <div className="rounded-xl border border-teal-200 overflow-hidden flex flex-col">
+                    <p className="text-xs text-blue-700 font-bold px-3 pt-2">
+                      نقشه
+                    </p>
+                    <button
+                      type="button"
+                      className="w-full flex-1"
+                      onClick={() => setMapPreviewUrl(detailMapUrl)}
+                    >
+                      <img
+                        src={detailMapUrl}
+                        alt="نقشه"
+                        className="max-h-[62vh] w-full object-contain bg-gray-50"
+                      />
+                    </button>
+                    <p className="text-[11px] text-center text-blue-600 py-1">
+                      برای بزرگ‌نمایی کلیک کنید
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-white border-t px-5 py-3 flex items-center justify-between gap-3">
+              <span className="text-xs text-blue-600">
+                بستن: دکمه ✕ یا کلید Esc
               </span>
-            </div>
-
-            <div className="p-5 space-y-4">
-              <div className="text-center rounded-xl bg-orange-50 border border-orange-200 p-4">
-                <p className="text-3xl sm:text-4xl font-black text-blue-950 tracking-wide">
-                  {detail.length ?? "—"} × {detail.width ?? "—"}
-                </p>
-                <p className="text-2xl sm:text-3xl font-black text-orange-600 mt-2">
-                  تعداد: {detail.quantity}
-                  {detail.remaining != null && Number(detail.remaining) > 0
-                    ? ` (باقی: ${detail.remaining})`
-                    : ""}
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                <div className="rounded-xl bg-teal-50 border border-teal-100 p-3 sm:col-span-2">
-                  <p className="text-xs text-blue-700 mb-1">نام کالا</p>
-                  <p className="font-black text-blue-950 text-base">
-                    {detail.productName || "—"}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-teal-50 border border-teal-100 p-3">
-                  <p className="text-xs text-blue-700 mb-1">مشتری</p>
-                  <p className="font-bold text-blue-950">
-                    {detail.customerName || "—"}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-white border border-teal-100 p-3">
-                  <p className="text-xs text-blue-700 mb-1">شماره سفارش</p>
-                  <p className="font-bold">{detail.orderNumber || "—"}</p>
-                </div>
-                <div className="rounded-xl bg-white border border-teal-100 p-3">
-                  <p className="text-xs text-blue-700 mb-1">بارکد</p>
-                  <p className="font-bold font-mono" dir="ltr">
-                    {detail.barcode || "—"}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-white border border-teal-100 p-3">
-                  <p className="text-xs text-blue-700 mb-1">کد نصب</p>
-                  <p className="font-bold">
-                    {detail.installationCode || "—"}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-white border border-teal-100 p-3">
-                  <p className="text-xs text-blue-700 mb-1">متراژ</p>
-                  <p className="font-bold">
-                    {detail.meterage != null
-                      ? Number(detail.meterage).toFixed(4)
-                      : "—"}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-white border border-teal-100 p-3">
-                  <p className="text-xs text-blue-700 mb-1">اولویت</p>
-                  <p className="font-bold">{detail.priority || "—"}</p>
-                </div>
-                <div className="rounded-xl bg-white border border-teal-100 p-3">
-                  <p className="text-xs text-blue-700 mb-1">تاریخ سفارش</p>
-                  <p className="font-bold">{formatFaDate(detail.orderDate)}</p>
-                </div>
-                <div className="rounded-xl bg-white border border-teal-100 p-3">
-                  <p className="text-xs text-blue-700 mb-1">تاریخ تحویل</p>
-                  <p className="font-bold">
-                    {formatFaDate(detail.deliveryDate)}
-                  </p>
-                </div>
-              </div>
-
-              {detail.servicesText ? (
-                <div className="rounded-xl border border-teal-200 bg-white p-3">
-                  <p className="text-xs text-blue-700 mb-1 font-bold">خدمات</p>
-                  <p className="font-black text-blue-950 whitespace-pre-line text-base">
-                    {detail.servicesText}
-                  </p>
-                </div>
-              ) : null}
-
-              {detail.notes ? (
-                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
-                  <p className="text-xs text-amber-800 mb-1 font-bold">
-                    توضیحات
-                  </p>
-                  <p className="font-semibold text-blue-950">{detail.notes}</p>
-                </div>
-              ) : null}
-
-              {(detail.mapImageUrl ||
-                (Array.isArray(detail.mapImages) &&
-                  detail.mapImages.length > 0)) && (
-                <div className="rounded-xl border border-teal-200 overflow-hidden">
-                  <p className="text-xs text-blue-700 font-bold px-3 pt-2">
-                    نقشه
-                  </p>
-                  <button
-                    type="button"
-                    className="w-full"
-                    onClick={() => {
-                      const url =
-                        detail.mapImageUrl ||
-                        (Array.isArray(detail.mapImages)
-                          ? detail.mapImages[0]
-                          : null)
-                      if (url) setMapPreviewUrl(url)
-                    }}
-                  >
-                    <img
-                      src={
-                        detail.mapImageUrl ||
-                        (Array.isArray(detail.mapImages)
-                          ? detail.mapImages[0]
-                          : "")
-                      }
-                      alt="نقشه"
-                      className="max-h-52 w-full object-contain bg-gray-50"
-                    />
-                  </button>
-                  <p className="text-[11px] text-center text-blue-600 py-1">
-                    برای بزرگ‌نمایی کلیک کنید
-                  </p>
-                </div>
-              )}
-
-              {detail.message ? (
-                <p className="text-center text-sm font-bold text-teal-700">
-                  {detail.message}
-                </p>
-              ) : null}
-            </div>
-
-            <div className="sticky bottom-0 bg-white border-t px-5 py-4 flex justify-end">
               <button
                 type="button"
                 className="rounded-xl bg-teal-500 hover:bg-teal-600 text-white px-8 py-2.5 font-bold"
-                onClick={() => {
-                  setDetail(null)
-                  setBarcode("")
-                  if (inputRef.current) inputRef.current.value = ""
-                  setTimeout(() => inputRef.current?.focus(), 50)
-                }}
+                onClick={closeDetail}
               >
                 ادامه
               </button>

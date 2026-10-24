@@ -2,9 +2,22 @@ import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { buildServicesText } from "@/lib/production/servicesText"
 
+// اگر سفارش‌های قدیمیِ بارگیری‌شده (از قبل از سیستم برگه‌ی خروج) در لیست «خروج‌نخورده»
+// ظاهر می‌شوند، تاریخ شروع را اینجا بگذارید؛ فقط قطعاتی که انبار آماده تحویلشان
+// از این تاریخ به بعد تکمیل شده نشان داده می‌شوند. مثال: "2026-10-01"
+// مقدار null یعنی بدون محدودیت.
+const SHOW_ITEMS_SINCE: string | null = null
+
+// نرمال‌سازی جستجو: ي/ى → ی ، ك → ک ، ة → ه ، حذف اعراب و ارقام عربی/فارسی
 function norm(s: string) {
   return (s || "")
     .replace(/[\u200c\u200f\u200e]/g, "")
+    .replace(/[يى]/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/ة/g, "ه")
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, "")
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase()
@@ -13,10 +26,6 @@ function norm(s: string) {
 function isReadyWh(name: string) {
   const n = norm(name)
   return n.includes("آماده تحویل") || n === norm("انبار محصول دو")
-}
-
-function isLoading(name: string) {
-  return norm(name).includes("بارگیری")
 }
 
 /** پیدا کردن OrderItem — اول با id، بعد با نام کالا */
@@ -78,12 +87,9 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url)
     const customer = (searchParams.get("customer") || "").trim()
 
-    const readyStations = await prisma.productionStation.findMany()
-    const readyIds = readyStations
+    const allStations = await prisma.productionStation.findMany()
+    const readyIds = allStations
       .filter((s) => isReadyWh(s.name))
-      .map((s) => s.id)
-    const loadIds = readyStations
-      .filter((s) => isLoading(s.name))
       .map((s) => s.id)
 
     if (readyIds.length === 0) {
@@ -115,13 +121,29 @@ export async function GET(req: Request) {
       orderBy: { completedAt: "asc" },
     })
 
+    // «خروج‌خورده» یعنی قلم در یک برگه‌ی خروج فعال (غیر ابطال) ثبت شده باشد
+    // (همان تعریفی که ثبت برگه و صفحه‌ی جزئیات سفارش استفاده می‌کنند)
+    const exitedRows = await prisma.exitSlipItem.findMany({
+      where: {
+        productionItemId: { in: rows.map((r) => r.productionItemId) },
+        exitSlip: { status: { not: "ابطال" } },
+      },
+      select: { productionItemId: true },
+    })
+    const exitedIds = new Set(exitedRows.map((r) => r.productionItemId))
+
+    const sinceTime = SHOW_ITEMS_SINCE
+      ? new Date(SHOW_ITEMS_SINCE).getTime()
+      : null
+
     let items = rows
       .filter((row) => {
-        const load = row.productionItem.stations.find((s) =>
-          isLoading(s.station.name)
-        )
-        if (!load) return true
-        return load.status !== "تکمیل شده"
+        if (exitedIds.has(row.productionItemId)) return false
+        if (sinceTime && !isNaN(sinceTime)) {
+          const t = row.completedAt ? new Date(row.completedAt).getTime() : 0
+          if (t < sinceTime) return false
+        }
+        return true
       })
       .map((row) => {
         const item = row.productionItem
