@@ -87,6 +87,17 @@ const fmt3 = (n: number) => {
 // تصادفی اعداد وقتی کاربر بدون قصد روی فیلد اسکرول می‌کند)
 const blockWheelChange = (e: React.WheelEvent<HTMLInputElement>) => e.currentTarget.blur()
 
+// طول همیشه مقدار بزرگ‌تر و عرض مقدار کوچک‌تر است؛ اگر عرض بیشتر از طول وارد شد جابه‌جا می‌شوند.
+// فقط وقتی هر دو پر و عددی باشند عمل می‌کند (برای واحد «عددی» که ابعاد خالی است کاری نمی‌کند).
+const normalizeDims = (length: string, width: string) => {
+  const l = parseFloat(length)
+  const w = parseFloat(width)
+  if (length.trim() !== "" && width.trim() !== "" && !isNaN(l) && !isNaN(w) && w > l) {
+    return { length: width, width: length }
+  }
+  return { length, width }
+}
+
 // واحدهایی که «تعداد واحد»شان در مودال خدمات خودکار محاسبه می‌شود
 const autoUnits = ["مترمربع", "محیط", "چند طول چند عرض", "ابعاد دایره"]
 
@@ -1015,7 +1026,8 @@ export default function NewOrderClient() {
 
   // پیش‌نمایش زنده‌ی قیمت کل در فرم افزودن/ویرایش قلم
   const newItemPreviewTotal = useMemo(() => {
-    const calc = calculate(newLength, newWidth, newQuantity || "1", newUnit)
+    const d = normalizeDims(newLength, newWidth)
+    const calc = calculate(d.length, d.width, newQuantity || "1", newUnit)
     const meterage = parseFloat(calc.meterage) || 0
     const price = parsePrice(newUnitPrice)
     return price && meterage ? (price * meterage).toLocaleString("en-US") : ""
@@ -1335,10 +1347,12 @@ export default function NewOrderClient() {
     }
     const qty = parseFloat(newQuantity) || 1
     const price = parsePrice(newUnitPrice)
+    // طول همیشه بزرگ‌تر و عرض کوچک‌تر ذخیره می‌شود
+    const { length: dimLength, width: dimWidth } = normalizeDims(newLength, newWidth)
 
     if (editingItemId) {
       // ویرایش قلم موجود
-      const calc = calculate(newLength, newWidth, String(qty), newUnit)
+      const calc = calculate(dimLength, dimWidth, String(qty), newUnit)
       const meterage = parseFloat(calc.meterage) || 0
       setItems((prev) =>
         prev.map((item) => {
@@ -1351,8 +1365,8 @@ export default function NewOrderClient() {
             productCode: newProductCode,
             installCode: newInstallCode,
             unit: newUnit,
-            length: newLength,
-            width: newWidth,
+            length: dimLength,
+            width: dimWidth,
             quantity: String(qty),
             meterage: calc.meterage,
             perimeter: calc.perimeter,
@@ -1363,7 +1377,7 @@ export default function NewOrderClient() {
       )
       setEditingItemId(null)
     } else if (qty > 4) {
-      const calc = calculate(newLength, newWidth, String(qty), newUnit)
+      const calc = calculate(dimLength, dimWidth, String(qty), newUnit)
       const meterage = parseFloat(calc.meterage) || 0
       const newId = Date.now()
       setSelectedItemId(newId)
@@ -1373,8 +1387,8 @@ export default function NewOrderClient() {
         productCode: newProductCode,
         installCode: newInstallCode,
         unit: newUnit,
-        length: newLength,
-        width: newWidth,
+        length: dimLength,
+        width: dimWidth,
         quantity: String(qty),
         meterage: calc.meterage,
         perimeter: calc.perimeter,
@@ -1388,7 +1402,7 @@ export default function NewOrderClient() {
       const newItems: OrderItem[] = []
       const baseId = Date.now()
       for (let i = 0; i < qty; i++) {
-        const calc = calculate(newLength, newWidth, "1", newUnit)
+        const calc = calculate(dimLength, dimWidth, "1", newUnit)
         const meterage = parseFloat(calc.meterage) || 0
         newItems.push({
           id: baseId + i,
@@ -1396,8 +1410,8 @@ export default function NewOrderClient() {
           productCode: newProductCode,
           installCode: newInstallCode,
           unit: newUnit,
-          length: newLength,
-          width: newWidth,
+          length: dimLength,
+          width: dimWidth,
           quantity: "1",
           meterage: calc.meterage,
           perimeter: calc.perimeter,
@@ -2502,7 +2516,7 @@ export default function NewOrderClient() {
             <p className="font-bold mb-2 text-teal-800">اطلاعات واریز:</p>
             {isOfficialInvoice ? (
               <div className="bg-teal-50/50 rounded-lg p-3 border border-teal-100 leading-6">
-                <p>شماره کارت: ۰۲۰۱ ۰۰۰۱ ۹۳۶۰ ۰۷</p>
+                <p>شماره کارت: 02100001936007</p>
                 <p>به نام: صنایع اخوان شیشه خواجوی</p>
                 <p>شماره شبا: IR02540104202100001936007</p>
                 <p className="text-xs text-gray-500 mt-1">بانک پارسیان</p>
@@ -3009,7 +3023,24 @@ export default function NewOrderClient() {
                   </div>
                   <div>
                     <label className={labelClass}>عرض (cm)</label>
-                    <input ref={widthRef} type="number" value={newWidth} onChange={(e) => setNewWidth(e.target.value)} onWheel={blockWheelChange} onKeyDown={(e) => handleEnter(e, quantityRef)} className={inputClass} />
+                    <input
+                      ref={widthRef}
+                      type="number"
+                      value={newWidth}
+                      onChange={(e) => setNewWidth(e.target.value)}
+                      onWheel={blockWheelChange}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault()
+                          // اگر عرض بیشتر از طول بود، همین‌جا جابه‌جا می‌شوند (طول = بزرگ‌تر، عرض = کوچک‌تر)
+                          const d = normalizeDims(newLength, newWidth)
+                          setNewLength(d.length)
+                          setNewWidth(d.width)
+                          focusRef(quantityRef)
+                        }
+                      }}
+                      className={inputClass}
+                    />
                   </div>
                   <div>
                     <label className={labelClass}>تعداد</label>
