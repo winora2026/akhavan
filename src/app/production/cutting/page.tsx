@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useLayoutEffect,
+  useCallback,
   type ReactNode,
 } from "react"
 import Link from "next/link"
@@ -517,15 +518,34 @@ export default function CuttingPlanningPage() {
     return sortDir === "asc" ? " ↑" : " ↓"
   }
 
+  // اگر متن فیلتر دقیقاً یکی از نام‌های کالا باشد (مثلاً انتخاب از لیست)، فقط همان کالا نمایش داده می‌شود؛
+  // وگرنه همان جستجوی کلمه‌به‌کلمه‌ی قبلی (مثل «4» یا «آینه 4 میل») انجام می‌شود.
+  const exactProductNames = useMemo(
+    () =>
+      new Set(
+        productNames.map((n) => normalizeText(n).replace(/\s+/g, " "))
+      ),
+    [productNames]
+  )
+
+  const matchProduct = useCallback(
+    (name: string, query: string) => {
+      const q = normalizeText(query).replace(/\s+/g, " ")
+      if (q && exactProductNames.has(q)) {
+        return normalizeText(name).replace(/\s+/g, " ") === q
+      }
+      return matchProductFilter(name, query)
+    },
+    [exactProductNames]
+  )
+
   const filtered = useMemo(() => {
     let list = [...items]
     const qProduct = productName
     const qSearch = normalizeText(search)
 
     if (qProduct.trim()) {
-      list = list.filter((i) =>
-        matchProductFilter(i.productName || "", qProduct)
-      )
+      list = list.filter((i) => matchProduct(i.productName || "", qProduct))
     }
     if (labelStatus !== "همه") {
       list = list.filter((i) => i.labelStatus === labelStatus)
@@ -597,7 +617,16 @@ export default function CuttingPlanningPage() {
     })
 
     return list
-  }, [items, productName, labelStatus, priority, search, sortKey, sortDir])
+  }, [
+    items,
+    productName,
+    labelStatus,
+    priority,
+    search,
+    sortKey,
+    sortDir,
+    matchProduct,
+  ])
 
   // قطعات «فقط لیبل» (اجرتیِ بدون اجرت برش) وارد برگه‌ی برنامه‌ریزی نمی‌شوند
   const reportRows = useMemo(
@@ -674,7 +703,7 @@ export default function CuttingPlanningPage() {
   const filteredWastes = useMemo(() => {
     const qSearch = normalizeText(search)
     return wastes.filter((w) => {
-      if (productName.trim() && !matchProductFilter(w.productName || "", productName))
+      if (productName.trim() && !matchProduct(w.productName || "", productName))
         return false
       if (wasteStatus !== "همه" && wasteStatusOf(w) !== wasteStatus) return false
       if (qSearch) {
@@ -688,7 +717,7 @@ export default function CuttingPlanningPage() {
       }
       return true
     })
-  }, [wastes, productName, search, wasteStatus])
+  }, [wastes, productName, search, wasteStatus, matchProduct])
 
   const selectableWastes = useMemo(
     () => filteredWastes.filter((w) => !w.isReworked && !w.inCuttingQueue),
@@ -2142,7 +2171,9 @@ export default function CuttingPlanningPage() {
                         {row.length ?? "—"}
                       </td>
                       <td className="border border-black p-1.5 text-[11px] font-bold leading-5 whitespace-pre-line">
-                        {row.servicesText || row.notes || "—"}
+                        {[row.servicesText, row.notes]
+                          .filter((t) => t && String(t).trim())
+                          .join("\n") || "—"}
                       </td>
                     </tr>
                   ))}

@@ -478,6 +478,8 @@ export default function NewOrderClient() {
   const [modalDescription, setModalDescription] = useState("")
   const [modalDescriptionSearch, setModalDescriptionSearch] = useState("")
   const [showModalDescDropdown, setShowModalDescDropdown] = useState(false)
+  // چند توضیح برای یک قلم: هر توضیحِ انتخاب‌شده یک «چیپ» است و موقع ذخیره با « + » به هم وصل می‌شوند
+  const [modalDescParts, setModalDescParts] = useState<string[]>([])
   // توضیحات اضافه‌شده توسط کارشناس‌ها (از سرور) + وضعیت در حال ذخیره
   const [customDescriptions, setCustomDescriptions] = useState<string[]>([])
   const [addingDescription, setAddingDescription] = useState(false)
@@ -488,6 +490,7 @@ export default function NewOrderClient() {
 
   // رفرنس‌های بخش «اطلاعات سفارش» برای جابجایی با اینتر
   const customerSearchRef = useRef<HTMLInputElement>(null)
+  const descInputRef = useRef<HTMLInputElement>(null)
   const productionLineRef = useRef<HTMLSelectElement>(null)
   const customerGroupRef = useRef<HTMLSelectElement>(null)
   const priorityRef = useRef<HTMLSelectElement>(null)
@@ -517,6 +520,57 @@ export default function NewOrderClient() {
     mq.addEventListener("change", update)
     return () => mq.removeEventListener("change", update)
   }, [])
+
+  // ستون «تصویر نقشه»: در صفحه‌های بزرگ (lg به بالا) با position:fixed نگه داشته می‌شود تا با زیاد شدن
+  // اقلام و اسکرول صفحه از جلوی چشم نرود. (sticky معمولی وقتی یکی از والدها overflow داشته باشد کار
+  // نمی‌کند؛ fixed به والدها وابسته نیست.) موقعیت/عرض از روی ستون خالیِ کناریِ آن محاسبه و مستقیم روی
+  // DOM نوشته می‌شود تا با هر اسکرول کل صفحه دوباره رندر نشود.
+  const mapColRef = useRef<HTMLDivElement>(null)
+  const mapPanelRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const col = mapColRef.current
+    const panel = mapPanelRef.current
+    const cont = mainPanelsRef.current
+    if (!col || !panel || !cont) return
+    if (!isLgScreen) {
+      panel.style.top = ""
+      panel.style.left = ""
+      panel.style.width = ""
+      panel.style.maxHeight = ""
+      return
+    }
+    let raf = 0
+    const margin = 16
+    const update = () => {
+      raf = 0
+      const c = col.getBoundingClientRect()
+      const k = cont.getBoundingClientRect()
+      // از جای طبیعی ستون شروع می‌شود و وقتی اسکرول شد، ۱۶ پیکسل از بالای صفحه می‌چسبد
+      const stuckTop = Math.max(c.top, margin)
+      panel.style.left = `${c.left}px`
+      panel.style.width = `${c.width}px`
+      panel.style.maxHeight = `${Math.max(380, window.innerHeight - stuckTop - margin)}px`
+      const h = panel.offsetHeight
+      // از پایین کادر اصلی (انتهای لیست اقلام) پایین‌تر نمی‌رود
+      const top = Math.min(stuckTop, Math.max(c.top, k.bottom - h))
+      panel.style.top = `${top}px`
+    }
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(update)
+    }
+    update()
+    window.addEventListener("scroll", schedule, { passive: true, capture: true })
+    window.addEventListener("resize", schedule)
+    const ro = new ResizeObserver(schedule)
+    ro.observe(col)
+    ro.observe(cont)
+    return () => {
+      window.removeEventListener("scroll", schedule, { capture: true } as any)
+      window.removeEventListener("resize", schedule)
+      ro.disconnect()
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [isLgScreen])
 
   // با باز شدن صفحه، فوکوس خودکار روی «نام مشتری» می‌رود تا کارشناس بدون نیاز
   // به کلیک با موس، مستقیم تایپ کردن نام مشتری را شروع کند
@@ -1703,11 +1757,31 @@ export default function NewOrderClient() {
   }
 
   // پاپ‌آپ توضیحات
+  const DESC_SEP = " + "
+
+  // متن ذخیره‌شده‌ی قلم → لیست توضیحات جدا (اگر کل متن خودش یک مورد از لیست باشد، تقسیم نمی‌شود)
+  const parseDescriptionParts = (text: string): string[] => {
+    const t = (text || "").trim()
+    if (!t) return []
+    const key = normalizeText(t).replace(/\s+/g, "")
+    if (descriptionsIndex.some((x) => x.key === key)) return [t]
+    return t.split(DESC_SEP).map((s) => s.trim()).filter(Boolean)
+  }
+
+  // توضیحات انتخاب‌شده + متنی که هنوز داخل کادر تایپ شده، به‌صورت یک متن
+  const buildDescriptionText = (parts: string[], typed: string) => {
+    const all = [...parts]
+    const t = typed.trim()
+    if (t && !all.includes(t)) all.push(t)
+    return all.join(DESC_SEP)
+  }
+
   const openDescriptionModal = (id: number) => {
     const item = items.find((i) => i.id === id)
     setCurrentDescItemId(id)
-    setModalDescription(item?.description || "")
-    setModalDescriptionSearch(item?.description || "")
+    setModalDescParts(parseDescriptionParts(item?.description || ""))
+    setModalDescription("")
+    setModalDescriptionSearch("")
     setShowModalDescDropdown(false)
     setShowDescriptionModal(true)
   }
@@ -1720,7 +1794,19 @@ export default function NewOrderClient() {
     setShowDescriptionModal(false)
   }
 
-  const saveDescription = () => saveDescriptionText(modalDescription)
+  const saveDescription = () =>
+    saveDescriptionText(buildDescriptionText(modalDescParts, modalDescriptionSearch))
+
+  // اضافه کردن یک توضیح به چیپ‌ها (بدون بستن پنجره) تا بشود چند توضیح پشت سر هم انتخاب کرد
+  const addDescriptionPart = (text: string) => {
+    const t = text.trim()
+    if (!t) return
+    setModalDescParts((prev) => (prev.includes(t) ? prev : [...prev, t]))
+    setModalDescription("")
+    setModalDescriptionSearch("")
+    setShowModalDescDropdown(false)
+    setTimeout(() => descInputRef.current?.focus(), 0)
+  }
 
   // افزودن متن تایپ‌شده به لیست مشترک توضیحات (روی سرور ذخیره می‌شود).
   // متن نهایی (بعد از یکسان‌سازی حروف، یا همان مورد تکراریِ موجود) برگردانده می‌شود.
@@ -3322,8 +3408,11 @@ export default function NewOrderClient() {
                 کشش عمودیِ items-stretch والد را برای همین ستون خنثی می‌کند تا sticky کار کند،
                 و lg:max-h با overflow-y-auto داخلیِ لیست عکس‌ها ترکیب می‌شود تا اگر عکس‌ها
                 زیاد شدند، خودِ همان قسمت اسکرول شود نه کل صفحه. */}
-            <div className="w-full lg:flex-1 min-w-0 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)]">
-              <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 h-full flex flex-col">
+            <div ref={mapColRef} className="w-full lg:flex-1 min-w-0 lg:self-stretch">
+              <div
+                ref={mapPanelRef}
+                className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 flex flex-col lg:fixed lg:z-20"
+              >
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                   <h2 className="text-xl font-bold text-blue-950">تصویر نقشه</h2>
                   <div className="flex gap-2">
@@ -3557,9 +3646,31 @@ export default function NewOrderClient() {
                     </div>
                   )}
 
+                  {modalDescParts.length > 0 && (
+                    <div className="mb-3 flex flex-wrap gap-2">
+                      {modalDescParts.map((d) => (
+                        <span
+                          key={d}
+                          className="flex items-center gap-1.5 rounded-lg bg-teal-100 px-2.5 py-1.5 text-sm font-bold text-teal-900"
+                        >
+                          {d}
+                          <button
+                            type="button"
+                            title="حذف این توضیح"
+                            onClick={() => setModalDescParts((prev) => prev.filter((x) => x !== d))}
+                            className="text-base leading-none text-red-600 hover:text-red-800"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
                   <div className="relative" onClick={(e) => e.stopPropagation()}>
-                    <label className={labelClass}>توضیحات</label>
+                    <label className={labelClass}>{modalDescParts.length > 0 ? "افزودن توضیح دیگر" : "توضیحات"}</label>
                     <input
+                      ref={descInputRef}
                       type="text"
                       value={modalDescriptionSearch}
                       onChange={(e) => {
@@ -3571,10 +3682,13 @@ export default function NewOrderClient() {
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault()
-                          if ((e.ctrlKey || e.metaKey) && canAddDescription) {
+                          if (e.shiftKey) {
+                            // Shift+Enter: متن تایپ‌شده به‌عنوان یک توضیح اضافه می‌شود و پنجره باز می‌ماند
+                            addDescriptionPart(modalDescriptionSearch)
+                          } else if ((e.ctrlKey || e.metaKey) && canAddDescription) {
                             // Ctrl+Enter: افزودن به لیست مشترک و ثبت روی قلم
                             addDescriptionToList().then((t) => {
-                              if (t) saveDescriptionText(t)
+                              if (t) saveDescriptionText(buildDescriptionText(modalDescParts, t))
                             })
                           } else {
                             saveDescription()
@@ -3585,12 +3699,16 @@ export default function NewOrderClient() {
                       className={inputClass}
                       autoFocus
                     />
-                    {showModalDescDropdown && (filteredModalDescriptions.length > 0 || canAddDescription) && (
+                    {showModalDescDropdown &&
+                      (filteredModalDescriptions.some((d) => !modalDescParts.includes(d)) || canAddDescription) && (
                       <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-teal-200 bg-white shadow-2xl">
                         {canAddDescription && (
                           <button
                             type="button"
-                            onClick={addDescriptionToList}
+                            onClick={async () => {
+                              const t = await addDescriptionToList()
+                              if (t) addDescriptionPart(t)
+                            }}
                             disabled={addingDescription}
                             className="sticky top-0 z-10 w-full text-right px-4 py-2.5 text-sm font-bold text-teal-800 bg-teal-50 hover:bg-teal-100 border-b border-teal-200 disabled:opacity-60"
                           >
@@ -3598,22 +3716,23 @@ export default function NewOrderClient() {
                             <span className="mr-2 text-xs font-normal text-teal-600">(Ctrl+Enter)</span>
                           </button>
                         )}
-                        {filteredModalDescriptions.map((d) => (
-                          <button
-                            key={d}
-                            type="button"
-                            onClick={() => {
-                              setModalDescription(d)
-                              setModalDescriptionSearch(d)
-                              setShowModalDescDropdown(false)
-                            }}
-                            className="w-full text-right px-4 py-2.5 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50"
-                          >
-                            {d}
-                          </button>
-                        ))}
+                        {filteredModalDescriptions
+                          .filter((d) => !modalDescParts.includes(d))
+                          .map((d) => (
+                            <button
+                              key={d}
+                              type="button"
+                              onClick={() => addDescriptionPart(d)}
+                              className="w-full text-right px-4 py-2.5 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50"
+                            >
+                              {d}
+                            </button>
+                          ))}
                       </div>
                     )}
+                    <p className="mt-2 text-xs text-gray-500">
+                      برای چند توضیح، هر مورد را از لیست انتخاب کنید (یا تایپ کنید و Shift+Enter بزنید). Enter یا «تأیید» همه را ذخیره می‌کند.
+                    </p>
                   </div>
 
                   <div className="flex justify-end gap-3 mt-6">
