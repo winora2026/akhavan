@@ -97,10 +97,24 @@ async function loadParties(): Promise<PartyRow[]> {
         // اگر سپیدار این فیلتر را نپذیرفت، فقط لیست مشتری‌ها کافی است
         console.error("Sepidar: خواندن طرف‌حساب‌های غیرمشتری ممکن نشد", e)
       }
-      const list = [
-        ...customers.map((p) => ({ ...p, __src: "customer" })),
-        ...others.map((p) => ({ ...p, __src: "other" })),
-      ]
+
+      // سپیدار فیلتر IsCustomer=false را گاهی نادیده می‌گیرد و همه‌ی طرف‌حساب‌ها را برمی‌گرداند.
+      // بدون حذف تکراری‌ها هر مشتری دو بار در لیست می‌آمد و تطبیق نرم به‌خاطر «دو کاندید» رد می‌شد.
+      // پس بر اساس شناسه یکتا می‌کنیم و نوع (مشتری/غیرمشتری) را از خود فیلد isCustomer می‌خوانیم.
+      const byId = new Map<string, PartyRow>()
+      const add = (p: any, fallbackSrc: "customer" | "other") => {
+        const flag = p?.isCustomer ?? p?.IsCustomer
+        const src = typeof flag === "boolean" ? (flag ? "customer" : "other") : fallbackSrc
+        const id = pickId(p, PARTY_ID_KEYS)
+        const key = id != null ? String(id) : `row-${byId.size}`
+        const row = { ...p, __src: src }
+        const prev = byId.get(key)
+        if (!prev || (prev.__src !== "customer" && src === "customer")) byId.set(key, row)
+      }
+      customers.forEach((p) => add(p, "customer"))
+      others.forEach((p) => add(p, "other"))
+
+      const list = Array.from(byId.values())
       partyCache = { at: Date.now(), list }
       return list
     })().finally(() => {
