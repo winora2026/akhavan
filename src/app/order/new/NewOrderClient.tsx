@@ -260,6 +260,10 @@ const customersList = (customersSeedRaw as any[]).map((c: any) => {
   }
 })
 
+// برای جلوگیری از تکرار: مشتریان دیتابیس که در فایل seed هم هستند دوباره نمایش داده نمی‌شوند
+const seedCustomerNames = new Set(customersList.map((c) => c.normalizedName))
+const seedCustomerCodes = new Set(customersList.map((c) => c.normalizedCode).filter(Boolean))
+
 // لیست کالاها از فایل اکسل (کد، نام، واحد). نسخه‌ی نرمال‌شده‌ی نام و کد هر
 // کالا همین‌جا و فقط یک‌بار محاسبه می‌شود (نه در هر keystroke داخل جستجو)
 // تا تایپ کردن در فیلد جستجو کند نشود.
@@ -363,6 +367,44 @@ export default function NewOrderClient() {
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
   // ایندکس مشتریِ هایلایت‌شده در لیست (برای انتخاب با کیبورد)
   const [customerActiveIndex, setCustomerActiveIndex] = useState(0)
+  // مشتریانی که بعد از فایل seed از صفحه‌ی «مدیریت مشتریان» (یا خودکار هنگام ثبت سفارش) در دیتابیس ثبت شده‌اند
+  const [dbCustomers, setDbCustomers] = useState<typeof customersList>([])
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch("/api/customer-profiles")
+        if (!res.ok) return
+        const rows = await res.json()
+        if (cancelled || !Array.isArray(rows)) return
+        const list: typeof customersList = []
+        for (const r of rows) {
+          const name = String(r.name || "").trim()
+          if (!name) continue
+          const code = r.customerCode && !String(r.customerCode).startsWith("C-") ? String(r.customerCode) : ""
+          const nName = normalizeText(name)
+          const nCode = normalizeText(code)
+          if (nCode && seedCustomerCodes.has(nCode)) continue
+          if (!r.profile && seedCustomerNames.has(nName)) continue
+          list.push({
+            id: r.id,
+            code,
+            name,
+            group: r.customerGroup || "همکار",
+            normalizedName: nName,
+            normalizedCode: nCode,
+          })
+        }
+        // تازه‌ترین مشتری اول لیست
+        setDbCustomers(list.reverse())
+      } catch (err) {
+        console.error(err)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const [productionLine, setProductionLine] = useState("دکوراتیو")
   const [customerGroup, setCustomerGroup] = useState("همکار")
   const [priority, setPriority] = useState("عادی")
@@ -889,8 +931,10 @@ export default function NewOrderClient() {
   const filteredCustomers = useMemo(() => {
     const q = normalizeText(customerSearch.trim())
     if (!q) return customersList.slice(0, 8)
-    return customersList.filter((c) => c.normalizedName.includes(q) || c.normalizedCode.includes(q)).slice(0, 12)
-  }, [customerSearch])
+    return [...dbCustomers, ...customersList]
+      .filter((c) => c.normalizedName.includes(q) || c.normalizedCode.includes(q))
+      .slice(0, 12)
+  }, [customerSearch, dbCustomers])
 
   // جستجوی کالا با تأخیر کوتاه (debounce) اجرا می‌شود تا حین تایپ سریع،
   // فیلترکردن ۷۵۰۰+ ردیف روی هر keystroke اجرا نشود و صفحه کند نشود

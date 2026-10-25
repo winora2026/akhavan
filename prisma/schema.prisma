@@ -24,6 +24,7 @@ model Customer {
   activities    Activity[]
   followUps     FollowUp[]
     sepidarPartyRef     Int?
+    profile String?
 }
 
 model Order {

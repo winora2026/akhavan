@@ -10,6 +10,7 @@ type CustomerGroup = "نقدی" | "همکار"
 
 type Customer = {
   id: number
+  dbId?: string // شناسه در دیتابیس (مشتریانی که از همین صفحه ثبت شده‌اند)
   row: number
   code: string
   customerType: CustomerType
@@ -158,6 +159,116 @@ function getDisplayName(c: {
   return `${c.lastName} ${c.firstName}`.trim() || c.companyName.trim()
 }
 
+type CustomerFields = Omit<Customer, "id" | "row" | "createdAt" | "updatedAt" | "dbId">
+
+const COMPANY_WORDS = ["شرکت", "گروه", "مجتمع", "بازرگانی", "صنعتی", "فروشگاه", "تولیدی", "کارخانه", "موسسه", "پخش", "تعاونی", "استیل", "صنایع"]
+
+// ارسال/دریافت از سرور (ذخیره‌ی دائمی مشتریان جدید)
+async function saveToServer(method: "POST" | "PUT" | "DELETE", dbId: string | null, payload?: unknown) {
+  const res = await fetch(`/api/customer-profiles${dbId ? `?id=${encodeURIComponent(dbId)}` : ""}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: payload ? JSON.stringify(payload) : undefined,
+  })
+  const json = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(json.error || "خطا در ذخیره روی سرور")
+  return json
+}
+
+// فرم مشتری → بدنه‌ی درخواست API
+function buildPayload(c: CustomerFields) {
+  return {
+    code: c.code.trim(),
+    name: getDisplayName(c),
+    group: c.group,
+    phone: c.phones[0] || "",
+    address: c.address1,
+    notes: c.notes,
+    profile: {
+      customerType: c.customerType,
+      firstName: c.firstName,
+      lastName: c.lastName,
+      companyName: c.companyName,
+      economicCode: c.economicCode,
+      nationalCode: c.nationalCode,
+      companyNationalId: c.companyNationalId,
+      phones: c.phones,
+      socialLinks: c.socialLinks,
+      tags: c.tags,
+      address2: c.address2,
+      postalCode: c.postalCode,
+      birthDate: c.birthDate,
+      credit: c.credit,
+      lastPurchaseAmount: c.lastPurchaseAmount,
+      photoUrl: c.photoUrl && !c.photoUrl.startsWith("blob:") ? c.photoUrl : "",
+    },
+  }
+}
+
+// ردیف دیتابیس → مشتری صفحه
+function dbRowToCustomer(r: any, rowNo: number): Customer {
+  const p = r.profile || {}
+  const rawName = String(r.name || "").trim()
+  let customerType: CustomerType = p.customerType || "حقیقی"
+  let firstName: string = p.firstName ?? ""
+  let lastName: string = p.lastName ?? ""
+  let companyName: string = p.companyName ?? ""
+  if (!r.profile) {
+    // مشتری بدون پروفایل (مثلاً ساخته‌شده از صفحه‌ی ثبت سفارش): نام را تقسیم می‌کنیم
+    if (COMPANY_WORDS.some((w) => rawName.includes(w))) {
+      customerType = "حقوقی"
+      companyName = rawName
+    } else {
+      const tokens = rawName.split(/\s+/)
+      lastName = tokens[0] || ""
+      firstName = tokens.slice(1).join(" ")
+    }
+  }
+  const code = r.customerCode && !String(r.customerCode).startsWith("C-") ? String(r.customerCode) : ""
+  const created = r.createdAt ? new Date(r.createdAt).toLocaleDateString("fa-IR-u-nu-latn") : "1405/05/22"
+  return {
+    id: 2000000 + rowNo,
+    dbId: r.id,
+    row: rowNo,
+    code,
+    customerType,
+    firstName,
+    lastName,
+    companyName,
+    group: (r.customerGroup as CustomerGroup) || "همکار",
+    economicCode: p.economicCode ?? "",
+    nationalCode: p.nationalCode ?? "",
+    companyNationalId: p.companyNationalId ?? "",
+    phones: Array.isArray(p.phones) && p.phones.length ? p.phones : r.phone ? [r.phone] : [],
+    socialLinks: Array.isArray(p.socialLinks) ? p.socialLinks : [],
+    tags: Array.isArray(p.tags) ? p.tags : [],
+    address1: r.address || "",
+    address2: p.address2 ?? "",
+    postalCode: p.postalCode ?? "",
+    birthDate: p.birthDate ?? "",
+    credit: Number(p.credit) || 0,
+    lastPurchaseAmount: Number(p.lastPurchaseAmount) || 0,
+    notes: r.notes || "",
+    photoUrl: p.photoUrl || "",
+    createdAt: created,
+    updatedAt: created,
+  }
+}
+
+// مشتریان دیتابیس که در فایل seed نیستند (برای جلوگیری از تکرار)
+function mergeDbCustomers(seed: Customer[], rows: any[]): Customer[] {
+  const seedCodes = new Set(seed.map((c) => c.code).filter(Boolean))
+  const seedNames = new Set(seed.map((c) => normalizeFa(getDisplayName(c))))
+  const out: Customer[] = []
+  for (const r of rows) {
+    const code = r.customerCode && !String(r.customerCode).startsWith("C-") ? String(r.customerCode) : ""
+    if (code && seedCodes.has(code)) continue
+    if (!r.profile && seedNames.has(normalizeFa(String(r.name || "").trim()))) continue
+    out.push(dbRowToCustomer(r, seed.length + out.length + 1))
+  }
+  return out
+}
+
 const emptyForm: Omit<Customer, "id" | "row" | "createdAt" | "updatedAt"> = {
   code: "",
   customerType: "حقیقی",
@@ -231,6 +342,7 @@ function CustomersContent() {
   const [calendarMonth, setCalendarMonth] = useState(1)
   const excelInputRef = useRef<HTMLInputElement>(null)
   const [excelImporting, setExcelImporting] = useState(false)
+  const [saving, setSaving] = useState(false)
   const photoInputRef = useRef<HTMLInputElement>(null)
   const [photoPreview, setPhotoPreview] = useState("")
 
@@ -257,9 +369,22 @@ function CustomersContent() {
   // به‌صورت async از شبکه بگیرد - نه اینکه جزو باندل اولیه‌ی صفحه باشد.
   useEffect(() => {
     let cancelled = false
-    import("./customers-seed.json").then((mod) => {
+    import("./customers-seed.json").then(async (mod) => {
       if (cancelled) return
-      setData((mod.default as Customer[]) || [])
+      const seed = (mod.default as Customer[]) || []
+      // مشتریانی که بعداً از همین صفحه ثبت شده‌اند از دیتابیس خوانده و به لیست اضافه می‌شوند
+      let extra: Customer[] = []
+      try {
+        const res = await fetch("/api/customer-profiles")
+        if (res.ok) {
+          const rows = await res.json()
+          extra = mergeDbCustomers(seed, Array.isArray(rows) ? rows : [])
+        }
+      } catch (e) {
+        console.error(e)
+      }
+      if (cancelled) return
+      setData([...seed, ...extra])
       setSeedLoading(false)
     })
     return () => {
@@ -653,7 +778,7 @@ function CustomersContent() {
   }
   const removeTag = (tag: string) => setForm((prev) => ({ ...prev, tags: prev.tags.filter((t) => t !== tag) }))
 
-  const saveCustomer = () => {
+  const saveCustomer = async () => {
     // کد مشتری اختیاری است: برای مشتری جدیدِ پیش‌فاکتور می‌توان بدون کد ثبت کرد و بعداً کد داد
     if (form.customerType === "حقوقی" && !form.companyName.trim()) {
       alert("نام شرکت برای مشتری حقوقی الزامی است")
@@ -680,42 +805,60 @@ function CustomersContent() {
       return
     }
 
-    const now = "1405/05/22"
-
-    if (editingId) {
-      setData((prev) =>
-        prev.map((c) =>
-          c.id === editingId
-            ? {
-                ...c,
-                ...form,
-                phones: form.phones.filter((p) => p.trim()),
-                socialLinks: form.socialLinks.filter((s) => s.trim()),
-                updatedAt: now,
-              }
-            : c
-        )
-      )
-    } else {
-      const newCustomer: Customer = {
-        id: Date.now(),
-        row: data.length + 1,
-        ...form,
-        phones: form.phones.filter((p) => p.trim()),
-        socialLinks: form.socialLinks.filter((s) => s.trim()),
-        createdAt: now,
-        updatedAt: now,
-      }
-      setData((prev) => [...prev, newCustomer])
+    const codeTrim = form.code.trim()
+    if (codeTrim && data.some((c) => c.code === codeTrim && c.id !== editingId)) {
+      alert("این کد مشتری قبلاً استفاده شده است")
+      return
     }
 
-    setShowFormModal(false)
+    const now = "1405/05/22"
+    const cleaned = {
+      ...form,
+      code: codeTrim,
+      phones: form.phones.filter((p) => p.trim()),
+      socialLinks: form.socialLinks.filter((s) => s.trim()),
+    }
+
+    setSaving(true)
+    try {
+      if (editingId) {
+        const existing = data.find((c) => c.id === editingId)
+        // مشتری ثبت‌شده در دیتابیس: ویرایش روی سرور هم ذخیره می‌شود
+        if (existing?.dbId) await saveToServer("PUT", existing.dbId, buildPayload(cleaned))
+        setData((prev) => prev.map((c) => (c.id === editingId ? { ...c, ...cleaned, updatedAt: now } : c)))
+      } else {
+        // مشتری جدید: اول روی سرور ذخیره می‌شود تا با رفرش یا رفتن به صفحه‌ی دیگر از بین نرود
+        const saved = await saveToServer("POST", null, buildPayload(cleaned))
+        const newCustomer: Customer = {
+          id: Date.now(),
+          dbId: saved.id,
+          row: data.length + 1,
+          ...cleaned,
+          createdAt: now,
+          updatedAt: now,
+        }
+        setData((prev) => [...prev, newCustomer])
+      }
+      setShowFormModal(false)
+    } catch (e: any) {
+      alert(e?.message || "خطا در ذخیره مشتری")
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const deleteCustomer = (id: number) => {
-    if (confirm("آیا از حذف این مشتری مطمئن هستید؟")) {
-      setData((prev) => prev.filter((c) => c.id !== id))
+  const deleteCustomer = async (id: number) => {
+    if (!confirm("آیا از حذف این مشتری مطمئن هستید؟")) return
+    const target = data.find((c) => c.id === id)
+    if (target?.dbId) {
+      try {
+        await saveToServer("DELETE", target.dbId)
+      } catch (e: any) {
+        alert(e?.message || "خطا در حذف مشتری")
+        return
+      }
     }
+    setData((prev) => prev.filter((c) => c.id !== id))
   }
 
   const openCreditModal = (customer: Customer) => {
@@ -724,12 +867,20 @@ function CustomersContent() {
     setShowCreditModal(true)
   }
 
-  const applyCredit = () => {
+  const applyCredit = async () => {
     if (!creditTarget) return
     const amount = parseInt(creditAmount.replace(/,/g, "")) || 0
     if (amount <= 0) {
       alert("مبلغ معتبر وارد کنید")
       return
+    }
+    if (creditTarget.dbId) {
+      try {
+        await saveToServer("PUT", creditTarget.dbId, buildPayload({ ...creditTarget, credit: creditTarget.credit + amount }))
+      } catch (e: any) {
+        alert(e?.message || "خطا در ذخیره اعتبار")
+        return
+      }
     }
     setData((prev) =>
       prev.map((c) =>
@@ -1382,9 +1533,10 @@ function CustomersContent() {
               </button>
               <button
                 onClick={saveCustomer}
-                className="rounded-xl bg-teal-500 hover:bg-teal-600 px-5 py-2.5 text-base font-bold text-white shadow transition"
+                disabled={saving}
+                className="rounded-xl bg-teal-500 hover:bg-teal-600 px-5 py-2.5 text-base font-bold text-white shadow transition disabled:opacity-50"
               >
-                ذخیره مشتری
+                {saving ? "در حال ذخیره..." : "ذخیره مشتری"}
               </button>
             </div>
           </div>
