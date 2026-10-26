@@ -111,10 +111,12 @@ export async function GET(req: Request) {
     })
 
     // ۲) قطعات سفارش‌های اجرتی که «اجرت برش» ندارند (ایستگاه برش ندارند):
-    //    فقط برای چاپ لیبل در همین صفحه نشان داده می‌شوند، نه برای برگه‌ی برنامه‌ریزی
+    //    فقط برای چاپ لیبل در همین صفحه نشان داده می‌شوند، نه برای برگه‌ی برنامه‌ریزی.
+    //    نکته: وضعیت قطعه‌ی تولید در API اسکن با نیم‌فاصله («تکمیل‌شده») ذخیره می‌شود،
+    //    ولی وضعیت ایستگاه‌ها با فاصله («تکمیل شده») است؛ هر دو نوشتار حذف می‌شوند.
     const labelOnlyCandidates = await prisma.productionItem.findMany({
       where: {
-        status: { not: "تکمیل شده" },
+        status: { notIn: ["تکمیل شده", "تکمیل‌شده"] },
         productionOrder: { order: { orderNumber: { startsWith: "9" } } },
         stations: { none: { stationId: cutStation.id } },
       },

@@ -2,6 +2,10 @@ import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { buildServicesText } from "@/lib/production/servicesText"
 
+// قطعه‌ای که تعدادش بیشتر از این عدد باشد، فقط یک لیبل (با تعداد کل) می‌گیرد؛
+// ۴ عدد و کمتر مثل قبل برای هر عدد یک لیبل جدا چاپ می‌شود
+const BULK_LABEL_THRESHOLD = 4
+
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -179,9 +183,16 @@ export async function POST(req: Request) {
             ? `برش مجدد ${recutNumber}${baseNotes ? " | " + baseNotes : ""}`
             : baseNotes
 
-        for (let i = 1; i <= qty; i++) {
+        // بالای ۴ عدد: فقط یک لیبل با تعداد کل (بارکد اصلی قطعه، بدون پسوند)
+        // ۴ عدد و کمتر: برای هر عدد یک لیبل جدا (بارکد با پسوند -۱، -۲، ...)
+        const isBulk = qty > BULK_LABEL_THRESHOLD
+        const labelCount = isBulk ? 1 : qty
+
+        for (let i = 1; i <= labelCount; i++) {
           const pieceBarcode =
-            qty === 1 ? item.barcode || "" : `${item.barcode || "0"}-${i}`
+            isBulk || qty === 1
+              ? item.barcode || ""
+              : `${item.barcode || "0"}-${i}`
 
           labels.push({
             productionItemId: item.id,
@@ -189,7 +200,7 @@ export async function POST(req: Request) {
             barcode: pieceBarcode,
             length: item.length,
             width: item.width,
-            quantity: 1,
+            quantity: isBulk ? qty : 1,
             totalQuantity: qty,
             pieceIndex: i,
             meterage: item.meterage,

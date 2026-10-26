@@ -83,11 +83,19 @@ const LABEL_PAD_TOP_MM = 4.5
 const LABEL_TOP_BLOCK_MM = 14.5
 // اندازه‌ی ردیف ابعاد (مثل 262 * 90=1) نسبت به فونت بقیه‌ی متن‌ها
 const LABEL_DIMS_SCALE = 1.6
-// عرض هر میله‌ی بارکد: ۰.۲۵ میلی‌متر = ۲ نقطه روی چاپگر ۲۰۳dpi (خروجی تمیز و غیربولد)
-const BARCODE_MODULE_MM = 0.25
+
+// ───────────── ثابت‌های بارکد لیبل ─────────────
+// اندازه‌ی یک نقطه‌ی چاپگر: ۲۰۳dpi → حدود ۰.۱۲۵ میلی‌متر
+const PRINTER_DOT_MM = 0.125
+// فاصله‌ی شروع هر مدول بارکد: ۳ نقطه (۰.۳۷۵ میلی‌متر)
+const BARCODE_MODULE_MM = 0.375
+// میله‌ها به‌اندازه‌ی این مقدار باریک‌تر از مدولشان کشیده می‌شوند (۱ نقطه) تا پخش‌شدن حرارتیِ
+// جوهر روی چاپگر (که میله را ضخیم می‌کند) جبران شود. اگر هنوز ضخیم بود: 0.25
+// اگر بارکد خیلی کم‌رنگ/نازک شد: 0
+const BARCODE_BAR_TRIM_MM = 0.125
 // ارتفاع میله‌های بارکد
 const BARCODE_HEIGHT_MM = 8
-// حداکثر عرض بارکد (ستون چپ لیبل)؛ اگر بارکد بلندتر شد، میله‌ها کمی باریک‌تر می‌شوند
+// حداکثر عرض بارکد (ستون چپ لیبل)؛ اگر بارکد بلندتر شد، مدول‌ها کوچک‌تر می‌شوند
 const BARCODE_MAX_WIDTH_MM = 37
 
 const MM_TO_PX = 96 / 25.4
@@ -183,14 +191,16 @@ const labelText = (v: unknown) =>
 
 // بارکد را بدون متن می‌کشد و ارقام را به‌صورت HTML زیر آن می‌گذارد؛
 // رقم اول و آخر دقیقاً زیر ابتدا و انتهای میله‌ها قرار می‌گیرند.
-// عرض هر میله بر حسب میلی‌متر تنظیم می‌شود (ضریب درست نقطه‌های چاپگر) و رندر
-// crispEdges است تا میله‌ها تمیز و غیربولد چاپ شوند و اسکن راحت باشد.
+// عرض مدول بر حسب میلی‌متر و مضرب نقطه‌ی چاپگر تنظیم می‌شود، رندر crispEdges است،
+// و هر میله کمی باریک‌تر از مدولش کشیده می‌شود تا پخش‌شدن جوهر حرارتی آن را ضخیم نکند.
 const drawBarcode = (
   JsBarcode: any,
   svg: Element,
   value: string,
   opts: {
     moduleMm: number
+    barTrimMm: number
+    dotMm: number
     barHeightMm: number
     maxWidthMm: number
     fontPx: number
@@ -212,9 +222,27 @@ const drawBarcode = (
   const units = parseFloat(s.getAttribute("width") || "0")
   if (!units) return
 
-  const moduleMm = Math.min(opts.moduleMm, opts.maxWidthMm / units)
+  // عرض مدول: مقدار دلخواه، ولی اگر بارکد بلند بود کم می‌شود؛ همیشه مضرب نقطه‌ی چاپگر (حداقل ۲ نقطه)
+  const fitMm = opts.maxWidthMm / units
+  const snapped =
+    Math.floor(Math.min(opts.moduleMm, fitMm) / opts.dotMm + 1e-6) * opts.dotMm
+  const moduleMm = Math.max(2 * opts.dotMm, snapped)
   const wMm = units * moduleMm
   const wPx = wMm * MM_TO_PX
+
+  // باریک کردن میله‌ها (فقط از سمت راست هر میله، تا لبه‌ی چپ روی شبکه‌ی نقطه‌ها بماند).
+  // فقط وقتی مدول حداقل ۳ نقطه است؛ برای مدول ۲ نقطه‌ای میله‌ها دست‌نخورده می‌مانند.
+  const trimUnits =
+    moduleMm >= 3 * opts.dotMm - 1e-6 ? opts.barTrimMm / moduleMm : 0
+  if (trimUnits > 0) {
+    s.querySelectorAll("rect").forEach((r) => {
+      const wAttr = r.getAttribute("width") || ""
+      if (wAttr.includes("%")) return // مستطیل پس‌زمینه
+      const w = parseFloat(wAttr)
+      if (!w || w <= trimUnits) return
+      r.setAttribute("width", String(w - trimUnits))
+    })
+  }
 
   s.setAttribute("preserveAspectRatio", "none")
   s.setAttribute("shape-rendering", "crispEdges")
@@ -483,6 +511,8 @@ export default function CuttingPlanningPage() {
         try {
           drawBarcode(JsBarcode, el, String(label.barcode), {
             moduleMm: BARCODE_MODULE_MM,
+            barTrimMm: BARCODE_BAR_TRIM_MM,
+            dotMm: PRINTER_DOT_MM,
             barHeightMm: BARCODE_HEIGHT_MM,
             maxWidthMm: BARCODE_MAX_WIDTH_MM,
             fontPx: 18,
