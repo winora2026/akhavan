@@ -59,6 +59,10 @@ const LOGO_OPTIONS = ["با آرم استاندارد", "بدون آرم است�
 // invoice-header و invoice-footer یکی باشد). اگر بالای صفحه بیش از حد خالی شد کمترشان کنید.
 const INVOICE_HEADER_H = 230
 const INVOICE_FOOTER_H = 210
+// فضای رزروشده‌ی بالای هر صفحه‌ی چاپی برای محتوا (کمتر از ارتفاع تصویر هدر): در پیش‌نمایش، عنوان از حدود
+// ۱۲۰ پیکسلی بالای صفحه شروع می‌شود، پس در چاپ هم نباید ۲۳۰ پیکسل کامل رزرو شود؛ وگرنه ظرفیت هر صفحه
+// کم می‌شود و پیش‌فاکتورِ یک‌صفحه‌ای دو صفحه چاپ می‌شود. اگر محتوا زیر تصویر هدر رفت، این عدد را زیاد کنید.
+const INVOICE_PRINT_HEADER_SPACE = 130
 
 // لیست اولیه‌ی توضیحات (از فایل seed — همان لیست نرم‌افزار قبلی). توضیحات جدیدی که
 // کارشناس‌ها اضافه می‌کنند روی سرور ذخیره می‌شود (/api/descriptions) و با این لیست ادغام می‌شود.
@@ -136,6 +140,10 @@ const priceReadOnlyClass = "w-full rounded-xl border border-teal-200 bg-teal-50 
 // کلاس اختصاصی اینپوت تاریخ‌ها: چون کتابخانه تاریخ‌شمار استایل پیش‌فرض خودش را روی اینپوت اعمال می‌کند،
 // همان اندازه‌ی سایر فیلدها (ارتفاع، پدینگ، فونت) را با !important روی آن اعمال می‌کنیم تا هم‌اندازه شوند
 const dateInputClass = `${inputClass} !h-[42px] !min-h-[42px] !box-border !py-2 !px-3 !text-sm !leading-normal`
+// نسخه‌ی فشرده (کم‌ارتفاع) برای دو کادر بالای صفحه تا موقع ثبت اقلام زیاد، لازم نباشد مدام اسکرول شود
+const inputCompactClass = inputClass.replace("py-2", "py-1.5")
+const labelCompactClass = "mb-0.5 block text-sm font-bold text-blue-900"
+const dateInputCompactClass = `${inputCompactClass} !h-[36px] !min-h-[36px] !box-border !py-1.5 !px-3 !text-sm !leading-normal`
 // کادر/ستونی که با کشیدن گوشه، عرضش به‌صورت دستی قابل تغییر است
 const resizableBoxClass = "resize-x overflow-auto"
 // همان کادر قابل‌تغییرِ عرض، ولی مخصوص تیتر ستون‌های جدول که باید وسط‌چین باشند
@@ -152,6 +160,10 @@ const normalizeText = (value: string) => {
     .replace(/ي/g, "ی")
     .replace(/ك/g, "ک")
     .replace(/ة/g, "ه")
+    .replace(/ى/g, "ی")
+    .replace(/[أإٱ]/g, "ا")
+    .replace(/ۀ/g, "ه")
+    .replace(/\u0640/g, "") // کشیده
     .replace(/[٠١٢٣٤٥٦٧٨٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d))) // ارقام عربی
     .replace(/[۰۱۲۳۴۵۶۷۸۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d))) // ارقام فارسی
     .toLowerCase()
@@ -985,9 +997,12 @@ export default function NewOrderClient() {
   const filteredCustomers = useMemo(() => {
     const q = normalizeText(customerSearch.trim())
     if (!q) return customersList.slice(0, 8)
+    // همه‌ی کلمه‌های تایپ‌شده باید در نام یا کد باشند (ترتیب مهم نیست: «حسینی علی» = «علی حسینی»)
+    // و به‌جای ۱۲ مورد، همه‌ی نتایج (تا ۳۰۰ مورد) در لیست اسکرول‌دار نمایش داده می‌شوند
+    const tokens = q.split(/\s+/).filter(Boolean)
     return [...dbCustomers, ...customersList]
-      .filter((c) => c.normalizedName.includes(q) || c.normalizedCode.includes(q))
-      .slice(0, 12)
+      .filter((c) => tokens.every((t) => c.normalizedName.includes(t) || c.normalizedCode.includes(t)))
+      .slice(0, 300)
   }, [customerSearch, dbCustomers])
 
   // جستجوی کالا با تأخیر کوتاه (debounce) اجرا می‌شود تا حین تایپ سریع،
@@ -1292,7 +1307,9 @@ export default function NewOrderClient() {
     // اگر برای کالا قیمت ثبت شده باشد، خودکار در «قیمت واحد» گذاشته می‌شود؛
     // قیمت قابل ویرایش/پاک‌کردن است و فوکوس با متنِ انتخاب‌شده می‌آید تا تایپ مستقیم جایش را بگیرد
     const price = (p as { price?: number }).price || 0
-    setNewUnitPrice(price > 0 ? formatWithCommas(String(Math.round(price))) : "")
+    // کالاهای «اجرتی…» اگر قیمتی ندارند، به‌صورت پیش‌فرض قیمت واحد = ۰ می‌شوند (قابل ویرایش)
+    const isRentalProduct = normalizeText(p.name).startsWith("اجرتی")
+    setNewUnitPrice(price > 0 ? formatWithCommas(String(Math.round(price))) : isRentalProduct ? "0" : "")
     setShowProductDropdown(false)
     setProductActiveIndex(0)
     setTimeout(() => {
@@ -2232,7 +2249,7 @@ export default function NewOrderClient() {
         <table className="relative z-10 w-full border-collapse">
           <thead className="hidden print:table-header-group">
             <tr>
-              <td style={{ height: `${INVOICE_HEADER_H}px`, padding: 0 }} />
+              <td style={{ height: `${INVOICE_PRINT_HEADER_SPACE}px`, padding: 0 }} />
             </tr>
           </thead>
           <tfoot className="hidden print:table-footer-group">
@@ -2245,12 +2262,12 @@ export default function NewOrderClient() {
               <td className="align-top p-0">
         <div className="p-6 print:p-4 pb-[210px] print:pb-0">
           {/* عنوان */}
-          <div className="text-center mt-24 print:mt-0 mb-4">
+          <div className="text-center mt-24 print:mt-0 mb-4 print:mb-2">
             <h2 className="text-2xl font-bold text-teal-800 tracking-wide">پیش فاکتور</h2>
           </div>
 
           {/* اطلاعات مشتری */}
-          <div className="flex justify-between text-sm mb-6 leading-7 bg-teal-50/50 rounded-xl p-4 border border-teal-100">
+          <div className="flex justify-between text-sm mb-6 print:mb-3 leading-7 bg-teal-50/50 rounded-xl p-4 border border-teal-100">
             <div>
               <p><strong>نام مشتری:</strong> {customerName || "—"}</p>
               <p className="mt-1"><strong>کارشناس فروش:</strong> {salesRep || "—"}</p>
@@ -2635,14 +2652,14 @@ export default function NewOrderClient() {
           )}
 
           {/* خلاصه تعداد و متراژ */}
-          <div className="text-sm text-gray-600 flex flex-wrap items-center gap-x-6 gap-y-1 mt-4">
+          <div className="text-sm text-gray-600 flex flex-wrap items-center gap-x-6 gap-y-1 mt-4 print:mt-2">
             <p>تعداد کل اقلام: <strong>{items.length}</strong></p>
             <p>متراژ کل: <strong>{calculatedTotalMeterage}</strong></p>
             <p>محیط کل: <strong>{calculatedTotalPerimeter}</strong></p>
           </div>
 
           {/* اطلاعات واریز — انتهای محتوا؛ در چاپ چندصفحه‌ای همیشه آخر صفحه‌ی آخر می‌آید */}
-          <div className="mt-8 pt-4 border-t border-gray-200 text-sm text-gray-700 break-inside-avoid">
+          <div className="mt-8 print:mt-4 pt-4 border-t border-gray-200 text-sm text-gray-700 break-inside-avoid">
             <p className="font-bold mb-2 text-teal-800">اطلاعات واریز:</p>
             {isOfficialInvoice ? (
               <div className="bg-teal-50/50 rounded-lg p-3 border border-teal-100 leading-6">
@@ -2724,17 +2741,17 @@ export default function NewOrderClient() {
 
           <div ref={mainPanelsRef} className="flex flex-col lg:flex-row items-stretch gap-3 lg:gap-0">
             <div
-              className="w-full space-y-3 min-w-0"
+              className="w-full space-y-2 min-w-0"
               style={isLgScreen ? { flex: `0 0 ${formPanelWidth}%`, maxWidth: `${formPanelWidth}%` } : undefined}
             >
               {/* اطلاعات سفارش — relative z-50 تا دراپ‌داون مشتری روی کارت‌های بعدی بیفتد */}
-              <div className="relative z-50 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
-                <h2 className="mb-3 text-lg font-bold text-blue-950">اطلاعات سفارش</h2>
+              <div className="relative z-50 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/20">
+                <h2 className="mb-2 text-lg font-bold text-blue-950">اطلاعات سفارش</h2>
 
                 {/* ردیف ۱: نام مشتری (بزرگ‌تر) + شماره سفارش + شماره سفارش مشتری + گروه مشتری (کوچک‌تر) */}
-                <div className="grid grid-cols-2 md:grid-cols-6 gap-2.5 mb-2.5">
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-2">
                   <div className="relative min-w-[180px] col-span-2 md:col-span-3" onClick={(e) => e.stopPropagation()}>
-                    <label className={labelClass}>نام مشتری</label>
+                    <label className={labelCompactClass}>نام مشتری</label>
                     <div className="flex gap-1.5">
                       <div className="relative flex-1">
                         <input
@@ -2776,10 +2793,10 @@ export default function NewOrderClient() {
                             }
                           }}
                           placeholder="جستجوی مشتری..."
-                          className={inputClass}
+                          className={inputCompactClass}
                         />
                         {showCustomerDropdown && filteredCustomers.length > 0 && (
-                          <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-teal-200 bg-white shadow-2xl">
+                          <div className="absolute z-50 mt-1 w-full max-h-80 overflow-y-auto rounded-xl border border-teal-200 bg-white shadow-2xl">
                             {filteredCustomers.map((c, idx) => (
                               <button
                                 key={c.id}
@@ -2811,7 +2828,7 @@ export default function NewOrderClient() {
                   </div>
 
                   <div className="md:col-span-1">
-                    <label className={labelClass}>شماره سفارش</label>
+                    <label className={labelCompactClass}>شماره سفارش</label>
                     <input
                       type="text"
                       value={orderNumber}
@@ -2821,7 +2838,7 @@ export default function NewOrderClient() {
                   </div>
 
                   <div className="md:col-span-1">
-                    <label className={labelClass}>شماره سفارش مشتری</label>
+                    <label className={labelCompactClass}>شماره سفارش مشتری</label>
                     <input
                       type="text"
                       value={customerOrderNumber}
@@ -2831,13 +2848,13 @@ export default function NewOrderClient() {
                   </div>
 
                   <div className="md:col-span-1">
-                    <label className={labelClass}>گروه مشتری</label>
+                    <label className={labelCompactClass}>گروه مشتری</label>
                     <select
                       ref={customerGroupRef}
                       value={customerGroup}
                       onChange={(e) => setCustomerGroup(e.target.value)}
                       onKeyDown={(e) => handleEnter(e, productionLineRef)}
-                      className={selectClass}
+                      className={inputCompactClass}
                     >
                       <option value="همکار">همکار</option>
                       <option value="نقدی">نقدی</option>
@@ -2846,15 +2863,15 @@ export default function NewOrderClient() {
                 </div>
 
                 {/* ردیف ۲: خط تولید + اولویت + تاریخ سفارش + تاریخ تحویل */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-2.5">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
                   <div>
-                    <label className={labelClass}>خط تولید</label>
+                    <label className={labelCompactClass}>خط تولید</label>
                     <select
                       ref={productionLineRef}
                       value={productionLine}
                       onChange={(e) => setProductionLine(e.target.value)}
                       onKeyDown={(e) => handleEnter(e, priorityRef)}
-                      className={selectClass}
+                      className={inputCompactClass}
                     >
                       <option value="دکوراتیو">دکوراتیو</option>
                       <option value="اجرتی">اجرتی</option>
@@ -2867,13 +2884,13 @@ export default function NewOrderClient() {
                   </div>
 
                   <div>
-                    <label className={labelClass}>اولویت</label>
+                    <label className={labelCompactClass}>اولویت</label>
                     <select
                       ref={priorityRef}
                       value={priority}
                       onChange={(e) => setPriority(e.target.value)}
                       onKeyDown={(e) => handleEnter(e, orderDateWrapRef)}
-                      className={selectClass}
+                      className={inputCompactClass}
                     >
                       <option value="عادی">عادی</option>
                       <option value="فوری">فوری</option>
@@ -2881,14 +2898,14 @@ export default function NewOrderClient() {
                   </div>
 
                   <div ref={orderDateWrapRef} onKeyDown={(e) => handleEnter(e, deliveryDateWrapRef)} className="w-full">
-                    <label className={labelClass}>تاریخ سفارش</label>
+                    <label className={labelCompactClass}>تاریخ سفارش</label>
                     <DatePicker
                       value={orderDate}
                       onChange={setOrderDate}
                       calendar={persian}
                       locale={persian_fa}
                       calendarPosition="bottom-right"
-                      inputClass={dateInputClass}
+                      inputCompactClass={dateInputCompactClass}
                       containerClassName="w-full"
                       style={{ width: "100%", height: "42px" }}
                       portal
@@ -2900,7 +2917,7 @@ export default function NewOrderClient() {
 
                   <div ref={deliveryDateWrapRef} onKeyDown={(e) => handleEnter(e, hasInstallationRef)} className="w-full">
                     <div className="mb-1 flex items-center justify-between gap-2">
-                      <label className={labelClass + " mb-0"}>تاریخ تحویل</label>
+                      <label className={labelCompactClass + " mb-0"}>تاریخ تحویل</label>
                       <select
                         value={deliveryDateMode}
                         onChange={(e) => setDeliveryDateMode(e.target.value as any)}
@@ -2925,7 +2942,7 @@ export default function NewOrderClient() {
                       calendar={persian}
                       locale={persian_fa}
                       calendarPosition="bottom-right"
-                      inputClass={dateInputClass}
+                      inputCompactClass={dateInputCompactClass}
                       containerClassName="w-full"
                       style={{ width: "100%", height: "42px" }}
                       portal
@@ -2939,12 +2956,12 @@ export default function NewOrderClient() {
                 </div>
 
                 {/* ردیف ۳: نصب + تعداد کل + متراژ کل + جمع کالا */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 items-end">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 items-end">
                   {/* نصب */}
                   <div>
-                    <label className={labelClass}>نصب</label>
+                    <label className={labelCompactClass}>نصب</label>
                     <div
-                      className={`${inputClass} flex items-center gap-2.5 cursor-pointer`}
+                      className={`${inputCompactClass} flex items-center gap-2 cursor-pointer`}
                       onClick={() => {
                         const next = !hasInstallation
                         setHasInstallation(next)
@@ -2983,7 +3000,7 @@ export default function NewOrderClient() {
 
                   {/* تعداد کل */}
                   <div>
-                    <label className={labelClass}>تعداد کل</label>
+                    <label className={labelCompactClass}>تعداد کل</label>
                     <input
                       ref={manualTotalQuantityRef}
                       type="text"
@@ -2993,7 +3010,7 @@ export default function NewOrderClient() {
                         setQuantityLocked(true)
                       }}
                       onKeyDown={(e) => handleEnter(e, manualTotalMeterageRef)}
-                      className={`${inputClass} ${quantityMismatch ? "border-red-400 bg-red-50" : ""}`}
+                      className={`${inputCompactClass} ${quantityMismatch ? "border-red-400 bg-red-50" : ""}`}
                     />
                     <p className={`text-xs mt-0.5 ${quantityMismatch ? "text-red-600 font-bold" : "text-blue-600"}`}>
                       محاسبه: {calculatedTotalQuantity}
@@ -3003,7 +3020,7 @@ export default function NewOrderClient() {
 
                   {/* متراژ کل */}
                   <div>
-                    <label className={labelClass}>متراژ کل</label>
+                    <label className={labelCompactClass}>متراژ کل</label>
                     <input
                       ref={manualTotalMeterageRef}
                       type="text"
@@ -3013,7 +3030,7 @@ export default function NewOrderClient() {
                         setMeterageLocked(true)
                       }}
                       onKeyDown={(e) => handleEnter(e, productRef)}
-                      className={`${inputClass} ${meterageMismatch ? "border-red-400 bg-red-50" : ""}`}
+                      className={`${inputCompactClass} ${meterageMismatch ? "border-red-400 bg-red-50" : ""}`}
                     />
                     <p className={`text-xs mt-0.5 ${meterageMismatch ? "text-red-600 font-bold" : "text-blue-600"}`}>
                       محاسبه: {calculatedTotalMeterage}
@@ -3023,8 +3040,8 @@ export default function NewOrderClient() {
 
                   {/* جمع کالا */}
                   <div>
-                    <label className={labelClass}>جمع کالا</label>
-                    <div className={`${inputClass} flex items-center bg-white/40`}>
+                    <label className={labelCompactClass}>جمع کالا</label>
+                    <div className={`${inputCompactClass} flex items-center bg-white/40`}>
                       <span className="text-sm font-semibold text-blue-950">{items.length} کالا</span>
                     </div>
                     <p className="text-xs mt-0.5 invisible">—</p>
@@ -3039,7 +3056,7 @@ export default function NewOrderClient() {
                 </h2>
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-[3.4fr_1.7fr_1.2fr_1fr_1fr_1fr_1fr_1.7fr] gap-3 items-end">
                   <div className="col-span-2 md:col-span-4 lg:col-span-1 relative min-w-0" onClick={(e) => e.stopPropagation()}>
-                    <label className={labelClass}>نام کالا</label>
+                    <label className={labelCompactClass}>نام کالا</label>
                     <input
                       ref={productRef}
                       type="text"
@@ -3074,7 +3091,7 @@ export default function NewOrderClient() {
                         }
                       }}
                       placeholder="جستجوی کالا... (مثلاً «4» برای همه‌ی ۴ میلی‌ها)"
-                      className={inputClass}
+                      className={inputCompactClass}
                       autoComplete="off"
                     />
                     {showProductDropdown && filteredProducts.length > 0 && (
@@ -3106,28 +3123,28 @@ export default function NewOrderClient() {
                     )}
                   </div>
                   <div className="col-span-2 md:col-span-2 lg:col-span-1">
-                    <label className={labelClass}>قیمت واحد</label>
+                    <label className={labelCompactClass}>قیمت واحد</label>
                     <input
                       ref={unitPriceRef}
                       type="text"
                       value={newUnitPrice}
                       onChange={(e) => setNewUnitPrice(formatWithCommas(e.target.value))}
                       onKeyDown={(e) => handleEnter(e, unitRef)}
-                      className={`${inputClass} font-bold`}
+                      className={`${inputCompactClass} font-bold`}
                       placeholder=""
                       autoComplete="off"
                     />
                   </div>
                   <div>
-                    <label className={labelClass}>واحد</label>
-                    <select ref={unitRef} value={newUnit} onChange={(e) => setNewUnit(e.target.value)} onKeyDown={(e) => handleEnter(e, lengthRef)} className={selectClass}>
+                    <label className={labelCompactClass}>واحد</label>
+                    <select ref={unitRef} value={newUnit} onChange={(e) => setNewUnit(e.target.value)} onKeyDown={(e) => handleEnter(e, lengthRef)} className={inputCompactClass}>
                       <option value="مترمربع">مترمربع</option>
                       <option value="مترطول">مترطول</option>
                       <option value="عددی">عددی</option>
                     </select>
                   </div>
                   <div>
-                    <label className={labelClass}>طول (cm)</label>
+                    <label className={labelCompactClass}>طول (cm)</label>
                     <input
                       ref={lengthRef}
                       type="number"
@@ -3148,11 +3165,11 @@ export default function NewOrderClient() {
                           focusRef(widthRef)
                         }
                       }}
-                      className={`${inputClass} ${lengthError ? "!border-red-400 !bg-red-50" : ""}`}
+                      className={`${inputCompactClass} ${lengthError ? "!border-red-400 !bg-red-50" : ""}`}
                     />
                   </div>
                   <div>
-                    <label className={labelClass}>عرض (cm)</label>
+                    <label className={labelCompactClass}>عرض (cm)</label>
                     <input
                       ref={widthRef}
                       type="number"
@@ -3169,11 +3186,11 @@ export default function NewOrderClient() {
                           focusRef(quantityRef)
                         }
                       }}
-                      className={inputClass}
+                      className={inputCompactClass}
                     />
                   </div>
                   <div>
-                    <label className={labelClass}>تعداد</label>
+                    <label className={labelCompactClass}>تعداد</label>
                     <input
                       ref={quantityRef}
                       type="number"
@@ -3188,11 +3205,11 @@ export default function NewOrderClient() {
                         }
                       }}
                       placeholder="1"
-                      className={inputClass}
+                      className={inputCompactClass}
                     />
                   </div>
                   <div>
-                    <label className={labelClass}>کد نصب</label>
+                    <label className={labelCompactClass}>کد نصب</label>
                     <input
                       ref={installCodeRef}
                       type="text"
@@ -3204,11 +3221,11 @@ export default function NewOrderClient() {
                           saveItem()
                         }
                       }}
-                      className={inputClass}
+                      className={inputCompactClass}
                     />
                   </div>
                   <div>
-                    <label className={labelClass}>قیمت کل</label>
+                    <label className={labelCompactClass}>قیمت کل</label>
                     <input
                       type="text"
                       value={newItemPreviewTotal}
@@ -4464,6 +4481,7 @@ export default function NewOrderClient() {
           }
           html, body {
             background: white !important;
+            height: auto !important;
           }
           * {
             -webkit-print-color-adjust: exact !important;
@@ -4480,6 +4498,8 @@ export default function NewOrderClient() {
              min-height را هم در حالت چاپ خنثی می‌کند. */
           #invoice-print-area {
             min-height: 0 !important;
+            height: auto !important;
+            overflow: visible !important;
           }
           .invoice-header {
             position: fixed !important;

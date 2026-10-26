@@ -200,7 +200,10 @@ export default function PreInvoicesPage() {
   const [confirmItem, setConfirmItem] = useState<OrderFromApi | null>(null)
   const [selectedExpert, setSelectedExpert] = useState("همه کارشناسان")
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("pre")
-  const [dayFilter, setDayFilter] = useState<"all" | "today">("all")
+  // پیش‌فرض: فقط امروز؛ با گذشتن از نیمه‌شب صفحه خودکار روی روز جدید (خالی) می‌رود.
+  // برای روزهای قبل از «از تاریخ / تا تاریخ» یا «همه روزها» استفاده کنید.
+  const [dayFilter, setDayFilter] = useState<"all" | "today">("today")
+  const [dayKey, setDayKey] = useState(() => new Date().toDateString())
   const [sending, setSending] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>("orderDate")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
@@ -243,9 +246,30 @@ export default function PreInvoicesPage() {
     }
   }, [previewId])
 
-  const fetchOrders = async () => {
+  // به‌روزرسانی خودکار: هر ۶۰ ثانیه (و وقتی دوباره به تب برمی‌گردید) لیست بدون رفرش و بدون چشمک‌زدن
+  // دوباره خوانده می‌شود. کلید روز هم همین‌جا عوض می‌شود تا با رد شدن از نیمه‌شب، صفحه خودکار روی روز جدید برود.
+  useEffect(() => {
+    const tick = () => {
+      if (document.hidden) return
+      setDayKey(new Date().toDateString())
+      fetchOrders(true)
+    }
+    const timer = setInterval(tick, 60_000)
+    document.addEventListener("visibilitychange", tick)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener("visibilitychange", tick)
+    }
+  }, [])
+
+  // انتخاب تاریخ/ماه دستی یعنی کاربر روزهای دیگر را می‌خواهد؛ پس فیلتر «امروز» کنار می‌رود
+  useEffect(() => {
+    if (fromDate || toDate || selectedMonth !== "همه") setDayFilter("all")
+  }, [fromDate, toDate, selectedMonth])
+
+  const fetchOrders = async (silent = false) => {
     try {
-      setLoading(true)
+      if (!silent) setLoading(true)
       const res = await fetch("/api/orders")
       if (!res.ok) throw new Error("خطا در دریافت سفارش‌ها")
       const data = await res.json()
@@ -253,9 +277,9 @@ export default function PreInvoicesPage() {
       setOrders(Array.isArray(data) ? data : [])
     } catch (error) {
       console.error(error)
-      alert("خطا در بارگذاری لیست سفارش‌ها")
+      if (!silent) alert("خطا در بارگذاری لیست سفارش‌ها")
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -323,7 +347,7 @@ export default function PreInvoicesPage() {
       }
     }
     return { pre, inv, all: orders.length, preToday, invToday }
-  }, [orders])
+  }, [orders, dayKey])
 
   const filtered = useMemo(() => {
     let result = [...orders]
@@ -461,6 +485,7 @@ export default function PreInvoicesPage() {
     selectedExpert,
     statusFilter,
     dayFilter,
+    dayKey,
     sortKey,
     sortDir,
   ])
@@ -476,7 +501,8 @@ export default function PreInvoicesPage() {
       (sum, o) => sum + (o.discountAmount || 0),
       0
     )
-    return { totalCount, totalMeterage, totalPrice, totalDiscount }
+    const totalVat = filtered.reduce((sum, o) => sum + getVatAmount(o), 0)
+    return { totalCount, totalMeterage, totalPrice, totalDiscount, totalVat }
   }, [filtered])
 
   const formatPrice = (n: number) => {
@@ -543,7 +569,7 @@ export default function PreInvoicesPage() {
 
   return (
     <div
-      className="min-h-screen p-4 bg-cover bg-center bg-fixed"
+      className="min-h-screen lg:h-screen lg:overflow-hidden p-4 bg-cover bg-center bg-fixed"
       style={{
         backgroundImage:
           "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
@@ -559,8 +585,8 @@ export default function PreInvoicesPage() {
       </a>
       <div className="pointer-events-none fixed inset-0 bg-black/5" />
 
-      <div className="relative z-10 max-w-[1920px] mx-auto">
-        <div className="mb-4 flex items-center justify-between rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
+      <div className="relative z-10 max-w-[1920px] mx-auto lg:h-full lg:flex lg:flex-col">
+        <div className="mb-4 lg:shrink-0 flex items-center justify-between rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
           <div className="w-48" />
           <div className="text-center flex-1">
             <h1 className="text-3xl font-bold text-blue-950">
@@ -586,7 +612,7 @@ export default function PreInvoicesPage() {
           </div>
         </div>
 
-        <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
+        <div className="mb-4 lg:shrink-0 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
           {/* فیلتر وضعیت: پیش‌فاکتور / فاکتور / همه */}
           <div className="mb-3 flex flex-wrap gap-2 items-center">
             <span className="text-sm font-bold text-blue-900 ml-1">وضعیت:</span>
@@ -624,7 +650,12 @@ export default function PreInvoicesPage() {
             </button>
             <button
               type="button"
-              onClick={() => setDayFilter("today")}
+              onClick={() => {
+                setDayFilter("today")
+                setFromDate(null)
+                setToDate(null)
+                setSelectedMonth("همه")
+              }}
               className={chip(dayFilter === "today")}
             >
               امروز (پیش‌فاکتور {statusCounts.preToday} / فاکتور{" "}
@@ -725,7 +756,7 @@ export default function PreInvoicesPage() {
         <div
           id="order-table"
           tabIndex={-1}
-          className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-x-auto focus:outline-none focus:ring-2 focus:ring-teal-400"
+          className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-auto min-h-[260px] lg:flex-1 lg:min-h-0 focus:outline-none focus:ring-2 focus:ring-teal-400"
         >
           {loading ? (
             <p className="text-center text-blue-700 py-16 text-xl font-bold">
@@ -733,8 +764,8 @@ export default function PreInvoicesPage() {
             </p>
           ) : (
             <table className="w-full text-sm text-blue-900 border-collapse">
-              <thead>
-                <tr className="border-b border-teal-500/30 bg-teal-500/15 text-right">
+              <thead className="sticky top-0 z-10 shadow-[0_1px_0_rgba(20,184,166,0.35)]">
+                <tr className="border-b border-teal-500/30 bg-teal-100 text-right">
                   <th className="p-3 font-bold text-center">ردیف</th>
                   <th className={thClass} onClick={() => toggleSort("customer")}>
                     نام مشتری{sortIndicator("customer")}
@@ -932,33 +963,39 @@ export default function PreInvoicesPage() {
         </div>
 
         {!loading && filtered.length > 0 && (
-          <div className="mt-4 rounded-2xl bg-teal-600/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/30">
-            <h3 className="text-lg font-bold text-blue-950 mb-4 text-center">
+          <div className="mt-3 lg:shrink-0 rounded-2xl bg-teal-600/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/30">
+            <h3 className="text-lg font-bold text-blue-950 mb-2 text-center">
               گزارش خلاصه
             </h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-4 text-center">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
                 <p className="text-sm text-blue-700 mb-1">تعداد کل</p>
                 <p className="text-2xl font-bold text-teal-700">
                   {report.totalCount}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-4 text-center">
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
                 <p className="text-sm text-blue-700 mb-1">متراژ کل</p>
                 <p className="text-2xl font-bold text-teal-700">
                   {report.totalMeterage.toFixed(4)}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-4 text-center">
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
                 <p className="text-sm text-blue-700 mb-1">قیمت کل</p>
                 <p className="text-2xl font-bold text-teal-700">
                   {formatPrice(report.totalPrice)}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-4 text-center">
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
                 <p className="text-sm text-blue-700 mb-1">مجموع تخفیف</p>
                 <p className="text-2xl font-bold text-orange-600">
                   {formatPrice(report.totalDiscount)}
+                </p>
+              </div>
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
+                <p className="text-sm text-blue-700 mb-1">مجموع ارزش افزوده</p>
+                <p className="text-2xl font-bold text-amber-600">
+                  {formatPrice(report.totalVat)}
                 </p>
               </div>
             </div>

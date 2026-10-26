@@ -142,6 +142,11 @@ const formatDate = (dateStr: string | null | undefined) => {
   }
 }
 
+const isSameLocalDay = (a: Date, b: Date) =>
+  a.getFullYear() === b.getFullYear() &&
+  a.getMonth() === b.getMonth() &&
+  a.getDate() === b.getDate()
+
 const getFaMonth = (dateStr: string | null | undefined) => {
   const d = parseOrderDate(dateStr)
   if (!d) return ""
@@ -197,6 +202,10 @@ export default function InvoicesPage() {
   const [bulkSyncing, setBulkSyncing] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [canSyncSepidar, setCanSyncSepidar] = useState(false)
+  // پیش‌فرض: فقط فاکتورهای امروز؛ با گذشتن از نیمه‌شب صفحه خودکار روی روز جدید (خالی) می‌رود.
+  // برای روزهای قبل از «از تاریخ / تا تاریخ» یا «همه روزها» استفاده کنید.
+  const [dayFilter, setDayFilter] = useState<"today" | "all">("today")
+  const [dayKey, setDayKey] = useState(() => new Date().toDateString())
 
   useEffect(() => {
     fetchOrders()
@@ -213,9 +222,30 @@ export default function InvoicesPage() {
     })()
   }, [])
 
-  const fetchOrders = async () => {
+  // به‌روزرسانی خودکار: هر ۶۰ ثانیه (و وقتی دوباره به تب برمی‌گردید) لیست بدون رفرش و بدون چشمک‌زدن
+  // دوباره خوانده می‌شود. کلید روز هم همین‌جا عوض می‌شود تا با رد شدن از نیمه‌شب، صفحه خودکار روی روز جدید برود.
+  useEffect(() => {
+    const tick = () => {
+      if (document.hidden) return
+      setDayKey(new Date().toDateString())
+      fetchOrders(true)
+    }
+    const timer = setInterval(tick, 60_000)
+    document.addEventListener("visibilitychange", tick)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener("visibilitychange", tick)
+    }
+  }, [])
+
+  // انتخاب تاریخ/ماه دستی یعنی کاربر روزهای دیگر را می‌خواهد؛ پس فیلتر «امروز» کنار می‌رود
+  useEffect(() => {
+    if (fromDate || toDate || selectedMonth !== "همه") setDayFilter("all")
+  }, [fromDate, toDate, selectedMonth])
+
+  const fetchOrders = async (silent = false) => {
     try {
-      setLoading(true)
+      if (!silent) setLoading(true)
       const res = await fetch("/api/orders")
       if (!res.ok) throw new Error("خطا در دریافت سفارش‌ها")
       const data = await res.json()
@@ -225,9 +255,9 @@ export default function InvoicesPage() {
       setOrders(invoices)
     } catch (error) {
       console.error(error)
-      alert("خطا در بارگذاری لیست فاکتورها")
+      if (!silent) alert("خطا در بارگذاری لیست فاکتورها")
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -437,6 +467,14 @@ export default function InvoicesPage() {
       })
     }
 
+    if (dayFilter === "today") {
+      const now = new Date()
+      result = result.filter((item) => {
+        const d = parseOrderDate(getInvoiceDate(item) || item.orderDate)
+        return d ? isSameLocalDay(d, now) : false
+      })
+    }
+
     if (fromDate) {
       const from = fromDate?.toDate ? fromDate.toDate() : new Date(fromDate)
       from.setHours(0, 0, 0, 0)
@@ -547,6 +585,8 @@ export default function InvoicesPage() {
     toDate,
     selectedMonth,
     selectedExpert,
+    dayFilter,
+    dayKey,
     sortKey,
     sortDir,
   ])
@@ -585,7 +625,8 @@ export default function InvoicesPage() {
       (sum, o) => sum + (o.discountAmount || 0),
       0
     )
-    return { totalCount, totalMeterage, totalPrice, totalDiscount }
+    const totalVat = filtered.reduce((sum, o) => sum + getVatAmount(o), 0)
+    return { totalCount, totalMeterage, totalPrice, totalDiscount, totalVat }
   }, [filtered])
 
   const formatPrice = (n: number) => {
@@ -621,9 +662,16 @@ export default function InvoicesPage() {
   const thClass =
     "p-3 font-bold whitespace-nowrap text-center cursor-pointer select-none hover:bg-teal-500/25 transition"
 
+  const chip = (active: boolean) =>
+    `rounded-xl px-4 py-2 text-sm font-bold transition ${
+      active
+        ? "bg-teal-600 text-white"
+        : "bg-white/50 text-blue-900 border border-teal-500/30 hover:bg-white/70"
+    }`
+
   return (
     <div
-      className="min-h-screen p-4 bg-cover bg-center bg-fixed"
+      className="min-h-screen lg:h-screen lg:overflow-hidden p-4 bg-cover bg-center bg-fixed"
       style={{
         backgroundImage:
           "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
@@ -639,8 +687,8 @@ export default function InvoicesPage() {
       </a>
       <div className="pointer-events-none fixed inset-0 bg-black/5" />
 
-      <div className="relative z-10 max-w-[1920px] mx-auto">
-        <div className="mb-4 flex items-center justify-between rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
+      <div className="relative z-10 max-w-[1920px] mx-auto lg:h-full lg:flex lg:flex-col">
+        <div className="mb-4 lg:shrink-0 flex items-center justify-between rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
           <div className="w-48" />
           <div className="text-center flex-1">
             <h1 className="text-3xl font-bold text-blue-950">لیست فاکتورها</h1>
@@ -676,7 +724,34 @@ export default function InvoicesPage() {
           </div>
         </div>
 
-        <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
+        <div className="mb-4 lg:shrink-0 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <span className="text-sm font-bold text-blue-900 ml-1">نمایش:</span>
+            <button
+              type="button"
+              onClick={() => {
+                setDayFilter("today")
+                setFromDate(null)
+                setToDate(null)
+                setSelectedMonth("همه")
+              }}
+              className={chip(dayFilter === "today")}
+            >
+              امروز ({formatDate(new Date().toISOString())})
+            </button>
+            <button
+              type="button"
+              onClick={() => setDayFilter("all")}
+              className={chip(dayFilter === "all")}
+            >
+              همه روزها
+            </button>
+            {dayFilter === "today" && (
+              <span className="text-xs font-semibold text-blue-700 mr-2">
+                برای دیدن روزهای قبل، «از تاریخ / تا تاریخ» را انتخاب کنید.
+              </span>
+            )}
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
             <div className="md:col-span-3">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
@@ -770,7 +845,7 @@ export default function InvoicesPage() {
         <div
           id="invoice-table"
           tabIndex={-1}
-          className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-x-auto focus:outline-none focus:ring-2 focus:ring-teal-400"
+          className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-auto min-h-[260px] lg:flex-1 lg:min-h-0 focus:outline-none focus:ring-2 focus:ring-teal-400"
         >
           {loading ? (
             <p className="text-center text-blue-700 py-16 text-xl font-bold">
@@ -778,8 +853,8 @@ export default function InvoicesPage() {
             </p>
           ) : (
             <table className="w-full text-sm text-blue-900 border-collapse">
-              <thead>
-                <tr className="border-b border-teal-500/30 bg-teal-500/15 text-right">
+              <thead className="sticky top-0 z-10 shadow-[0_1px_0_rgba(20,184,166,0.35)]">
+                <tr className="border-b border-teal-500/30 bg-teal-100 text-right">
                   {canSyncSepidar && (
                     <th className="p-3 font-bold text-center w-10">
                       <input
@@ -1046,33 +1121,39 @@ export default function InvoicesPage() {
         </div>
 
         {!loading && filtered.length > 0 && (
-          <div className="mt-4 rounded-2xl bg-teal-600/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/30">
-            <h3 className="text-lg font-bold text-blue-950 mb-4 text-center">
+          <div className="mt-3 lg:shrink-0 rounded-2xl bg-teal-600/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/30">
+            <h3 className="text-lg font-bold text-blue-950 mb-2 text-center">
               گزارش خلاصه
             </h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-4 text-center">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
                 <p className="text-sm text-blue-700 mb-1">تعداد کل</p>
                 <p className="text-2xl font-bold text-teal-700">
                   {report.totalCount}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-4 text-center">
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
                 <p className="text-sm text-blue-700 mb-1">متراژ کل</p>
                 <p className="text-2xl font-bold text-teal-700">
                   {report.totalMeterage.toFixed(4)}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-4 text-center">
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
                 <p className="text-sm text-blue-700 mb-1">قیمت کل</p>
                 <p className="text-2xl font-bold text-teal-700">
                   {formatPrice(report.totalPrice)}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-4 text-center">
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
                 <p className="text-sm text-blue-700 mb-1">مجموع تخفیف</p>
                 <p className="text-2xl font-bold text-orange-600">
                   {formatPrice(report.totalDiscount)}
+                </p>
+              </div>
+              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
+                <p className="text-sm text-blue-700 mb-1">مجموع ارزش افزوده</p>
+                <p className="text-2xl font-bold text-amber-600">
+                  {formatPrice(report.totalVat)}
                 </p>
               </div>
             </div>

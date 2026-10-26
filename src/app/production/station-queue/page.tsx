@@ -45,6 +45,22 @@ type QueueItem = {
   }
 }
 
+/** یک سفارش (چند قلم) در کارتابل یک ایستگاه */
+type OrderGroup = {
+  key: string
+  orderNumber: string
+  customerName: string
+  priority: string
+  orderDate: string | null
+  deliveryDate: string | null
+  productSummary: string
+  servicesSummary: string[]
+  itemCount: number
+  totalQty: number
+  totalMeterage: number
+  rows: QueueItem[]
+}
+
 type Summary = {
   stationName: string
   count: number
@@ -117,6 +133,30 @@ function norm(s: string) {
     .toLowerCase()
 }
 
+/**
+ * بارکد دریافتی از اسکنر را تمیز می‌کند: ارقام فارسی/عربی (وقتی زبان کیبورد ویندوز FA است)
+ * به لاتین تبدیل می‌شوند و کاراکترهای نامرئی/خط جدید حذف می‌شوند.
+ */
+function cleanBarcode(s: string) {
+  return (s || "")
+    .replace(/[\u200b\u200c\u200d\u200e\u200f\ufeff]/g, "")
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\r\n\t]/g, "")
+    .trim()
+}
+
+// حداکثر زمان انتظار برای پاسخ سرور هنگام اسکن؛ بعد از آن فرم آزاد می‌شود تا قفل نماند
+const SCAN_TIMEOUT_MS = 20000
+
+/** هر خدمت در یک خط */
+function servicesLines(text?: string | null): string[] {
+  return (text || "")
+    .split(/\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
 /** تطبیق نام ایستگاه یوزر با لیست (برای قفل کشویی) */
 function stationMatches(userStation: string, stationName: string) {
   const a = norm(userStation)
@@ -151,8 +191,15 @@ export default function StationQueuePage() {
   const [operatorName, setOperatorName] = useState("")
   const [productFilter, setProductFilter] = useState("")
   const [search, setSearch] = useState("")
+  const [filtersFrozen, setFiltersFrozen] = useState(false)
+
+  // سفارشی که واردش شده‌ایم (null = لیست سفارش‌ها) و ردیف انتخاب‌شده داخل سفارش
+  const [openOrderKey, setOpenOrderKey] = useState<string | null>(null)
+  const [selectedRowId, setSelectedRowId] = useState<string | null>(null)
 
   const [barcode, setBarcode] = useState("")
+  // آخرین بارکدی که صفحه از اسکنر گرفته (برای عیب‌یابی: می‌بینید اسکنر دقیقاً چه چیزی فرستاده)
+  const [lastScanned, setLastScanned] = useState("")
   const [scanLoading, setScanLoading] = useState(false)
   const [lastResult, setLastResult] = useState<{
     type: "ok" | "err"
@@ -162,9 +209,29 @@ export default function StationQueuePage() {
   const [confirmData, setConfirmData] = useState<any | null>(null)
   const [partialQty, setPartialQty] = useState("")
   const [detail, setDetail] = useState<any | null>(null)
+  /** preview = فقط نمایش (بدون رد) | done = بعد از رد واقعی */
+  const [detailMode, setDetailMode] = useState<"preview" | "done">("done")
   const [mapPreviewUrl, setMapPreviewUrl] = useState<string | null>(null)
 
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // وضعیت اسکن در حال انجام + اسکنی که وسط پردازش قبلی رسیده (گم نمی‌شود، بعداً اجرا می‌شود)
+  const scanBusyRef = useRef(false)
+  const pendingScanRef = useRef<string | null>(null)
+  // آخرین نسخه‌ی doScan (برای شنونده‌ی سراسری کیبورد)
+  const doScanRef = useRef<
+    | ((
+        confirmed?: boolean,
+        quantityDone?: number | null,
+        codeOverride?: string
+      ) => Promise<void>)
+    | null
+  >(null)
+  // بافر شنونده‌ی سراسری اسکنر (وقتی فوکوس روی هیچ فیلتی نیست)
+  const scanBufRef = useRef("")
+  const scanBufTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // تشخیص سرعتِ تایپ داخل فیلد فیلتر/جستجو (اسکنر خیلی سریع‌تر از دست تایپ می‌کند)
+  const fastKeysRef = useRef({ last: 0, count: 0 })
 
   const [mainTab, setMainTab] = useState<"queue" | "exit">("queue")
 
@@ -190,6 +257,7 @@ export default function StationQueuePage() {
   const selectedStationName =
     stations.find((s) => s.id === selectedStationId)?.name || "—"
   const isLoadingStation = norm(selectedStationName).includes("بارگیری")
+  const todayFa = new Date().toLocaleDateString("fa-IR")
 
   useEffect(() => {
     ;(async () => {
@@ -211,6 +279,8 @@ export default function StationQueuePage() {
   }, [])
 
   useEffect(() => {
+    setOpenOrderKey(null)
+    setSelectedRowId(null)
     if (selectedStationId) fetchQueue()
     else {
       setQueue([])
@@ -242,6 +312,7 @@ export default function StationQueuePage() {
     return () => clearTimeout(t)
   }, [selectedStationId, scanLoading, confirmData, detail, mapPreviewUrl, mainTab])
 
+  // Esc: به‌ترتیب پنجره‌ها بسته می‌شوند و در آخر از داخل سفارش به لیست سفارش‌ها برمی‌گردد
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return
@@ -264,11 +335,55 @@ export default function StationQueuePage() {
         if (inputRef.current) inputRef.current.value = ""
         return
       }
-      if (detail) setDetail(null)
+      if (detail) {
+        setDetail(null)
+        setDetailMode("done")
+        return
+      }
+      if (openOrderKey) setOpenOrderKey(null)
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [confirmData, detail, mapPreviewUrl, showDriverModal, showPrint])
+  }, [confirmData, detail, mapPreviewUrl, showDriverModal, showPrint, openOrderKey])
+
+  // شنونده‌ی سراسری اسکنر: وقتی فوکوس روی بدنه‌ی صفحه یا یک دکمه/ردیف جدول است
+  // (مثلاً بعد از کلیک روی سفارش)، کاراکترهای پشت‌سرهمِ سریع جمع می‌شوند و با Enter اسکن می‌شوند.
+  // داخل فیلدهای متنی خود همان فیلد مدیریت می‌کند (فیلد بارکد، فیلتر و جستجو).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (mainTab === "exit") return
+      if (confirmData || showDriverModal || showPrint || mapPreviewUrl) return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const el = e.target as HTMLElement | null
+      const tag = el?.tagName
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return
+
+      if (e.key === "Enter") {
+        const code = cleanBarcode(scanBufRef.current)
+        scanBufRef.current = ""
+        if (code.length >= 4) {
+          e.preventDefault()
+          e.stopPropagation()
+          if (detail) {
+            setDetail(null)
+            setDetailMode("done")
+          }
+          doScanRef.current?.(false, null, code)
+        }
+        return
+      }
+      if (e.key.length === 1) {
+        scanBufRef.current += e.key
+        if (scanBufTimerRef.current) clearTimeout(scanBufTimerRef.current)
+        // فاصله‌ی بین کاراکترهای اسکنر چند میلی‌ثانیه است؛ تایپ دستی کندتر است و بافر را خالی می‌کند
+        scanBufTimerRef.current = setTimeout(() => {
+          scanBufRef.current = ""
+        }, 120)
+      }
+    }
+    window.addEventListener("keydown", onKey, true)
+    return () => window.removeEventListener("keydown", onKey, true)
+  }, [mainTab, confirmData, showDriverModal, showPrint, mapPreviewUrl, detail])
 
   const fetchStations = async (user: SessionUser | null) => {
     try {
@@ -580,6 +695,97 @@ export default function StationQueuePage() {
     return result
   }, [queue, productFilter, search])
 
+  /** گروه‌بندی بر اساس شماره سفارش: هر سفارش یک ردیف؛ با کلیک وارد اقلامش می‌شویم */
+  const orderGroups = useMemo<OrderGroup[]>(() => {
+    const map = new Map<
+      string,
+      {
+        key: string
+        orderNumber: string
+        customerName: string
+        priority: string
+        orderDate: string | null
+        deliveryDate: string | null
+        products: Set<string>
+        services: Set<string>
+        itemCount: number
+        totalQty: number
+        totalMeterage: number
+        rows: QueueItem[]
+      }
+    >()
+    for (const row of filtered) {
+      const pi = row.productionItem
+      const orderNumber = pi.productionOrder.order?.orderNumber || "—"
+      let g = map.get(orderNumber)
+      if (!g) {
+        g = {
+          key: orderNumber,
+          orderNumber,
+          customerName: pi.productionOrder.order?.customer?.name || "—",
+          priority: pi.productionOrder.priority || "عادی",
+          orderDate: pi.orderDate ?? null,
+          deliveryDate: pi.deliveryDate ?? null,
+          products: new Set<string>(),
+          services: new Set<string>(),
+          itemCount: 0,
+          totalQty: 0,
+          totalMeterage: 0,
+          rows: [],
+        }
+        map.set(orderNumber, g)
+      }
+      g.rows.push(row)
+      g.itemCount += 1
+      g.totalQty += row.quantityIn ?? pi.quantity ?? 0
+      g.totalMeterage += Number(pi.meterage) || 0
+      g.products.add(pi.productName)
+      for (const s of servicesLines(pi.servicesText)) g.services.add(s)
+    }
+    return Array.from(map.values()).map((g) => {
+      const names = Array.from(g.products)
+      return {
+        key: g.key,
+        orderNumber: g.orderNumber,
+        customerName: g.customerName,
+        priority: g.priority,
+        orderDate: g.orderDate,
+        deliveryDate: g.deliveryDate,
+        productSummary:
+          names.length > 1
+            ? `${names[0]} (+${names.length - 1})`
+            : names[0] || "—",
+        servicesSummary: Array.from(g.services),
+        itemCount: g.itemCount,
+        totalQty: g.totalQty,
+        totalMeterage: g.totalMeterage,
+        rows: g.rows,
+      }
+    })
+  }, [filtered])
+
+  const openGroup: OrderGroup | null = openOrderKey
+    ? orderGroups.find((g) => g.key === openOrderKey) || null
+    : null
+
+  /** گزارش هدر کارتابل: جمع‌ها بر اساس همان چیزی که با فیلترها نمایش داده می‌شود */
+  const totals = useMemo(() => {
+    let qty = 0
+    let meterage = 0
+    for (const r of filtered) {
+      qty += r.quantityIn ?? r.productionItem.quantity ?? 0
+      meterage += Number(r.productionItem.meterage) || 0
+    }
+    return {
+      orders: orderGroups.length,
+      items: filtered.length,
+      qty,
+      meterage,
+    }
+  }, [filtered, orderGroups])
+
+  const filterActive = productFilter.trim() !== "" || search.trim() !== ""
+
   // رد شده‌های قابل برگشت (با همان فیلترهای بالا)
   const filteredUndoable = useMemo(() => {
     const p = productFilter.trim().toLowerCase()
@@ -657,9 +863,7 @@ export default function StationQueuePage() {
     quantityDone?: number | null,
     codeOverride?: string
   ) => {
-    const code = (codeOverride ?? inputRef.current?.value ?? barcode)
-      .trim()
-      .replace(/\r/g, "")
+    const code = cleanBarcode(codeOverride ?? inputRef.current?.value ?? barcode)
     if (!code) {
       setLastResult({ type: "err", text: "بارکد را وارد یا اسکن کنید" })
       return
@@ -668,7 +872,21 @@ export default function StationQueuePage() {
       setLastResult({ type: "err", text: "ایستگاه را انتخاب کنید" })
       return
     }
+
+    // اسکن جدید وسط پردازش قبلی: گم نمی‌شود، بعد از پایان قبلی اجرا می‌شود
+    if (scanBusyRef.current) {
+      if (!confirmed) pendingScanRef.current = code
+      return
+    }
+    scanBusyRef.current = true
+
+    setLastScanned(code)
     setBarcode(code)
+
+    // اگر مودال تأیید تعداد باز شد و اسکن جدیدی در صف بود، بعد از پایان اجرا نشود
+    let holdPending = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
     try {
       setScanLoading(true)
       setLastResult(null)
@@ -680,14 +898,20 @@ export default function StationQueuePage() {
       }
       if (quantityDone != null && quantityDone > 0) body.quantityDone = quantityDone
 
+      // بدون محدودیت زمانی، اگر سرور جواب ندهد فرم برای همیشه «در حال ثبت» می‌ماند
+      const controller = new AbortController()
+      timer = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS)
+
       const res = await fetch("/api/production/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       })
       const data = await res.json()
 
       if (data.needsConfirmation) {
+        holdPending = true
         setConfirmData(data)
         setPartialQty(String(data.quantity || ""))
         return
@@ -698,20 +922,38 @@ export default function StationQueuePage() {
         if (inputRef.current) inputRef.current.value = ""
         return
       }
+      // رد انجام شد — پنجره‌ی اطلاع‌رسانی
+      setDetailMode("done")
       setDetail(data)
+      setLastResult({ type: "ok", text: data.message || "رد شد" })
       setBarcode("")
       if (inputRef.current) inputRef.current.value = ""
       setConfirmData(null)
       setPartialQty("")
       await fetchQueue(true)
-    } catch (e) {
+    } catch (e: any) {
       console.error(e)
-      setLastResult({ type: "err", text: "خطا در ارتباط با سرور" })
+      setLastResult({
+        type: "err",
+        text:
+          e?.name === "AbortError"
+            ? "پاسخی از سرور نرسید؛ دوباره اسکن کنید"
+            : "خطا در ارتباط با سرور",
+      })
     } finally {
+      if (timer) clearTimeout(timer)
+      scanBusyRef.current = false
       setScanLoading(false)
       setTimeout(() => inputRef.current?.focus(), 50)
+
+      const next = pendingScanRef.current
+      pendingScanRef.current = null
+      if (next && !holdPending && next !== code) {
+        setTimeout(() => doScanRef.current?.(false, null, next), 80)
+      }
     }
   }
+  doScanRef.current = doScan
 
   const confirmAll = () => {
     if (!confirmData) return
@@ -733,13 +975,51 @@ export default function StationQueuePage() {
     doScan(true, n, String(confirmData.barcode || barcode || ""))
   }
 
+  /**
+   * «نمایش»: فقط جزئیات قلم را نشان می‌دهد و هیچ درخواستی به سرور نمی‌فرستد، پس هرگز چیزی رد نمی‌شود.
+   * (نسخه‌ی قبلی action:"preview" می‌فرستاد که route اسکن آن را نمی‌شناسد و قطعه را واقعاً رد می‌کرد!)
+   */
+  const openPreviewFromRow = (row: QueueItem) => {
+    const pi = row.productionItem
+    setSelectedRowId(row.id)
+    setDetailMode("preview")
+    setDetail({
+      barcode: pi.barcode || "",
+      productName: pi.productName,
+      orderNumber: pi.productionOrder.order?.orderNumber,
+      customerName: pi.productionOrder.order?.customer?.name,
+      stationName: selectedStationName,
+      quantity: row.quantityIn ?? pi.quantity,
+      length: pi.length,
+      width: pi.width,
+      meterage: pi.meterage,
+      notes: pi.notes,
+      servicesText: pi.servicesText,
+      installationCode: pi.installationCode,
+      mapImageUrl: pi.mapImageUrl,
+      orderDate: pi.orderDate,
+      deliveryDate: pi.deliveryDate,
+      priority: pi.productionOrder.priority,
+    })
+  }
 
+  /** رد واقعی از روی پنجره‌ی نمایش */
+  const passFromPreview = async () => {
+    if (!detail?.barcode) return
+    const code = cleanBarcode(String(detail.barcode))
+    setDetail(null)
+    setDetailMode("done")
+    await doScan(false, null, code)
+  }
+
+  /** دبل‌کلیک یا دکمه‌ی «رد» روی قلم داخل سفارش = رد ایستگاه (مثل اسکن) */
   const completeByRow = (row: QueueItem) => {
-    const code = (row.productionItem.barcode || "").trim()
+    const code = cleanBarcode(row.productionItem.barcode || "")
     if (!code) {
       alert("این ردیف بارکد ندارد")
       return
     }
+    setSelectedRowId(row.id)
     doScan(false, null, code)
   }
 
@@ -788,6 +1068,31 @@ export default function StationQueuePage() {
     }
   }
 
+  /**
+   * اسکنر وقتی فوکوس داخل فیلد فیلتر/جستجو باشد، بارکد را داخل همان فیلد تایپ می‌کند.
+   * اگر آخرین کاراکترها با سرعتِ اسکنر (نه دست) وارد شده بودند، Enter به‌عنوان اسکن حساب می‌شود
+   * و فیلد خالی می‌شود. تایپ دستیِ بارکد برای جستجو هیچ‌وقت چیزی را رد نمی‌کند.
+   */
+  const filterKeyDown = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+    clear: () => void
+  ) => {
+    if (e.key === "Enter") {
+      const code = cleanBarcode(e.currentTarget.value)
+      if (fastKeysRef.current.count >= 3 && code.length >= 4) {
+        e.preventDefault()
+        clear()
+        doScan(false, null, code)
+      }
+      return
+    }
+    if (e.key.length !== 1) return
+    const now = Date.now()
+    const f = fastKeysRef.current
+    f.count = now - f.last < 50 ? f.count + 1 : 0
+    f.last = now
+  }
+
   const printTotals = useMemo(() => {
     const list = currentSlip?.items || []
     return {
@@ -803,7 +1108,9 @@ export default function StationQueuePage() {
     : null
 
   const closeDetail = () => {
+    // در حالت نمایش فقط پنجره بسته می‌شود و چیزی رد نمی‌شود
     setDetail(null)
+    setDetailMode("done")
     setBarcode("")
     if (inputRef.current) inputRef.current.value = ""
     setTimeout(() => inputRef.current?.focus(), 50)
@@ -828,39 +1135,101 @@ export default function StationQueuePage() {
       dir="rtl"
     >
       <div className="relative z-10 max-w-[1600px] mx-auto print:hidden">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white/95 shadow-md p-5 border border-teal-300">
-          <div>
-            <h1 className="text-2xl font-bold text-blue-950">
-              کارتابل {stationLocked ? selectedStationName : "ایستگاه"}
-            </h1>
-            <p className="text-sm text-blue-800 mt-1">
-              ایستگاه:{" "}
-              <span className="font-bold text-teal-700">
-                {selectedStationName}
-              </span>
-              {stationLocked ? " (قفل — بر اساس ورود شما)" : ""}
-            </p>
+        {/* هدر کارتابل ایستگاه: عنوان + گزارش (جمع تعداد و متراژ) + خروجی اکسل */}
+        <div className="mb-4 rounded-2xl bg-white/95 shadow-md p-5 border border-teal-300">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h1 className="text-2xl font-bold text-blue-950">
+                کارتابل {stationLocked ? selectedStationName : "ایستگاه"}
+              </h1>
+              <p className="text-sm text-blue-800 mt-1">
+                ایستگاه:{" "}
+                <span className="font-bold text-teal-700">
+                  {selectedStationName}
+                </span>
+                {stationLocked ? " (قفل — بر اساس ورود شما)" : ""}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href="/production/cutting"
+                className="rounded-xl border border-teal-500/40 bg-white px-4 py-2.5 shadow-sm font-bold text-blue-900"
+              >
+                برنامه‌ریزی برش
+              </Link>
+              <Link
+                href="/production/queue"
+                className="rounded-xl border border-teal-500/40 bg-white px-4 py-2.5 shadow-sm font-bold text-blue-900"
+              >
+                روند کاری
+              </Link>
+              <Link
+                href="/"
+                className="rounded-xl border border-teal-500/40 bg-white px-4 py-2.5 shadow-sm font-bold text-blue-900"
+              >
+                بازگشت
+              </Link>
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href="/production/cutting"
-              className="rounded-xl border border-teal-500/40 bg-white px-4 py-2.5 shadow-sm font-bold text-blue-900"
-            >
-              برنامه‌ریزی برش
-            </Link>
-            <Link
-              href="/production/queue"
-              className="rounded-xl border border-teal-500/40 bg-white px-4 py-2.5 shadow-sm font-bold text-blue-900"
-            >
-              روند کاری
-            </Link>
-            <Link
-              href="/"
-              className="rounded-xl border border-teal-500/40 bg-white px-4 py-2.5 shadow-sm font-bold text-blue-900"
-            >
-              بازگشت
-            </Link>
-          </div>
+
+          {(!isLoadingStation || mainTab === "queue") && (
+            <div className="mt-4 border-t border-teal-200 pt-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <h2 className="font-black text-blue-950">
+                  گزارش کارتابل {selectedStationName} — {todayFa}
+                </h2>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={exportStationExcel}
+                    className="rounded-xl border border-teal-600 bg-white px-4 py-2 text-sm font-bold text-teal-800 hover:bg-teal-50"
+                  >
+                    خروجی اکسل
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => fetchQueue()}
+                    className="rounded-xl bg-teal-500 hover:bg-teal-600 px-4 py-2 text-sm font-bold text-white"
+                  >
+                    بروزرسانی
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="rounded-xl bg-teal-50 border border-teal-200 p-3 text-center">
+                  <p className="text-sm text-blue-700">تعداد سفارش</p>
+                  <p className="text-2xl font-bold text-teal-700">
+                    {totals.orders}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-teal-50 border border-teal-200 p-3 text-center">
+                  <p className="text-sm text-blue-700">تعداد قلم</p>
+                  <p className="text-2xl font-bold text-teal-700">
+                    {totals.items}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-teal-50 border border-teal-200 p-3 text-center">
+                  <p className="text-sm text-blue-700">جمع تعداد</p>
+                  <p className="text-2xl font-bold text-teal-700">
+                    {totals.qty}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-teal-50 border border-teal-200 p-3 text-center">
+                  <p className="text-sm text-blue-700">جمع متراژ</p>
+                  <p className="text-2xl font-bold text-teal-700">
+                    {totals.meterage.toFixed(4)}
+                  </p>
+                </div>
+              </div>
+              {filterActive && summary && (
+                <p className="mt-2 text-xs text-blue-700">
+                  فیلتر فعال است — کل صف این ایستگاه (بدون فیلتر): {summary.count}{" "}
+                  قطعه | {summary.totalQuantity} عدد |{" "}
+                  {Number(summary.totalMeterage).toFixed(3)} متر
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {isLoadingStation && (
@@ -924,6 +1293,7 @@ export default function StationQueuePage() {
                   <label className="mb-1.5 block text-sm font-bold text-blue-900">
                     اسکن بارکد
                   </label>
+                  {/* readOnly به‌جای disabled: با disabled شدن فیلد، فوکوس از دست می‌رفت و کاراکترهای اسکنر گم می‌شد */}
                   <input
                     ref={inputRef}
                     type="text"
@@ -932,8 +1302,16 @@ export default function StationQueuePage() {
                     onKeyDown={onKeyDown}
                     className="w-full rounded-xl border-2 border-teal-500 bg-white px-4 py-3 text-lg font-bold"
                     autoComplete="off"
-                    disabled={scanLoading}
+                    readOnly={scanLoading}
                   />
+                  {lastScanned && (
+                    <p className="mt-1 text-xs text-blue-700">
+                      آخرین بارکد دریافتی:{" "}
+                      <span className="font-mono font-bold" dir="ltr">
+                        {lastScanned}
+                      </span>
+                    </p>
+                  )}
                 </div>
                 <div className="md:col-span-2">
                   <label className="mb-1.5 block text-sm font-bold text-blue-900">
@@ -969,44 +1347,19 @@ export default function StationQueuePage() {
               )}
             </div>
 
-            {summary && (
-              <div className="mb-4 grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="rounded-2xl bg-white/50 border p-4 text-center">
-                  <p className="text-sm text-blue-700">ایستگاه</p>
-                  <p className="text-lg font-bold text-teal-800">
-                    {summary.stationName}
-                  </p>
-                </div>
-                <div className="rounded-2xl bg-white/50 border p-4 text-center">
-                  <p className="text-sm text-blue-700">ردیف</p>
-                  <p className="text-2xl font-bold text-teal-700">
-                    {summary.count}
-                  </p>
-                </div>
-                <div className="rounded-2xl bg-white/50 border p-4 text-center">
-                  <p className="text-sm text-blue-700">جمع تعداد</p>
-                  <p className="text-2xl font-bold text-teal-700">
-                    {summary.totalQuantity}
-                  </p>
-                </div>
-                <div className="rounded-2xl bg-white/50 border p-4 text-center">
-                  <p className="text-sm text-blue-700">جمع متراژ</p>
-                  <p className="text-2xl font-bold text-teal-700">
-                    {Number(summary.totalMeterage).toFixed(4)}
-                  </p>
-                </div>
-              </div>
-            )}
-
             <div className="mb-4 rounded-2xl bg-white/95 shadow-md p-4 border border-teal-300">
               <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-                <div className="md:col-span-3">
+                <div className="md:col-span-4">
                   <input
                     list="pl"
                     value={productFilter}
-                    onChange={(e) => setProductFilter(e.target.value)}
+                    onChange={(e) => {
+                      if (!filtersFrozen) setProductFilter(e.target.value)
+                    }}
+                    onKeyDown={(e) => filterKeyDown(e, () => setProductFilter(""))}
+                    disabled={filtersFrozen}
                     placeholder="فیلتر کالا"
-                    className="w-full rounded-xl border px-4 py-2.5 text-sm font-semibold"
+                    className="w-full rounded-xl border px-4 py-2.5 text-sm font-semibold disabled:bg-amber-50"
                   />
                   <datalist id="pl">
                     {productNames.map((n) => (
@@ -1014,33 +1367,33 @@ export default function StationQueuePage() {
                     ))}
                   </datalist>
                 </div>
-                <div className="md:col-span-3">
+                <div className="md:col-span-4">
                   <input
                     value={search}
-                    onChange={(e) => setSearch(e.target.value)}
+                    onChange={(e) => {
+                      if (!filtersFrozen) setSearch(e.target.value)
+                    }}
+                    onKeyDown={(e) => filterKeyDown(e, () => setSearch(""))}
+                    disabled={filtersFrozen}
                     placeholder="مشتری / سفارش / بارکد"
-                    className="w-full rounded-xl border px-4 py-2.5 text-sm font-semibold"
+                    className="w-full rounded-xl border px-4 py-2.5 text-sm font-semibold disabled:bg-amber-50"
                   />
                 </div>
                 <div className="md:col-span-2">
                   <button
-                    onClick={() => fetchQueue()}
-                    className="w-full rounded-xl bg-teal-500 text-white px-4 py-2.5 font-bold"
-                  >
-                    بروزرسانی
-                  </button>
-                </div>
-                <div className="md:col-span-2">
-                  <button
                     type="button"
-                    onClick={exportStationExcel}
-                    className="w-full rounded-xl border border-teal-600 bg-white px-4 py-2.5 font-bold text-teal-800"
+                    onClick={() => setFiltersFrozen((v) => !v)}
+                    className={`w-full rounded-xl px-3 py-2.5 text-sm font-bold border ${
+                      filtersFrozen
+                        ? "bg-amber-500 text-white border-amber-600"
+                        : "bg-white text-blue-900 border-teal-300"
+                    }`}
                   >
-                    خروجی اکسل
+                    {filtersFrozen ? "فیلتر قفل" : "قفل فیلتر"}
                   </button>
                 </div>
-                <div className="md:col-span-2 text-center font-bold py-2">
-                  نمایش: {filtered.length}
+                <div className="md:col-span-2 text-center font-bold py-2 text-sm">
+                  {orderGroups.length} سفارش / {filtered.length} قلم
                 </div>
               </div>
             </div>
@@ -1048,100 +1401,255 @@ export default function StationQueuePage() {
             <div className="rounded-2xl bg-white shadow-md p-4 border border-teal-300 overflow-x-auto">
               {loading ? (
                 <p className="text-center py-16 font-bold">بارگذاری...</p>
-              ) : filtered.length === 0 ? (
+              ) : openOrderKey ? (
+                /* ---------- داخل سفارش: لیست اقلام ---------- */
+                openGroup ? (
+                  <div>
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-teal-200 bg-teal-50 p-3">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setOpenOrderKey(null)}
+                          className="rounded-xl border border-teal-500 bg-white px-4 py-2 font-bold text-teal-800 hover:bg-teal-100"
+                        >
+                          → بازگشت به لیست سفارش‌ها
+                        </button>
+                        <span className="text-lg font-black text-blue-950">
+                          سفارش {openGroup.orderNumber}
+                        </span>
+                        <span className="font-bold text-blue-900">
+                          {openGroup.customerName}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-4 text-sm font-bold text-blue-900">
+                        <span>اولویت: {openGroup.priority}</span>
+                        <span>تاریخ سفارش: {formatFaDate(openGroup.orderDate)}</span>
+                        <span>تاریخ تحویل: {formatFaDate(openGroup.deliveryDate)}</span>
+                        <span>
+                          {openGroup.itemCount} قلم | {openGroup.totalQty} عدد |{" "}
+                          {openGroup.totalMeterage.toFixed(3)} متر
+                        </span>
+                      </div>
+                    </div>
+                    <p className="mb-2 text-xs text-blue-700">
+                      دبل‌کلیک روی قلم یا اسکن بارکد = رد ایستگاه | «نمایش» = دیدن جزئیات و نقشه
+                      بدون رد | Esc = بازگشت به لیست سفارش‌ها
+                    </p>
+                    <table className="w-full border-collapse border border-gray-400 text-sm">
+                      <thead>
+                        <tr className="border border-gray-400 bg-teal-100">
+                          <th className="border border-gray-400 p-2">ردیف</th>
+                          <th className="border border-gray-400 p-2">کالا</th>
+                          <th className="border border-gray-400 p-2">بارکد</th>
+                          <th className="border border-gray-400 p-2">طول</th>
+                          <th className="border border-gray-400 p-2">عرض</th>
+                          <th className="border border-gray-400 p-2">تعداد (باقی)</th>
+                          <th className="border border-gray-400 p-2">رد شده</th>
+                          <th className="border border-gray-400 p-2">متراژ</th>
+                          <th className="border border-gray-400 p-2">سختی کار</th>
+                          <th className="border border-gray-400 p-2">توضیحات</th>
+                          <th className="border border-gray-400 p-2">وضعیت</th>
+                          <th className="border border-gray-400 p-2">عملیات</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {openGroup.rows.map((row, index) => (
+                          <tr
+                            key={row.id}
+                            className={`cursor-pointer border border-gray-400 ${
+                              selectedRowId === row.id
+                                ? "bg-yellow-100"
+                                : "bg-white hover:bg-orange-50"
+                            }`}
+                            title="دبل‌کلیک = رد ایستگاه"
+                            onClick={() => setSelectedRowId(row.id)}
+                            onDoubleClick={() => completeByRow(row)}
+                          >
+                            <td className="border border-gray-400 p-2 text-center font-bold">
+                              {index + 1}
+                            </td>
+                            <td className="border border-gray-400 p-2 font-bold">
+                              {row.productionItem.productName}
+                            </td>
+                            <td className="border border-gray-400 p-2 text-center font-mono font-bold">
+                              {row.productionItem.barcode || "—"}
+                            </td>
+                            <td className="border border-gray-400 p-2 text-center font-black">
+                              {row.productionItem.length ?? "—"}
+                            </td>
+                            <td className="border border-gray-400 p-2 text-center font-black">
+                              {row.productionItem.width ?? "—"}
+                            </td>
+                            <td className="border border-gray-400 p-2 text-center font-black">
+                              {row.quantityIn ?? row.productionItem.quantity}
+                            </td>
+                            <td className="border border-gray-400 p-2 text-center">
+                              {row.quantityOut ?? 0}
+                            </td>
+                            <td className="border border-gray-400 p-2 text-center">
+                              {row.productionItem.meterage != null
+                                ? Number(row.productionItem.meterage).toFixed(3)
+                                : "—"}
+                            </td>
+                            <td className="border border-gray-400 p-2 font-bold">
+                              {servicesLines(row.productionItem.servicesText).length >
+                              0
+                                ? servicesLines(row.productionItem.servicesText).map(
+                                    (sv, i) => <div key={i}>{sv}</div>
+                                  )
+                                : "—"}
+                            </td>
+                            <td className="border border-gray-400 p-2 text-xs">
+                              {row.productionItem.notes || "—"}
+                            </td>
+                            <td className="border border-gray-400 p-2 text-center">
+                              <span className="rounded-full bg-yellow-100 px-3 py-1 text-xs font-bold">
+                                {row.status}
+                              </span>
+                            </td>
+                            <td className="border border-gray-400 p-2 text-center">
+                              <div className="flex flex-wrap justify-center gap-1">
+                                <button
+                                  type="button"
+                                  disabled={scanLoading}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    openPreviewFromRow(row)
+                                  }}
+                                  className="rounded-lg bg-blue-600 px-2 py-1 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+                                >
+                                  نمایش
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={scanLoading}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    completeByRow(row)
+                                  }}
+                                  className="rounded-lg bg-green-600 px-2 py-1 text-xs font-bold text-white hover:bg-green-700 disabled:opacity-50"
+                                >
+                                  رد
+                                </button>
+                                {row.canUndo && (row.quantityOut || 0) > 0 && (
+                                  <button
+                                    type="button"
+                                    disabled={scanLoading}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      undoStation(row)
+                                    }}
+                                    className="rounded-lg bg-amber-500 px-2 py-1 text-xs font-bold text-white hover:bg-amber-600 disabled:opacity-50"
+                                  >
+                                    برگشت
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="py-12 text-center">
+                    <p className="mb-4 text-lg font-bold text-teal-800">
+                      همه‌ی اقلام سفارش {openOrderKey} در این ایستگاه رد شد (یا با فیلتر فعلی
+                      نمایش داده نمی‌شود)
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setOpenOrderKey(null)}
+                      className="rounded-xl bg-teal-600 px-6 py-2.5 font-bold text-white hover:bg-teal-700"
+                    >
+                      → بازگشت به لیست سفارش‌ها
+                    </button>
+                  </div>
+                )
+              ) : orderGroups.length === 0 ? (
                 <p className="text-center py-16 font-bold">صف خالی است</p>
               ) : (
-                <table className="w-full text-sm border-collapse border border-gray-400">
-                  <thead>
-                    <tr className="bg-teal-100 border border-gray-400">
-                      <th className="p-2 border border-gray-400">ردیف</th>
-                      <th className="p-2 border border-gray-400">ش سفارش</th>
-                      <th className="p-2 border border-gray-400">مشتری</th>
-                      <th className="p-2 border border-gray-400">کالا</th>
-                      <th className="p-2 border border-gray-400">بارکد</th>
-                      <th className="p-2 border border-gray-400">ابعاد</th>
-                      <th className="p-2 border border-gray-400">تعداد</th>
-                      <th className="p-2 border border-gray-400">متراژ</th>
-                      <th className="p-2 border border-gray-400">وضعیت</th>
-                      <th className="p-2 border border-gray-400">عملیات</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map((row, index) => (
-                      <tr
-                        key={row.id}
-                        className="border border-gray-400 bg-white hover:bg-teal-50 cursor-pointer"
-                        title="دبل‌کلیک = رد ایستگاه"
-                        onDoubleClick={() => completeByRow(row)}
-                      >
-                        <td className="p-2 border border-gray-400 text-center font-bold">
-                          {index + 1}
-                        </td>
-                        <td className="p-2 border border-gray-400 text-center font-bold text-teal-800">
-                          {row.productionItem.productionOrder.order
-                            ?.orderNumber || "—"}
-                        </td>
-                        <td className="p-2 border border-gray-400 font-bold">
-                          {row.productionItem.productionOrder.order?.customer
-                            ?.name || "—"}
-                        </td>
-                        <td className="p-2 border border-gray-400 font-bold">
-                          {row.productionItem.productName}
-                        </td>
-                        <td className="p-2 border border-gray-400 text-center font-bold">
-                          {row.productionItem.barcode || "—"}
-                        </td>
-                        <td className="p-2 border border-gray-400 text-center font-black">
-                          {row.productionItem.length &&
-                          row.productionItem.width
-                            ? `${row.productionItem.length}×${row.productionItem.width}`
-                            : "—"}
-                        </td>
-                        <td className="p-2 border border-gray-400 text-center font-black">
-                          {row.quantityIn ?? row.productionItem.quantity}
-                        </td>
-                        <td className="p-2 border border-gray-400 text-center">
-                          {row.productionItem.meterage != null
-                            ? Number(row.productionItem.meterage).toFixed(3)
-                            : "—"}
-                        </td>
-                        <td className="p-2 border border-gray-400 text-center">
-                          <span className="rounded-full bg-yellow-100 px-3 py-1 text-xs font-bold">
-                            {row.status}
-                          </span>
-                        </td>
-                        <td className="p-2 border border-gray-400 text-center">
-                          <div className="flex flex-wrap gap-1 justify-center">
-                            <button
-                              type="button"
-                              disabled={scanLoading}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                completeByRow(row)
-                              }}
-                              className="rounded-lg bg-green-600 hover:bg-green-700 text-white px-2 py-1 text-xs font-bold disabled:opacity-50"
-                            >
-                              رد
-                            </button>
-                            {row.canUndo && (row.quantityOut || 0) > 0 && (
-                              <button
-                                type="button"
-                                disabled={scanLoading}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  undoStation(row)
-                                }}
-                                className="rounded-lg bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 text-xs font-bold disabled:opacity-50"
-                              >
-                                برگشت
-                              </button>
-                            )}
-                          </div>
-                        </td>
+                /* ---------- لیست سفارش‌ها (هر سفارش یک ردیف) ---------- */
+                <div>
+                  <p className="mb-2 text-xs text-blue-700">
+                    کلیک روی هر سفارش = ورود به اقلام همان سفارش، سپس دبل‌کلیک روی قلم یا اسکن بارکد برای رد
+                  </p>
+                  <table className="w-full border-collapse border border-gray-400 text-sm">
+                    <thead>
+                      <tr className="border border-gray-400 bg-teal-100">
+                        <th className="border border-gray-400 p-2">ردیف</th>
+                        <th className="border border-gray-400 p-2">شماره سفارش</th>
+                        <th className="border border-gray-400 p-2">نام مشتری</th>
+                        <th className="border border-gray-400 p-2">نام کالا</th>
+                        <th className="border border-gray-400 p-2">اولویت</th>
+                        <th className="border border-gray-400 p-2">تعداد قلم</th>
+                        <th className="border border-gray-400 p-2">جمع تعداد</th>
+                        <th className="border border-gray-400 p-2">جمع متراژ</th>
+                        <th className="border border-gray-400 p-2">تاریخ سفارش</th>
+                        <th className="border border-gray-400 p-2">تاریخ تحویل</th>
+                        <th className="border border-gray-400 p-2">سختی کار</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {orderGroups.map((g, i) => (
+                        <tr
+                          key={g.key}
+                          className="cursor-pointer border border-gray-400 bg-white hover:bg-yellow-100"
+                          title="کلیک = ورود به سفارش"
+                          onClick={() => {
+                            setOpenOrderKey(g.key)
+                            setSelectedRowId(null)
+                          }}
+                        >
+                          <td className="border border-gray-400 p-2 text-center font-bold">
+                            {i + 1}
+                          </td>
+                          <td className="border border-gray-400 p-2 text-center font-black text-teal-800">
+                            {g.orderNumber}
+                          </td>
+                          <td className="border border-gray-400 p-2 font-bold">
+                            {g.customerName}
+                          </td>
+                          <td className="border border-gray-400 p-2 font-bold">
+                            {g.productSummary}
+                          </td>
+                          <td
+                            className={`border border-gray-400 p-2 text-center ${
+                              g.priority !== "عادی" ? "font-black text-red-700" : ""
+                            }`}
+                          >
+                            {g.priority}
+                          </td>
+                          <td className="border border-gray-400 p-2 text-center font-bold">
+                            {g.itemCount}
+                          </td>
+                          <td className="border border-gray-400 p-2 text-center font-black">
+                            {g.totalQty}
+                          </td>
+                          <td className="border border-gray-400 p-2 text-center">
+                            {g.totalMeterage.toFixed(3)}
+                          </td>
+                          <td className="border border-gray-400 p-2 text-center">
+                            {formatFaDate(g.orderDate)}
+                          </td>
+                          <td className="border border-gray-400 p-2 text-center">
+                            {formatFaDate(g.deliveryDate)}
+                          </td>
+                          <td className="border border-gray-400 p-2 text-xs font-bold">
+                            {g.servicesSummary.length > 0
+                              ? g.servicesSummary.slice(0, 3).map((sv, k) => (
+                                  <div key={k}>{sv}</div>
+                                ))
+                              : "—"}
+                            {g.servicesSummary.length > 3 && (
+                              <div>… (+{g.servicesSummary.length - 3})</div>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
 
@@ -1441,7 +1949,11 @@ export default function StationQueuePage() {
             dir="rtl"
           >
             <div className="bg-teal-600 text-white px-5 py-3 flex items-center justify-between gap-3">
-              <h2 className="text-lg font-black">جزئیات — رد ایستگاه</h2>
+              <h2 className="text-lg font-black">
+                {detailMode === "preview"
+                  ? "نمایش قلم (رد نشده)"
+                  : "جزئیات — رد ایستگاه"}
+              </h2>
               <div className="flex items-center gap-3">
                 <span className="text-sm font-bold opacity-95">
                   {detail.stationName || selectedStationName || "—"}
@@ -1588,15 +2100,29 @@ export default function StationQueuePage() {
 
             <div className="bg-white border-t px-5 py-3 flex items-center justify-between gap-3">
               <span className="text-xs text-blue-600">
-                بستن: دکمه ✕ یا کلید Esc
+                {detailMode === "preview"
+                  ? "× یا Esc = بستن بدون رد ایستگاه"
+                  : "رد انجام شد — × یا Esc برای بستن | اسکن بعدی هم پنجره را می‌بندد"}
               </span>
-              <button
-                type="button"
-                className="rounded-xl bg-teal-500 hover:bg-teal-600 text-white px-8 py-2.5 font-bold"
-                onClick={closeDetail}
-              >
-                ادامه
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="rounded-xl border px-5 py-2.5 font-bold"
+                  onClick={closeDetail}
+                >
+                  {detailMode === "preview" ? "بستن" : "ادامه"}
+                </button>
+                {detailMode === "preview" && (
+                  <button
+                    type="button"
+                    className="rounded-xl bg-green-600 hover:bg-green-700 text-white px-8 py-2.5 font-bold disabled:opacity-50"
+                    onClick={passFromPreview}
+                    disabled={scanLoading}
+                  >
+                    رد کردن
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -1624,36 +2150,66 @@ export default function StationQueuePage() {
       )}
 
       {confirmData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 print:hidden">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6" dir="rtl">
-            <h2 className="font-bold text-lg mb-2">تأیید تعداد</h2>
-            <p className="font-black text-orange-700 mb-2">
-              باقی: {confirmData.quantity}
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4 print:hidden">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" dir="rtl">
+            <h2 className="text-xl font-black text-blue-950 mb-3">تأیید تعداد</h2>
+            <div className="rounded-xl bg-orange-50 border border-orange-200 p-4 text-center mb-3">
+              <p className="text-3xl font-black">
+                {confirmData.length ?? "—"} × {confirmData.width ?? "—"}
+              </p>
+              <p className="text-2xl font-black text-orange-700 mt-2">
+                تعداد: {confirmData.quantity}
+              </p>
+            </div>
+            <p className="font-bold text-base">{confirmData.productName}</p>
+            <p className="text-sm text-blue-800 mb-2">
+              سفارش {confirmData.orderNumber} — {confirmData.customerName}
             </p>
+            {confirmData.mapImageUrl ? (
+              <img
+                src={confirmData.mapImageUrl}
+                alt="نقشه"
+                className="mt-2 max-h-40 mx-auto object-contain rounded-lg border"
+              />
+            ) : null}
+            <label className="block text-sm font-bold mt-4 mb-1">
+              چند عدد رد شود؟ (۱ تا {confirmData.quantity})
+            </label>
             <input
               type="number"
+              min={1}
+              max={Number(confirmData.quantity) || 1}
               value={partialQty}
               onChange={(e) => setPartialQty(e.target.value)}
-              className="w-full rounded-xl border px-4 py-2 font-bold mb-3"
+              className="w-full rounded-xl border border-teal-300 px-4 py-2.5 font-bold mb-3"
             />
-            <div className="flex gap-2 justify-end">
+            <div className="flex flex-wrap gap-2 justify-end">
               <button
-                className="border rounded-xl px-3 py-2 font-bold"
-                onClick={() => setConfirmData(null)}
+                type="button"
+                className="border rounded-xl px-4 py-2.5 font-bold"
+                onClick={() => {
+                  setConfirmData(null)
+                  setPartialQty("")
+                  setBarcode("")
+                  if (inputRef.current) inputRef.current.value = ""
+                  setTimeout(() => inputRef.current?.focus(), 50)
+                }}
               >
                 انصراف
               </button>
               <button
-                className="bg-blue-600 text-white rounded-xl px-3 py-2 font-bold"
+                type="button"
+                className="bg-blue-600 text-white rounded-xl px-4 py-2.5 font-bold"
                 onClick={confirmPartial}
               >
-                رد جزئی
+                رد با همین تعداد
               </button>
               <button
-                className="bg-green-600 text-white rounded-xl px-3 py-2 font-bold"
+                type="button"
+                className="bg-green-600 text-white rounded-xl px-4 py-2.5 font-bold"
                 onClick={confirmAll}
               >
-                همه
+                همه رد شوند
               </button>
             </div>
           </div>

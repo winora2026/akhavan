@@ -9,6 +9,15 @@ function norm(s: string) {
     .toLowerCase()
 }
 
+function cleanBarcode(s: string) {
+  return (s || "")
+    .replace(/[\u200b\u200c\u200d\u200e\u200f\ufeff]/g, "")
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\r\n\t]/g, "")
+    .trim()
+}
+
 function buildServicesText(servicesData: any): string {
   if (!servicesData) return ""
   try {
@@ -27,7 +36,6 @@ function buildServicesText(servicesData: any): string {
 function isCutStation(name: string) {
   return norm(name) === "برش"
 }
-
 function isSemiFinishedWh(name: string) {
   const n = norm(name)
   return (
@@ -36,34 +44,23 @@ function isSemiFinishedWh(name: string) {
     n.includes("کالای نیمه")
   )
 }
-
 function isReadyWh(name: string) {
   const n = norm(name)
   return n.includes("آماده تحویل") || n === norm("انبار محصول دو")
 }
-
 function isLoading(name: string) {
   return norm(name).includes("بارگیری")
 }
-
 function isBevelPair(name: string) {
   const n = norm(name)
   return n === "تراش 1" || n === "تراش ۱" || n === "تراش 2" || n === "تراش ۲"
 }
-
-/** برای اتمام کل قطعه: تکمیل واقعی یا لغو به‌خاطر ایستگاه جفت */
 function isStationClosed(status: string) {
   return status === "تکمیل شده" || status === "انجام در ایستگاه دیگر"
 }
 
-/** یادداشتی که هنگام «رد گروهی از انبار نیمه‌ساخته» روی ایستگاه‌ها ثبت می‌شود */
 const GROUP_PASS_NOTE = "رد گروهی از انبار کالای نیمه‌ساخته"
 
-/**
- * اولین ایستگاهِ بعدی که این قطعه را (توسط اپراتور) رد کرده یا در حال انجام است.
- * تا وقتی چنین ایستگاهی وجود دارد، رد ایستگاه فعلی قابل برگشت نیست.
- * ایستگاه‌هایی که فقط به‌صورت گروهی/خودکار بسته شده‌اند حساب نمی‌شوند.
- */
 function findPassedLaterStation(stations: any[], current: any) {
   return (
     stations.find((s: any) => {
@@ -75,6 +72,84 @@ function findPassedLaterStation(stations: any[], current: any) {
       return false
     }) || null
   )
+}
+
+async function findItemByBarcode(raw: string, include: any) {
+  const code = cleanBarcode(raw)
+  const baseBarcode = code.includes("-") ? code.split("-")[0] : code
+
+  let item = await prisma.productionItem.findFirst({
+    where: { barcode: code },
+    include,
+  })
+  if (!item && baseBarcode !== code) {
+    item = await prisma.productionItem.findFirst({
+      where: { barcode: baseBarcode },
+      include,
+    })
+  }
+  if (!item) {
+    const digits = code.replace(/\D/g, "")
+    if (digits && digits !== code) {
+      item = await prisma.productionItem.findFirst({
+        where: {
+          OR: [{ barcode: digits }, { barcode: { endsWith: digits } }],
+        },
+        include,
+      })
+    }
+  }
+  return item
+}
+
+function detailPayload(item: any, stationRow: any, raw: string, extra: any = {}) {
+  const salesOrder = item.productionOrder?.order
+  const salesItem =
+    salesOrder?.items?.find((si: any) => si.id === item.orderItemId) || null
+  const servicesText = buildServicesText(
+    (salesItem as any)?.servicesData ?? null
+  )
+  return {
+    productName: item.productName,
+    orderNumber: salesOrder?.orderNumber,
+    customerName: salesOrder?.customer?.name,
+    stationName: stationRow.station.name,
+    barcode: raw,
+    quantity: stationRow.quantityIn || item.quantity || 1,
+    length: item.length,
+    width: item.width,
+    meterage: item.meterage,
+    notes: item.notes || (salesItem as any)?.notes || null,
+    servicesText,
+    installationCode: (salesItem as any)?.installationCode || null,
+    mapImageUrl: (salesOrder as any)?.mapImageUrl || null,
+    mapImages: (salesOrder as any)?.mapImages || null,
+    orderDate: salesOrder?.orderDate
+      ? salesOrder.orderDate.toISOString()
+      : null,
+    deliveryDate: salesOrder?.deliveryDate
+      ? salesOrder.deliveryDate.toISOString()
+      : null,
+    priority: item.productionOrder?.priority,
+    ...extra,
+  }
+}
+
+const includeFull = {
+  productionOrder: {
+    include: {
+      order: {
+        include: {
+          customer: true,
+          items: true,
+        },
+      },
+    },
+  },
+  stations: {
+    include: { station: true },
+    orderBy: { sequence: "asc" as const },
+  },
 }
 
 export async function POST(req: Request) {
@@ -89,7 +164,40 @@ export async function POST(req: Request) {
       action,
     } = body
 
-    // ====================== برگشت رد ایستگاه ======================
+    // ---------- پیش‌نمایش بدون رد ----------
+    if (action === "preview") {
+      if (!barcode || !stationId) {
+        return NextResponse.json(
+          { error: "بارکد و ایستگاه الزامی است" },
+          { status: 400 }
+        )
+      }
+      const raw = cleanBarcode(String(barcode))
+      const item = await findItemByBarcode(raw, includeFull)
+      if (!item) {
+        return NextResponse.json(
+          { error: `بارکد «${raw}» یافت نشد` },
+          { status: 404 }
+        )
+      }
+      const stationRow = item.stations.find((s: any) => s.stationId === stationId)
+      if (!stationRow) {
+        return NextResponse.json(
+          { error: "این قطعه برای ایستگاه انتخاب‌شده مسیر ندارد" },
+          { status: 400 }
+        )
+      }
+      return NextResponse.json({
+        success: true,
+        preview: true,
+        ...detailPayload(item, stationRow, raw, {
+          itemStationStatus: stationRow.status,
+          quantityIn: stationRow.quantityIn,
+        }),
+      })
+    }
+
+    // ---------- برگشت رد ایستگاه ----------
     if (action === "undo") {
       if (!barcode || !stationId) {
         return NextResponse.json(
@@ -98,9 +206,7 @@ export async function POST(req: Request) {
         )
       }
 
-      const raw = String(barcode).trim()
-      const baseBarcode = raw.includes("-") ? raw.split("-")[0] : raw
-
+      const raw = cleanBarcode(String(barcode))
       const include = {
         stations: {
           include: { station: true },
@@ -108,16 +214,7 @@ export async function POST(req: Request) {
         },
       }
 
-      let item = await prisma.productionItem.findFirst({
-        where: { barcode: raw },
-        include,
-      })
-      if (!item) {
-        item = await prisma.productionItem.findFirst({
-          where: { barcode: baseBarcode },
-          include,
-        })
-      }
+      const item = await findItemByBarcode(raw, include)
       if (!item) {
         return NextResponse.json(
           { error: `بارکد «${raw}» یافت نشد` },
@@ -125,7 +222,7 @@ export async function POST(req: Request) {
         )
       }
 
-      const stationRow = item.stations.find((s) => s.stationId === stationId)
+      const stationRow = item.stations.find((s: any) => s.stationId === stationId)
       if (!stationRow) {
         return NextResponse.json(
           { error: "این قطعه برای ایستگاه انتخاب‌شده مسیر ندارد" },
@@ -148,7 +245,6 @@ export async function POST(req: Request) {
         )
       }
 
-      // رد بارگیری به برگه‌ی خروج وصل است؛ از این مسیر برنمی‌گردد
       if (isLoading(stationRow.station.name)) {
         return NextResponse.json(
           { error: "رد ایستگاه بارگیری از اینجا قابل برگشت نیست" },
@@ -156,7 +252,6 @@ export async function POST(req: Request) {
         )
       }
 
-      // اگر ایستگاه بعدی قطعه را رد کرده باشد، برگشت ممکن نیست
       const passedLater = findPassedLaterStation(item.stations, stationRow)
       if (passedLater) {
         return NextResponse.json(
@@ -167,7 +262,6 @@ export async function POST(req: Request) {
         )
       }
 
-      // تعداد کل (رد شده + باقی‌مانده) به ایستگاه برمی‌گردد
       const qtyBack =
         (stationRow.quantityIn || 0) + (stationRow.quantityOut || 0) ||
         item.quantity ||
@@ -187,7 +281,6 @@ export async function POST(req: Request) {
         },
       })
 
-      // اگر تراش بود: جفت «انجام در ایستگاه دیگر» را هم برگردان
       if (isBevelPair(stationRow.station.name)) {
         for (const s of item.stations) {
           if (
@@ -210,7 +303,6 @@ export async function POST(req: Request) {
         }
       }
 
-      // برگشت انبار نیمه‌ساخته: ایستگاه‌هایی که با رد گروهی بسته شده بودند هم برمی‌گردند
       if (isSemiFinishedWh(stationRow.station.name)) {
         for (const s of item.stations) {
           if (
@@ -263,7 +355,7 @@ export async function POST(req: Request) {
       })
     }
 
-    // ====================== اسکن عادی ======================
+    // ---------- اسکن / رد ----------
     if (!barcode || !stationId) {
       return NextResponse.json(
         { error: "بارکد و ایستگاه الزامی است" },
@@ -271,37 +363,8 @@ export async function POST(req: Request) {
       )
     }
 
-    const raw = String(barcode).trim()
-    const baseBarcode = raw.includes("-") ? raw.split("-")[0] : raw
-
-    const include = {
-      productionOrder: {
-        include: {
-          order: {
-            include: {
-              customer: true,
-              items: true,
-            },
-          },
-        },
-      },
-      stations: {
-        include: { station: true },
-        orderBy: { sequence: "asc" as const },
-      },
-    }
-
-    let item = await prisma.productionItem.findFirst({
-      where: { barcode: raw },
-      include,
-    })
-
-    if (!item) {
-      item = await prisma.productionItem.findFirst({
-        where: { barcode: baseBarcode },
-        include,
-      })
-    }
+    const raw = cleanBarcode(String(barcode))
+    const item = await findItemByBarcode(raw, includeFull)
 
     if (!item) {
       return NextResponse.json(
@@ -310,7 +373,7 @@ export async function POST(req: Request) {
       )
     }
 
-    const stationRow = item.stations.find((s) => s.stationId === stationId)
+    const stationRow = item.stations.find((s: any) => s.stationId === stationId)
 
     if (!stationRow) {
       return NextResponse.json(
@@ -327,9 +390,7 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           error: "این قطعه قبلاً در این ایستگاه رد شده است",
-          productName: item.productName,
-          orderNumber: item.productionOrder.order?.orderNumber,
-          stationName: stationRow.station.name,
+          ...detailPayload(item, stationRow, raw),
         },
         { status: 400 }
       )
@@ -347,10 +408,8 @@ export async function POST(req: Request) {
       )
     }
 
-    // فقط برش قبل از بقیه اجباری است. قطعه‌ای که ایستگاه برش ندارد
-    // (سفارش اجرتیِ بدون «اجرت برش») مستقیم از ایستگاه اولش رد می‌شود.
     if (!isCutStation(stationRow.station.name)) {
-      const cut = item.stations.find((s) => isCutStation(s.station.name))
+      const cut = item.stations.find((s: any) => isCutStation(s.station.name))
       if (cut && cut.status !== "تکمیل شده") {
         return NextResponse.json(
           {
@@ -365,21 +424,11 @@ export async function POST(req: Request) {
 
     const fullQty = stationRow.quantityIn || item.quantity || 1
 
-    if (fullQty > 1 && !confirmed) {
-      const salesOrderEarly = item.productionOrder.order
+    if (fullQty >= 5 && !confirmed) {
       return NextResponse.json({
         needsConfirmation: true,
         quantity: fullQty,
-        productName: item.productName,
-        orderNumber: salesOrderEarly?.orderNumber,
-        customerName: salesOrderEarly?.customer?.name,
-        stationName: stationRow.station.name,
-        barcode: raw,
-        length: item.length,
-        width: item.width,
-        meterage: item.meterage,
-        mapImageUrl: (salesOrderEarly as any)?.mapImageUrl || null,
-        mapImages: (salesOrderEarly as any)?.mapImages || null,
+        ...detailPayload(item, stationRow, raw),
       })
     }
 
@@ -387,10 +436,7 @@ export async function POST(req: Request) {
     if (quantityDone != null && quantityDone !== "") {
       const n = parseInt(String(quantityDone), 10)
       if (!n || n < 1) {
-        return NextResponse.json(
-          { error: "تعداد نامعتبر است" },
-          { status: 400 }
-        )
+        return NextResponse.json({ error: "تعداد نامعتبر است" }, { status: 400 })
       }
       if (n > fullQty) {
         return NextResponse.json(
@@ -429,7 +475,6 @@ export async function POST(req: Request) {
         },
       })
 
-      // تراش ۱ یا ۲
       if (isBevelPair(stationRow.station.name)) {
         for (const s of item.stations) {
           if (
@@ -465,7 +510,6 @@ export async function POST(req: Request) {
         }
       }
 
-      // انبار کالای نیمه‌ساخته
       if (isSemiFinishedWh(stationRow.station.name)) {
         for (const s of item.stations) {
           if (s.id === stationRow.id) continue
@@ -536,41 +580,15 @@ export async function POST(req: Request) {
       },
     })
 
-    const salesOrder = item.productionOrder.order
-    const salesItem =
-      salesOrder?.items?.find((si) => si.id === item.orderItemId) || null
-    const servicesText = buildServicesText(
-      (salesItem as any)?.servicesData ?? null
-    )
-
     return NextResponse.json({
       success: true,
+      preview: false,
       message:
         remaining > 0
           ? `رد شد: ${item.productName} (${qty} از ${fullQty}) — باقی: ${remaining}`
           : `رد شد: ${item.productName} (${qty} عدد)`,
-      productName: item.productName,
-      orderNumber: salesOrder?.orderNumber,
-      customerName: salesOrder?.customer?.name,
-      stationName: stationRow.station.name,
-      barcode: raw,
-      quantity: qty,
       remaining,
-      length: item.length,
-      width: item.width,
-      meterage: item.meterage,
-      notes: item.notes || (salesItem as any)?.notes || null,
-      servicesText,
-      installationCode: (salesItem as any)?.installationCode || null,
-      mapImageUrl: (salesOrder as any)?.mapImageUrl || null,
-      mapImages: (salesOrder as any)?.mapImages || null,
-      orderDate: salesOrder?.orderDate
-        ? salesOrder.orderDate.toISOString()
-        : null,
-      deliveryDate: salesOrder?.deliveryDate
-        ? salesOrder.deliveryDate.toISOString()
-        : null,
-      priority: item.productionOrder.priority,
+      ...detailPayload(item, stationRow, raw, { quantity: qty }),
     })
   } catch (error: any) {
     console.error(error)
