@@ -74,7 +74,7 @@ function findPassedLaterStation(stations: any[], current: any) {
   )
 }
 
-async function findItemByBarcode(raw: string, include: any) {
+async function findItemByBarcode(raw: string, include: any): Promise<any> {
   const code = cleanBarcode(raw)
   const baseBarcode = code.includes("-") ? code.split("-")[0] : code
 

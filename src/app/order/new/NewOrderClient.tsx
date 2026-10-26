@@ -2905,7 +2905,7 @@ export default function NewOrderClient() {
                       calendar={persian}
                       locale={persian_fa}
                       calendarPosition="bottom-right"
-                      inputCompactClass={dateInputCompactClass}
+                      inputClass={dateInputCompactClass}
                       containerClassName="w-full"
                       style={{ width: "100%", height: "42px" }}
                       portal
@@ -2942,7 +2942,7 @@ export default function NewOrderClient() {
                       calendar={persian}
                       locale={persian_fa}
                       calendarPosition="bottom-right"
-                      inputCompactClass={dateInputCompactClass}
+                      inputClass={dateInputCompactClass}
                       containerClassName="w-full"
                       style={{ width: "100%", height: "42px" }}
                       portal
