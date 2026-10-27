@@ -230,6 +230,27 @@ function isDuplicateError(e: any) {
   return /VALIDATION_ERROR/.test(m) && /تکراری|duplicate/i.test(m)
 }
 
+// طرف‌حسابِ تازه‌ساخته‌شده را برای خواندن کدش پیدا می‌کند.
+// اول خواندن هدفمند (IsCustomer لازم است؛ AfterPartyId ممکن است پشتیبانی نشود)،
+// اگر پیدا نشد لیست کامل تازه خوانده می‌شود.
+async function readCreatedParty(id: number | string): Promise<PartyRow | null> {
+  try {
+    const page = await sepidarGet("/api/sepidar/v1/Parties/GetAllParty", {
+      IsCustomer: true,
+      AfterPartyId: Number(id) - 1,
+      Page: 1,
+      ItemCount: 5,
+    })
+    const hit = extractList(page).find((p) => String(pickId(p, PARTY_ID_KEYS)) === String(id))
+    if (hit) return hit
+  } catch (e) {
+    console.error("Sepidar: خواندن هدفمند طرف‌حساب تازه‌ساخته‌شده ممکن نشد؛ لیست کامل خوانده می‌شود", e)
+  }
+  partyCache = null
+  const list = await loadParties()
+  return list.find((p) => String(pickId(p, PARTY_ID_KEYS)) === String(id)) ?? null
+}
+
 // کد سپیدار را روی مشتری اخوان می‌نویسد.
 // force=false (پیش‌فرض، برای مشتری‌های قدیمی): فقط اگر کد فعلی موقت/خالی باشد؛ کد عددی واقعی بازنویسی نمی‌شود.
 // force=true (فقط برای مشتری‌ای که همین حالا در سپیدار ساخته شده): کد سپیدار مرجع است و همیشه نوشته می‌شود.
@@ -287,6 +308,42 @@ export async function linkCustomerToSepidarParty(customerId: string, partyRef: n
     data: { sepidarPartyRef: Number(partyRef) } as any,
   })
   return { partyRef: Number(partyRef) }
+}
+
+// پاک کردن لینک مشتری به سپیدار تا دفعه‌ی بعد دوباره از اول تطبیق داده شود.
+// کد مشتری به کد seed برمی‌گردد (یا خالی می‌شود اگر در seed نیست)، چون کد دیتابیس در تطبیق بر seed مقدم است
+// و اگر قبلاً با کد اشتباه سپیدار بازنویسی شده باشد، همان اشتباه تکرار می‌شد.
+export async function resetCustomerSepidarLink(customerId: string) {
+  const cur = await prisma.customer.findUnique({
+    where: { id: customerId },
+    select: { name: true, customerCode: true, sepidarPartyRef: true },
+  })
+  if (!cur) throw new Error("مشتری یافت نشد")
+
+  const seedCode = seedCodeByName.get(nameKey(cur.name)) || null
+  partyCache = null
+
+  let restoredCode: string | null = seedCode
+  try {
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: { sepidarPartyRef: null, customerCode: seedCode } as any,
+    })
+  } catch (e) {
+    // کد seed ممکن است روی مشتری دیگری ثبت شده باشد (customerCode یکتاست)؛ فقط لینک را پاک می‌کنیم
+    console.error("Sepidar: بازگرداندن کد seed ممکن نشد؛ کد خالی می‌شود", e)
+    restoredCode = null
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: { sepidarPartyRef: null, customerCode: null } as any,
+    })
+  }
+
+  return {
+    name: cur.name,
+    before: { partyRef: cur.sepidarPartyRef ?? null, code: cur.customerCode ?? null },
+    after: { partyRef: null, code: restoredCode },
+  }
 }
 
 type EnsureResult = {
@@ -385,16 +442,8 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
         (o) => o && typeof o === "object" && cleanCode(o.dlCode ?? o.DlCode)
       ) ?? null
 
-    // ۲) وگرنه فقط همان یک طرف‌حساب را می‌خوانیم (نه کل لیست)
-    if (!createdParty) {
-      const page = await sepidarGet("/api/sepidar/v1/Parties/GetAllParty", {
-        AfterPartyId: Number(id) - 1,
-        Page: 1,
-        ItemCount: 5,
-      })
-      createdParty =
-        extractList(page).find((p) => String(pickId(p, PARTY_ID_KEYS)) === String(id)) ?? null
-    }
+    // ۲) وگرنه همان طرف‌حساب را از سپیدار می‌خوانیم
+    if (!createdParty) createdParty = await readCreatedParty(id)
 
     if (createdParty) {
       sepidarCode = await syncCodeFromSepidar(customerId, createdParty, { force: true })
