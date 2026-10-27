@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma"
-import { sepidarPost, getAll, isMockMode, pickId } from "./client"
+import { sepidarPost, sepidarGet, extractList, getAll, isMockMode, pickId } from "./client"
 import customersSeedRaw from "@/app/customers/customers-seed.json"
 
 function norm(s: string) {
@@ -230,8 +230,14 @@ function isDuplicateError(e: any) {
   return /VALIDATION_ERROR/.test(m) && /تکراری|duplicate/i.test(m)
 }
 
-// کد سپیدار را روی مشتری اخوان می‌نویسد (فقط اگر کد فعلی موقت/خالی باشد؛ کد عددی واقعی بازنویسی نمی‌شود)
-async function syncCodeFromSepidar(customerId: string, party: PartyRow): Promise<string | null> {
+// کد سپیدار را روی مشتری اخوان می‌نویسد.
+// force=false (پیش‌فرض، برای مشتری‌های قدیمی): فقط اگر کد فعلی موقت/خالی باشد؛ کد عددی واقعی بازنویسی نمی‌شود.
+// force=true (فقط برای مشتری‌ای که همین حالا در سپیدار ساخته شده): کد سپیدار مرجع است و همیشه نوشته می‌شود.
+async function syncCodeFromSepidar(
+  customerId: string,
+  party: PartyRow,
+  opts: { force?: boolean } = {}
+): Promise<string | null> {
   const sepCode = cleanCode(party?.dlCode ?? party?.DlCode)
   if (!sepCode) return null
   try {
@@ -239,7 +245,9 @@ async function syncCodeFromSepidar(customerId: string, party: PartyRow): Promise
       where: { id: customerId },
       select: { customerCode: true },
     })
-    if (cleanCode(cur?.customerCode)) return sepCode
+    const curCode = cleanCode(cur?.customerCode)
+    if (curCode === sepCode) return sepCode
+    if (!opts.force && curCode) return sepCode
     await prisma.customer.update({
       where: { id: customerId },
       data: { customerCode: sepCode } as any,
@@ -368,12 +376,31 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
     data: { sepidarPartyRef: Number(id) } as any,
   })
 
-  // کدی که سپیدار به مشتری جدید داده را روی مشتری اخوان هم می‌نویسیم تا دو سیستم یک کد داشته باشند
+  // کد سپیدار مرجع است: روی مشتری اخوان هم می‌نویسیم تا دو سیستم یک کد داشته باشند
   let sepidarCode: string | null = null
   try {
-    const list = await loadParties()
-    const createdParty = list.find((p) => String(pickId(p, PARTY_ID_KEYS)) === String(id))
-    if (createdParty) sepidarCode = await syncCodeFromSepidar(customerId, createdParty)
+    // ۱) اگر خود CreateParty کد را برگردانده باشد، همان
+    let createdParty: any =
+      [result, result?.data, result?.result].find(
+        (o) => o && typeof o === "object" && cleanCode(o.dlCode ?? o.DlCode)
+      ) ?? null
+
+    // ۲) وگرنه فقط همان یک طرف‌حساب را می‌خوانیم (نه کل لیست)
+    if (!createdParty) {
+      const page = await sepidarGet("/api/sepidar/v1/Parties/GetAllParty", {
+        AfterPartyId: Number(id) - 1,
+        Page: 1,
+        ItemCount: 5,
+      })
+      createdParty =
+        extractList(page).find((p) => String(pickId(p, PARTY_ID_KEYS)) === String(id)) ?? null
+    }
+
+    if (createdParty) {
+      sepidarCode = await syncCodeFromSepidar(customerId, createdParty, { force: true })
+    } else {
+      console.error(`Sepidar: طرف‌حساب ${id} بعد از ساخت پیدا نشد؛ کد روی مشتری نوشته نشد`)
+    }
   } catch (e) {
     console.error("Sepidar: خواندن کد مشتری تازه‌ساخته‌شده ممکن نشد", e)
   }
@@ -391,7 +418,9 @@ const inflightByCustomer = new Map<string, Promise<EnsureResult>>()
  * 2) اگر طرف‌حسابی با همان کد (از seed یا دیتابیس) هست، به آن لینک می‌کند
  * 3) اگر طرف‌حسابی با همین نام (با هر ترتیب کلمات) هست، به آن لینک می‌کند
  * 4) در غیر این صورت با CreateParty می‌سازد؛ اگر سپیدار «تکراری» گفت، دوباره جستجو و لینک می‌کند
- * در هر حالت، کد سپیدار روی مشتری اخوان هم نوشته می‌شود (اگر کد فعلی موقت باشد).
+ * کد سپیدار روی مشتری اخوان هم نوشته می‌شود:
+ *  - برای مشتری قدیمی (لینک‌شده): فقط اگر کد فعلی موقت/خالی باشد
+ *  - برای مشتری تازه‌ساخته‌شده در سپیدار: همیشه (کد سپیدار مرجع است)
  */
 export function ensureSepidarParty(customerId: string): Promise<EnsureResult> {
   const running = inflightByCustomer.get(customerId)

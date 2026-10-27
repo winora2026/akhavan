@@ -6,6 +6,46 @@ import { buildServicesText } from "@/lib/production/servicesText"
 // ۴ عدد و کمتر مثل قبل برای هر عدد یک لیبل جدا چاپ می‌شود
 const BULK_LABEL_THRESHOLD = 4
 
+/**
+ * پیدا کردن قلم فروش (OrderItem) متناظر با قطعه‌ی تولید.
+ * اول با شناسه؛ اگر پیدا نشد (مثلاً سفارش بعد از ساخت تولید ویرایش شده و شناسه‌ی اقلام عوض شده)
+ * با نام کالا + طول + عرض، ولی فقط وقتی نتیجه یکتا باشد (یا همه‌ی گزینه‌ها توضیحات و خدمات
+ * یکسان داشته باشند) تا توضیحات یک قطعه روی لیبل قطعه‌ی دیگر نیفتد.
+ */
+function resolveSalesItem(
+  order: any,
+  item: {
+    orderItemId?: string | null
+    productName?: string | null
+    length?: number | null
+    width?: number | null
+  }
+) {
+  const list = order?.items
+  if (!Array.isArray(list) || list.length === 0) return null
+
+  if (item.orderItemId) {
+    const byId = list.find((si: any) => si.id === item.orderItemId)
+    if (byId) return byId
+  }
+
+  const name = (item.productName || "").trim()
+  if (!name) return null
+
+  const same = list.filter(
+    (si: any) =>
+      (si.productName || "").trim() === name &&
+      Number(si.length) === Number(item.length) &&
+      Number(si.width) === Number(item.width)
+  )
+  if (same.length === 1) return same[0]
+  if (same.length > 1) {
+    const sig = (si: any) => JSON.stringify([si.notes || "", si.servicesData || ""])
+    if (same.every((si: any) => sig(si) === sig(same[0]))) return same[0]
+  }
+  return null
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -171,13 +211,14 @@ export async function POST(req: Request) {
         const qty = item.quantity || 1
         const order = item.productionOrder.order
 
-        const salesItem = order?.items?.find((si) => si.id === item.orderItemId)
+        // قلم فروش: با شناسه، و در صورت نبودن شناسه با نام + طول + عرض (فقط اگر یکتا باشد)
+        const salesItem = resolveSalesItem(order, item)
         const servicesText = buildServicesText(
           (salesItem as any)?.servicesData ?? null
         )
 
         const recutNumber = (item as any).recutNumber || 0
-        const baseNotes = item.notes || salesItem?.notes || ""
+        const baseNotes = item.notes || (salesItem as any)?.notes || ""
         const notes =
           recutNumber > 0
             ? `برش مجدد ${recutNumber}${baseNotes ? " | " + baseNotes : ""}`
