@@ -6,6 +6,7 @@ import Link from "next/link"
 import DatePicker, { DateObject } from "react-multi-date-picker"
 import persian from "react-date-object/calendars/persian"
 import persian_fa from "react-date-object/locales/persian_fa"
+import customersSeedRaw from "../customers/customers-seed.json"
 
 type OrderFromApi = {
   id: string
@@ -34,9 +35,13 @@ type OrderFromApi = {
   sepidarInvoiceId?: string | null
   sepidarSyncedAt?: string | null
   sepidarSyncError?: string | null
+  smsStatus?: string | null
+  smsSentAt?: string | null
+  smsError?: string | null
   customer: {
     id: string
     name: string
+    customerCode?: string | null
     customerGroup: string | null
   }
   items: {
@@ -53,6 +58,7 @@ type OrderFromApi = {
 }
 
 type SortKey =
+  | "customerCode"
   | "customer"
   | "orderNumber"
   | "customerOrderNumber"
@@ -93,6 +99,11 @@ const PERSIAN_MONTHS = [
 ]
 
 const PERSIAN_DATE_REGEX = /^\d{3,4}\/\d{1,2}\/\d{1,2}$/
+
+// فیلترهای انتخاب‌شده در مرورگر ذخیره می‌شوند تا با رفتن به صفحه‌ی دیگر و برگشتن، دوباره از اول نباشد.
+// فیلترهایی که قدیمی‌تر از این مدت باشند نادیده گرفته می‌شوند (تا فردا با فیلترِ دیروز باز نشود).
+const FILTERS_KEY = "invoicesPageFilters"
+const FILTERS_TTL_MS = 12 * 60 * 60 * 1000
 
 const parseOrderDate = (dateStr: string | null | undefined): Date | null => {
   if (!dateStr) return null
@@ -140,6 +151,32 @@ const formatDate = (dateStr: string | null | undefined) => {
   } catch {
     return dateStr || "—"
   }
+}
+
+// کدهای مشتریان قدیمی (از فایل لیست مشتریان): نام نرمال‌شده → کد
+const seedCodeByName = (() => {
+  const map = new Map<string, string>()
+  ;(customersSeedRaw as any[]).forEach((c: any) => {
+    const code = String(c.code || "").trim()
+    if (!code) return
+    const names = [
+      c.companyName,
+      `${c.lastName || ""} ${c.firstName || ""}`,
+      `${c.firstName || ""} ${c.lastName || ""}`,
+    ]
+    names.forEach((n) => {
+      const key = normalizeText(String(n || ""))
+      if (key && !map.has(key)) map.set(key, code)
+    })
+  })
+  return map
+})()
+
+// کد مشتری: اگر در دیتابیس کد واقعی ثبت شده همان؛ وگرنه (کدهای خودکارِ C-عدد) از لیست مشتریان قدیمی به‌اسم پیدا می‌شود
+function getCustomerCode(order: OrderFromApi): string {
+  const dbCode = String(order.customer?.customerCode || "").trim()
+  if (dbCode && !/^C-\d{8,}$/.test(dbCode)) return dbCode
+  return seedCodeByName.get(normalizeText(order.customer?.name)) || ""
 }
 
 const isSameLocalDay = (a: Date, b: Date) =>
@@ -200,12 +237,85 @@ export default function InvoicesPage() {
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [syncingId, setSyncingId] = useState<string | null>(null)
   const [bulkSyncing, setBulkSyncing] = useState(false)
+  const [smsSendingId, setSmsSendingId] = useState<string | null>(null)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [canSyncSepidar, setCanSyncSepidar] = useState(false)
   // پیش‌فرض: فقط فاکتورهای امروز؛ با گذشتن از نیمه‌شب صفحه خودکار روی روز جدید (خالی) می‌رود.
   // برای روزهای قبل از «از تاریخ / تا تاریخ» یا «همه روزها» استفاده کنید.
   const [dayFilter, setDayFilter] = useState<"today" | "all">("today")
   const [dayKey, setDayKey] = useState(() => new Date().toDateString())
+  // بعد از بازیابی فیلترهای ذخیره‌شده true می‌شود؛ تا آن موقع چیزی ذخیره نمی‌شود (تا مقادیر اولیه روی ذخیره‌ها ننشینند)
+  const [filtersReady, setFiltersReady] = useState(false)
+
+  // بازیابی فیلترهای قبلی (اگر کمتر از ۱۲ ساعت پیش ذخیره شده باشند)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(FILTERS_KEY)
+      if (raw) {
+        const f = JSON.parse(raw)
+        if (f && Date.now() - (Number(f.savedAt) || 0) < FILTERS_TTL_MS) {
+          const toDateObject = (iso: string) =>
+            new DateObject({ date: new Date(iso), calendar: persian, locale: persian_fa })
+          if (typeof f.search === "string") setSearch(f.search)
+          if (f.fromDate) setFromDate(toDateObject(f.fromDate))
+          if (f.toDate) setToDate(toDateObject(f.toDate))
+          if (typeof f.selectedMonth === "string") setSelectedMonth(f.selectedMonth)
+          if (typeof f.selectedExpert === "string") setSelectedExpert(f.selectedExpert)
+          if (f.dayFilter === "today" || f.dayFilter === "all") setDayFilter(f.dayFilter)
+          if (typeof f.sortKey === "string") setSortKey(f.sortKey as SortKey)
+          if (f.sortDir === "asc" || f.sortDir === "desc") setSortDir(f.sortDir)
+        }
+      }
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setFiltersReady(true)
+    }
+  }, [])
+
+  // ذخیره‌ی خودکار فیلترها با هر تغییر
+  useEffect(() => {
+    if (!filtersReady) return
+    try {
+      localStorage.setItem(
+        FILTERS_KEY,
+        JSON.stringify({
+          savedAt: Date.now(),
+          search,
+          fromDate: fromDate?.toDate ? fromDate.toDate().toISOString() : null,
+          toDate: toDate?.toDate ? toDate.toDate().toISOString() : null,
+          selectedMonth,
+          selectedExpert,
+          dayFilter,
+          sortKey,
+          sortDir,
+        })
+      )
+    } catch (e) {
+      console.error(e)
+    }
+  }, [
+    filtersReady,
+    search,
+    fromDate,
+    toDate,
+    selectedMonth,
+    selectedExpert,
+    dayFilter,
+    sortKey,
+    sortDir,
+  ])
+
+  const resetFilters = () => {
+    setSearch("")
+    setFromDate(null)
+    setToDate(null)
+    setSelectedMonth("همه")
+    setSelectedExpert("همه کارشناسان")
+    setDayFilter("today")
+    setSortKey("invoiceDate")
+    setSortDir("desc")
+  }
 
   useEffect(() => {
     fetchOrders()
@@ -402,6 +512,41 @@ export default function InvoicesPage() {
     }
   }
 
+  // ارسال پیامک «ثبت سفارش» به مشتری (متن و شماره‌گیری سمت سرور انجام می‌شود)
+  const sendSmsToCustomer = async (order: OrderFromApi) => {
+    const already = order.smsStatus === "SENT"
+    const question = already
+      ? `پیامک فاکتور ${order.orderNumber} قبلاً ارسال شده.\nدوباره برای ${order.customer?.name} ارسال شود؟`
+      : `پیامک ثبت سفارش ${order.orderNumber} برای ${order.customer?.name} ارسال شود؟`
+    if (!confirm(question)) return
+    setSmsSendingId(order.id)
+    try {
+      const res = await fetch("/api/sms/send-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: order.id, force: already }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        alert(data.error || "خطا در ارسال پیامک")
+        await fetchOrders(true)
+        return
+      }
+      if (data.mock) {
+        alert(
+          `حالت آزمایشی: پیامک واقعی ارسال نشد.\n\nبه شماره: ${data.mobile}\n\nمتن:\n${data.text}`
+        )
+      } else {
+        alert("پیامک ارسال شد")
+      }
+      await fetchOrders(true)
+    } catch {
+      alert("خطا در ارتباط با سرور")
+    } finally {
+      setSmsSendingId(null)
+    }
+  }
+
   const salesExperts = useMemo(() => {
     const fromData = orders
       .map((o) => getInvoiceExpert(o))
@@ -454,6 +599,7 @@ export default function InvoicesPage() {
       result = result.filter((item) => {
         const haystack = normalizeText(
           [
+            getCustomerCode(item),
             item.customer?.name,
             item.orderNumber,
             item.customerOrderNumber,
@@ -513,6 +659,13 @@ export default function InvoicesPage() {
       const priceA = getTotalPrice(a)
       const priceB = getTotalPrice(b)
       switch (sortKey) {
+        case "customerCode":
+          return (
+            dir *
+            getCustomerCode(a).localeCompare(getCustomerCode(b), "fa", {
+              numeric: true,
+            })
+          )
         case "customer":
           return (
             dir *
@@ -705,8 +858,8 @@ export default function InvoicesPage() {
                 className="rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed px-5 py-3 text-base font-bold text-white shadow transition focus:outline-none focus:ring-2 focus:ring-indigo-400"
               >
                 {bulkSyncing
-                  ? "در حال ارسال گروهی..."
-                  : `ارسال انتخاب‌شده‌ها (${selectedIds.length})`}
+                  ? "در حال ارسال گروهی به سپیدار..."
+                  : `ارسال انتخاب‌شده‌ها به سپیدار (${selectedIds.length})`}
               </button>
             )}
             <Link
@@ -746,6 +899,14 @@ export default function InvoicesPage() {
             >
               همه روزها
             </button>
+            <button
+              type="button"
+              onClick={resetFilters}
+              title="همه‌ی فیلترها و مرتب‌سازی به حالت اول برمی‌گردد"
+              className="rounded-xl px-4 py-2 text-sm font-bold bg-white/50 text-rose-700 border border-rose-300/60 hover:bg-rose-50 transition"
+            >
+              بازنشانی فیلترها
+            </button>
             {dayFilter === "today" && (
               <span className="text-xs font-semibold text-blue-700 mr-2">
                 برای دیدن روزهای قبل، «از تاریخ / تا تاریخ» را انتخاب کنید.
@@ -761,7 +922,7 @@ export default function InvoicesPage() {
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="نام مشتری / شماره سفارش / کارشناس..."
+                placeholder="کد / نام مشتری / شماره سفارش / کارشناس..."
                 className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400 hover:bg-yellow-100 transition"
               />
             </div>
@@ -867,6 +1028,12 @@ export default function InvoicesPage() {
                     </th>
                   )}
                   <th className="p-3 font-bold text-center">ردیف</th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("customerCode")}
+                  >
+                    کد مشتری{sortIndicator("customerCode")}
+                  </th>
                   <th className={thClass} onClick={() => toggleSort("customer")}>
                     نام مشتری{sortIndicator("customer")}
                   </th>
@@ -949,12 +1116,14 @@ export default function InvoicesPage() {
                     منتقل‌کننده{sortIndicator("salesRep")}
                   </th>
                   <th className="p-3 font-bold text-center">سپیدار</th>
+                  <th className="p-3 font-bold text-center">پیامک</th>
                   <th className="p-3 font-bold text-center">عملیات</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((item, index) => {
                   const vat = getVatAmount(item)
+                  const customerCode = getCustomerCode(item)
                   return (
                     <tr
                       key={item.id}
@@ -978,6 +1147,9 @@ export default function InvoicesPage() {
                         </td>
                       )}
                       <td className="p-3 text-center font-bold">{index + 1}</td>
+                      <td className="p-3 text-center font-mono font-semibold text-teal-700 whitespace-nowrap">
+                        {customerCode || "—"}
+                      </td>
                       <td className="p-3 font-bold whitespace-nowrap">
                         {item.customer?.name || "—"}
                       </td>
@@ -1052,6 +1224,52 @@ export default function InvoicesPage() {
                         ) : (
                           <span className="text-xs text-gray-500">—</span>
                         )}
+                      </td>
+                      <td
+                        className="p-3 text-center"
+                        onDoubleClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="flex flex-col gap-1 items-center">
+                          {item.smsStatus === "SENT" ? (
+                            <span
+                              className="inline-block rounded-lg bg-green-100 text-green-800 text-xs font-bold px-2 py-1"
+                              title={
+                                item.smsSentAt
+                                  ? `ارسال: ${formatDate(item.smsSentAt)}`
+                                  : ""
+                              }
+                            >
+                              ✓ ارسال‌شده
+                            </span>
+                          ) : item.smsStatus === "FAILED" ? (
+                            <span
+                              className="inline-block rounded-lg bg-red-100 text-red-800 text-xs font-bold px-2 py-1"
+                              title={item.smsError || ""}
+                            >
+                              خطا
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-500">—</span>
+                          )}
+                          <button
+                            type="button"
+                            disabled={smsSendingId === item.id}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              sendSmsToCustomer(item)
+                            }}
+                            className="rounded-lg bg-sky-600 hover:bg-sky-700 disabled:bg-gray-400 disabled:cursor-not-allowed px-3 py-1.5 text-xs font-bold text-white transition focus:ring-2 focus:ring-sky-400"
+                            title={item.smsError || "ارسال پیامک ثبت سفارش به مشتری"}
+                          >
+                            {smsSendingId === item.id
+                              ? "..."
+                              : item.smsStatus === "SENT"
+                                ? "ارسال مجدد"
+                                : item.smsStatus === "FAILED"
+                                  ? "تلاش مجدد"
+                                  : "ارسال پیامک"}
+                          </button>
+                        </div>
                       </td>
                       <td
                         className="p-3 text-center"
