@@ -16,7 +16,11 @@ function buildServicesText(servicesData: any): string {
       typeof servicesData === "string" ? JSON.parse(servicesData) : servicesData
     if (!Array.isArray(parsed)) return ""
     return parsed
-      .map((s: any) => s.title || s.name)
+      .map((s: any) =>
+        typeof s === "string"
+          ? s
+          : s?.title || s?.name || s?.label || s?.serviceName || s?.service || ""
+      )
       .filter(Boolean)
       .join(" + ")
   } catch {
@@ -174,12 +178,61 @@ export async function GET(req: Request) {
       return true
     })
 
+    // تعداد قلم‌هایی که در همین ایستگاه برای هر سفارش تولیدی «رد شده‌اند»؛
+    // برای نمایش «۳ قلم باقی‌مانده از ۵ قلم» در کارتابل
+    const orderIds = Array.from(
+      new Set(
+        [...rows, ...doneRows].map((r) => r.productionItem.productionOrder.id)
+      )
+    )
+    const doneByOrder = new Map<string, number>()
+    if (orderIds.length > 0) {
+      const doneAll = await prisma.productionItemStation.findMany({
+        where: {
+          stationId,
+          status: "تکمیل شده",
+          productionItem: { productionOrder: { id: { in: orderIds } } },
+        },
+        select: {
+          productionItem: {
+            select: { productionOrder: { select: { id: true } } },
+          },
+        },
+      })
+      for (const d of doneAll) {
+        const oid = d.productionItem.productionOrder.id
+        doneByOrder.set(oid, (doneByOrder.get(oid) || 0) + 1)
+      }
+    }
+
+    /**
+     * پیدا کردن قلم فروش مربوط به قطعه‌ی تولید.
+     * اگر فاکتور بعد از ورود به تولید ویرایش شود، ممکن است قلم‌های فروش با شناسه‌ی جدید ساخته شوند و
+     * orderItemId قدیمی دیگر پیدا نشود؛ در این حالت با نام کالا و ابعاد تطبیق می‌دهیم
+     * تا «سختی کار» و توضیحات از بین نروند.
+     */
+    const matchSalesItem = (item: any, salesOrder: any) => {
+      const list: any[] = salesOrder?.items || []
+      const byId = list.find((si) => si.id === item.orderItemId)
+      if (byId) return byId
+      const nm = (v: any) => norm(String(v ?? ""))
+      const siName = (si: any) => si.productName ?? si.name ?? si.product?.name
+      const same = list.filter(
+        (si) =>
+          nm(siName(si)) === nm(item.productName) &&
+          Number(si.length || 0) === Number(item.length || 0) &&
+          Number(si.width || 0) === Number(item.width || 0)
+      )
+      if (same.length > 0) return same[0]
+      const byName = list.filter((si) => nm(siName(si)) === nm(item.productName))
+      return byName.length === 1 ? byName[0] : null
+    }
+
     const buildItem = (row: (typeof rows)[number]) => {
       const item = row.productionItem
       const order = item.productionOrder
       const salesOrder = order.order
-      const salesItem =
-        salesOrder?.items?.find((si) => si.id === item.orderItemId) || null
+      const salesItem = matchSalesItem(item, salesOrder)
 
       return {
         id: row.id,
@@ -202,6 +255,20 @@ export async function GET(req: Request) {
           status: item.status,
           barcode: item.barcode,
           notes: item.notes || (salesItem as any)?.notes || null,
+          // روند کاری قطعه: همه‌ی ایستگاه‌های مسیر به‌ترتیب (برای دیدن در کارتابل انبارها)
+          route: (item.stations || [])
+            .slice()
+            .sort((a: any, b: any) => (a.sequence ?? 0) - (b.sequence ?? 0))
+            .map((s: any) => ({
+              id: s.id,
+              name: s.station?.name || "—",
+              sequence: s.sequence ?? 0,
+              status: s.status,
+              quantityIn: s.quantityIn ?? null,
+              quantityOut: s.quantityOut ?? 0,
+              completedAt: s.completedAt ? s.completedAt.toISOString() : null,
+              operatorId: s.operatorId || null,
+            })),
           servicesText: buildServicesText(
             (salesItem as any)?.servicesData ?? null
           ),
@@ -218,6 +285,7 @@ export async function GET(req: Request) {
             id: order.id,
             productionNumber: order.productionNumber,
             priority: order.priority,
+            stationDoneItems: doneByOrder.get(order.id) || 0,
             order: {
               orderNumber: salesOrder?.orderNumber,
               customer: { name: salesOrder?.customer?.name || "—" },

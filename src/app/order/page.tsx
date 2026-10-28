@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import Link from "next/link"
 import DatePicker, { DateObject } from "react-multi-date-picker"
 import persian from "react-date-object/calendars/persian"
@@ -32,6 +32,9 @@ type OrderFromApi = {
     id: string
     name: string
     customerGroup: string | null
+    // کد مشتری (بسته به خروجی /api/orders یکی از این دو فیلد پر می‌شود)
+    customerCode?: string | null
+    code?: string | null
   }
   items: {
     id: string
@@ -43,6 +46,7 @@ type OrderFromApi = {
 
 type SortKey =
   | "customer"
+  | "customerCode"
   | "orderNumber"
   | "customerOrderNumber"
   | "orderDate"
@@ -83,6 +87,30 @@ const PERSIAN_MONTHS = [
 ]
 
 const PERSIAN_DATE_REGEX = /^\d{3,4}\/\d{1,2}\/\d{1,2}$/
+
+// ===== ذخیره‌ی حالت فیلترها (برای وقتی به صفحه‌ی دیگر می‌رویم و برمی‌گردیم) =====
+// در sessionStorage نگه داشته می‌شود: با رفتن به صفحه‌ی دیگر و برگشتن می‌ماند،
+// ولی با بستن تب پاک می‌شود تا روز بعد با فیلترهای کهنه شروع نشود.
+const FILTERS_STORAGE_KEY = "preInvoicesFilters"
+const SCROLL_STORAGE_KEY = "preInvoicesTableScroll"
+
+const serializeFilterDate = (d: any): string | null =>
+  d && typeof d.toDate === "function" ? d.toDate().toISOString() : null
+const deserializeFilterDate = (iso: string | null | undefined) =>
+  iso
+    ? new DateObject({
+        date: new Date(iso),
+        calendar: persian,
+        locale: persian_fa,
+      })
+    : null
+
+// کد مشتری واقعی (کدهای خودکارِ «C-...» که سیستم برای مشتریان جدید می‌سازد نمایش داده نمی‌شوند)
+const getCustomerCode = (o: OrderFromApi) => {
+  const code = String(o.customer?.customerCode || o.customer?.code || "").trim()
+  if (!code || code.startsWith("C-")) return ""
+  return code
+}
 
 const parseOrderDate = (dateStr: string | null | undefined): Date | null => {
   if (!dateStr) return null
@@ -210,6 +238,82 @@ export default function PreInvoicesPage() {
   const [currentUserName, setCurrentUserName] = useState<string | null>(null)
   // پیش‌نمایش کامل پیش‌فاکتور با دبل‌کلیک روی ردیف (iframe همان صفحه‌ی ثبت سفارش در حالت preview)
   const [previewId, setPreviewId] = useState<string | null>(null)
+
+  // آیا فیلترهای ذخیره‌شده بازیابی شده‌اند؟ تا قبل از آن، افکت ذخیره چیزی نمی‌نویسد
+  // (تا مقادیر پیش‌فرضِ اولیه، حالت ذخیره‌شده را بازنویسی نکنند)
+  const [filtersRestored, setFiltersRestored] = useState(false)
+  const tableRef = useRef<HTMLDivElement>(null)
+  const scrollRestoredRef = useRef(false)
+
+  // بازیابی فیلترها فقط در کلاینت (بعد از mount) تا با رندر سمت سرور ناسازگاری ایجاد نشود
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(FILTERS_STORAGE_KEY)
+      if (raw) {
+        const f = JSON.parse(raw)
+        if (typeof f.search === "string") setSearch(f.search)
+        if (f.fromDate) setFromDate(deserializeFilterDate(f.fromDate))
+        if (f.toDate) setToDate(deserializeFilterDate(f.toDate))
+        if (typeof f.selectedMonth === "string") setSelectedMonth(f.selectedMonth)
+        if (typeof f.selectedExpert === "string") setSelectedExpert(f.selectedExpert)
+        if (f.statusFilter === "pre" || f.statusFilter === "invoice" || f.statusFilter === "all")
+          setStatusFilter(f.statusFilter)
+        if (f.dayFilter === "all" || f.dayFilter === "today") setDayFilter(f.dayFilter)
+        if (f.sortKey) setSortKey(f.sortKey)
+        if (f.sortDir === "asc" || f.sortDir === "desc") setSortDir(f.sortDir)
+      }
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setFiltersRestored(true)
+    }
+  }, [])
+
+  // ذخیره‌ی خودکار فیلترها با هر تغییر
+  useEffect(() => {
+    if (!filtersRestored) return
+    try {
+      sessionStorage.setItem(
+        FILTERS_STORAGE_KEY,
+        JSON.stringify({
+          search,
+          fromDate: serializeFilterDate(fromDate),
+          toDate: serializeFilterDate(toDate),
+          selectedMonth,
+          selectedExpert,
+          statusFilter,
+          dayFilter,
+          sortKey,
+          sortDir,
+        })
+      )
+    } catch (err) {
+      console.error(err)
+    }
+  }, [
+    filtersRestored,
+    search,
+    fromDate,
+    toDate,
+    selectedMonth,
+    selectedExpert,
+    statusFilter,
+    dayFilter,
+    sortKey,
+    sortDir,
+  ])
+
+  // بازیابی محل اسکرول جدول (یک‌بار، بعد از اینکه لیست بارگذاری شد)
+  useEffect(() => {
+    if (loading || scrollRestoredRef.current) return
+    const el = tableRef.current
+    if (!el) return
+    scrollRestoredRef.current = true
+    try {
+      const saved = Number(sessionStorage.getItem(SCROLL_STORAGE_KEY) || 0)
+      if (saved > 0) requestAnimationFrame(() => (el.scrollTop = saved))
+    } catch {}
+  }, [loading, filtersRestored])
 
   useEffect(() => {
     fetchOrders()
@@ -375,6 +479,7 @@ export default function PreInvoicesPage() {
       result = result.filter(
         (item) =>
           item.customer?.name?.toLowerCase().includes(q) ||
+          getCustomerCode(item).toLowerCase().includes(q) ||
           item.orderNumber?.toLowerCase().includes(q) ||
           (item.customerOrderNumber || "").toLowerCase().includes(q) ||
           (item.salesRep || "").toLowerCase().includes(q) ||
@@ -422,6 +527,13 @@ export default function PreInvoicesPage() {
           return (
             dir *
             (a.customer?.name || "").localeCompare(b.customer?.name || "", "fa")
+          )
+        case "customerCode":
+          return (
+            dir *
+            getCustomerCode(a).localeCompare(getCustomerCode(b), "fa", {
+              numeric: true,
+            })
           )
         case "orderNumber":
           return (
@@ -672,7 +784,7 @@ export default function PreInvoicesPage() {
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="نام مشتری / شماره سفارش / کارشناس..."
+                placeholder="نام / کد مشتری / شماره سفارش / کارشناس..."
                 className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400 hover:bg-yellow-100 transition"
               />
             </div>
@@ -755,7 +867,15 @@ export default function PreInvoicesPage() {
 
         <div
           id="order-table"
+          ref={tableRef}
           tabIndex={-1}
+          onScroll={(e) => {
+            // ذخیره‌ی محل اسکرول جدول تا بعد از برگشت به صفحه، همان‌جا بماند
+            const top = e.currentTarget.scrollTop
+            try {
+              sessionStorage.setItem(SCROLL_STORAGE_KEY, String(top))
+            } catch {}
+          }}
           className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-auto min-h-[260px] lg:flex-1 lg:min-h-0 focus:outline-none focus:ring-2 focus:ring-teal-400"
         >
           {loading ? (
@@ -769,6 +889,12 @@ export default function PreInvoicesPage() {
                   <th className="p-3 font-bold text-center">ردیف</th>
                   <th className={thClass} onClick={() => toggleSort("customer")}>
                     نام مشتری{sortIndicator("customer")}
+                  </th>
+                  <th
+                    className={thClass}
+                    onClick={() => toggleSort("customerCode")}
+                  >
+                    کد مشتری{sortIndicator("customerCode")}
                   </th>
                   <th
                     className={thClass}
@@ -859,6 +985,9 @@ export default function PreInvoicesPage() {
                       <td className="p-3 text-center font-bold">{index + 1}</td>
                       <td className="p-3 font-bold whitespace-nowrap">
                         {item.customer?.name || "—"}
+                      </td>
+                      <td className="p-3 text-center font-mono text-xs font-bold text-teal-700 whitespace-nowrap">
+                        <bdi>{getCustomerCode(item) || "—"}</bdi>
                       </td>
                       <td className="p-3 font-semibold text-center">
                         {item.orderNumber}

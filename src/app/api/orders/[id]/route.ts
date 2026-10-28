@@ -120,6 +120,25 @@ export async function PUT(
       })
     }
 
+    // قطعه‌های تولید با orderItemId به قلم‌های سفارش وصل‌اند. چون ویرایش، قلم‌ها را پاک و دوباره
+    // می‌سازد (شناسه‌ی جدید)، قبل از حذف وضعیت قدیمی را نگه می‌داریم تا بعد از ساخت، دوباره وصل شوند
+    // وگرنه «سختی کار» و توضیحات قلم در کارتابل ایستگاه‌ها گم می‌شود.
+    const oldItems = await prisma.orderItem.findMany({
+      where: { orderId: id },
+      orderBy: { sortOrder: "asc" },
+      select: {
+        id: true,
+        productName: true,
+        length: true,
+        width: true,
+        sortOrder: true,
+      },
+    })
+    const prodItems = await prisma.productionItem.findMany({
+      where: { productionOrder: { orderId: id }, orderItemId: { not: null } },
+      select: { id: true, orderItemId: true },
+    })
+
     await prisma.orderItem.deleteMany({ where: { orderId: id } })
 
     // اولویت: mapImageUrl مستقیم، وگرنه اولین فایل از mapImages
@@ -189,6 +208,47 @@ export async function PUT(
         items: true,
       },
     })
+
+    // وصل کردن دوباره‌ی قطعه‌های تولید به قلم‌های جدید (تطبیق با نام کالا + طول + عرض)
+    try {
+      if (prodItems.length > 0 && oldItems.length > 0) {
+        const nm = (v: any) =>
+          String(v ?? "")
+            .replace(/[\u200c\u200f\u200e]/g, "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase()
+        const used = new Set<string>()
+        const oldToNew = new Map<string, string>()
+        for (const o of oldItems) {
+          const sameKey = (n: any) =>
+            nm(n.productName) === nm(o.productName) &&
+            Number(n.length || 0) === Number(o.length || 0) &&
+            Number(n.width || 0) === Number(o.width || 0)
+          const cand =
+            order.items.find((n: any) => !used.has(n.id) && n.sortOrder === o.sortOrder && sameKey(n)) ||
+            order.items.find((n: any) => !used.has(n.id) && sameKey(n)) ||
+            order.items.find(
+              (n: any) => !used.has(n.id) && nm(n.productName) === nm(o.productName)
+            )
+          if (cand) {
+            used.add(cand.id)
+            oldToNew.set(o.id, cand.id)
+          }
+        }
+        for (const p of prodItems) {
+          const newId = p.orderItemId ? oldToNew.get(p.orderItemId) : null
+          if (newId) {
+            await prisma.productionItem.update({
+              where: { id: p.id },
+              data: { orderItemId: newId },
+            })
+          }
+        }
+      }
+    } catch (relinkErr) {
+      console.error("relink production items failed:", relinkErr)
+    }
 
     return NextResponse.json({ success: true, order: withTotals(order) })
   } catch (error: any) {

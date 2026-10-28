@@ -224,6 +224,26 @@ const serializeDraftDate = (d: any): string | null => (d && typeof d.toDate === 
 const deserializeDraftDate = (iso: string | null | undefined) =>
   iso ? new DateObject({ date: new Date(iso), calendar: persian, locale: persian_fa }) : null
 
+// کلید پیش‌نویس: «سفارش جدید» یک کلید ثابت دارد و هر «ویرایش سفارش» کلید مخصوص خودش را
+// (تا با رفتن به صفحه‌ی دیگر و برگشتن، تغییرات ویرایش هم از بین نرود)
+const orderDraftKey = (editId: string | null) => (editId ? `orderEditDraft:${editId}` : DRAFT_STORAGE_KEY)
+// پیش‌نویس‌های قدیمی‌تر از ۲۴ ساعت نادیده گرفته می‌شوند
+const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000
+const readDraft = (key: string) => {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const d = JSON.parse(raw)
+    if (d.savedAt && Date.now() - d.savedAt > DRAFT_MAX_AGE_MS) {
+      localStorage.removeItem(key)
+      return null
+    }
+    return d
+  } catch {
+    return null
+  }
+}
+
 // ===== کمک‌توابع تاریخ کاری (برای محاسبه‌ی خودکار تاریخ تحویل) =====
 // آرایه‌ی تعطیلات رسمی به فرمت میلادی "YYYY-MM-DD". چون تعطیلات رسمی ایران هرساله
 // تغییر می‌کند این لیست باید سالانه به‌روزرسانی شود (یا بعداً با یک سرویس/API
@@ -376,6 +396,8 @@ export default function NewOrderClient() {
   // TODO: پس از افزودن سیستم لاگین کارشناسان، این مقدار باید به‌صورت خودکار از کاربر واردشده پر شود
   const [salesRep, setSalesRep] = useState("")
   const [customerSearch, setCustomerSearch] = useState("")
+  // کد مشتریِ انتخاب‌شده از لیست (برای نمایش کنار «نام مشتری»)
+  const [selectedCustomerCode, setSelectedCustomerCode] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
   // ایندکس مشتریِ هایلایت‌شده در لیست (برای انتخاب با کیبورد)
   const [customerActiveIndex, setCustomerActiveIndex] = useState(0)
@@ -525,6 +547,15 @@ export default function NewOrderClient() {
   // مقادیر اولیه‌ی خالی فرم بازنویسی نکند)
   const draftRestoredRef = useRef(false)
 
+  // ظرف اسکرول‌دار جدول اقلام (برای فریز شدن عناوین جدول و رفتن خودکار به ردیف تازه‌اضافه‌شده)
+  const itemsScrollRef = useRef<HTMLDivElement>(null)
+  const prevItemsLenRef = useRef(0)
+  useEffect(() => {
+    const el = itemsScrollRef.current
+    if (el && items.length > prevItemsLenRef.current) el.scrollTop = el.scrollHeight
+    prevItemsLenRef.current = items.length
+  }, [items.length])
+
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 1024px)")
     const update = () => setIsLgScreen(mq.matches)
@@ -608,14 +639,15 @@ export default function NewOrderClient() {
       cancelled = true
     }
   }, [])
-    useEffect(() => {
+  useEffect(() => {
     ;(async () => {
       try {
         const res = await fetch("/api/auth/me")
         if (!res.ok) return
         const data = await res.json()
         if (data.user?.displayName) {
-          setSalesRep(data.user.displayName)
+          // در حالت ویرایش، اگر کارشناسِ ثبت‌شده‌ی سفارش (یا پیش‌نویس) از قبل پر شده، با کاربر فعلی بازنویسی نشود
+          setSalesRep((prev) => (editId && prev ? prev : data.user.displayName))
         }
       } catch (e) {
         console.error(e)
@@ -624,47 +656,57 @@ export default function NewOrderClient() {
   }, [])
 
   // ===== پیش‌نویس خودکار سفارش =====
-  // با باز شدن صفحه (و فقط وقتی در حالت ویرایش سفارش موجود یا انتقال از «طراحی باکس»
+  // اعمال یک پیش‌نویسِ ذخیره‌شده روی state های فرم (هم برای «سفارش جدید» و هم برای «ویرایش سفارش»)
+  const applyDraft = (d: any) => {
+    if (d.customerName) setCustomerName(d.customerName)
+    if (d.customerSearch) setCustomerSearch(d.customerSearch)
+    if (d.customerGroup) setCustomerGroup(d.customerGroup)
+    if (d.productionLine) setProductionLine(d.productionLine)
+    if (d.priority) setPriority(d.priority)
+    setOrderDate(d.orderDate ? deserializeDraftDate(d.orderDate) : new DateObject({ calendar: persian, locale: persian_fa }))
+    if (d.deliveryDate) setDeliveryDate(deserializeDraftDate(d.deliveryDate))
+    if (d.deliveryDateMode) setDeliveryDateMode(d.deliveryDateMode)
+    if (d.hasInstallation) setHasInstallation(true)
+    if (d.installDate) setInstallDate(deserializeDraftDate(d.installDate))
+    if (d.installAddress) setInstallAddress(d.installAddress)
+    if (d.installPhone) setInstallPhone(d.installPhone)
+    if (d.installNotes) setInstallNotes(d.installNotes)
+    if (d.manualTotalQuantity) setManualTotalQuantity(d.manualTotalQuantity)
+    if (d.manualTotalMeterage) setManualTotalMeterage(d.manualTotalMeterage)
+    if (d.quantityLocked) setQuantityLocked(true)
+    if (d.meterageLocked) setMeterageLocked(true)
+    if (Array.isArray(d.items) && d.items.length) setItems(d.items)
+    if (Array.isArray(d.mapImages) && d.mapImages.length) setMapImages(d.mapImages)
+    if (d.hasDiscount) setHasDiscount(true)
+    if (d.discountPercent) setDiscountPercent(d.discountPercent)
+    if (d.discountMode) setDiscountMode(d.discountMode)
+    if (d.manualDiscountAmount) setManualDiscountAmount(d.manualDiscountAmount)
+    if (d.isOfficialInvoice) setIsOfficialInvoice(true)
+    if (d.hasExtra) setHasExtra(true)
+    if (d.extraAmount) setExtraAmount(d.extraAmount)
+    // موارد مخصوص حالت ویرایش + وضعیت پیش‌فاکتور بازشده
+    if (d.editingOrderId) setEditingOrderId(d.editingOrderId)
+    if (d.orderNumber) setOrderNumber(d.orderNumber)
+    if (d.customerOrderNumber) setCustomerOrderNumber(d.customerOrderNumber)
+    if (d.salesRep) setSalesRep(d.salesRep)
+    if (d.invoiceMode) setInvoiceMode(d.invoiceMode)
+    if (d.showInvoice) setShowInvoice(true)
+  }
+
+  // با باز شدن صفحه‌ی «سفارش جدید» (و فقط وقتی در حالت ویرایش سفارش موجود یا انتقال از «طراحی باکس»
   // نیستیم)، اگر پیش‌نویسِ ذخیره‌شده‌ای در localStorage باشد بازیابی می‌شود؛ در غیر این
   // صورت تاریخ سفارش به‌صورت خودکار روی «امروز» تنظیم می‌شود (بدون نیاز به باز کردن تقویم).
+  // حالت ویرایش سفارش در افکت بارگذاری سفارش (پایین‌تر) مدیریت می‌شود.
   useEffect(() => {
-    if (editId || searchParams.get("fromBoxDesign") === "1") {
+    if (editId) return
+    if (searchParams.get("fromBoxDesign") === "1") {
       draftRestoredRef.current = true
       return
     }
     try {
-      const raw = localStorage.getItem(DRAFT_STORAGE_KEY)
-      if (raw) {
-        const d = JSON.parse(raw)
-        if (d.customerName) setCustomerName(d.customerName)
-        if (d.customerSearch) setCustomerSearch(d.customerSearch)
-        if (d.customerGroup) setCustomerGroup(d.customerGroup)
-        if (d.productionLine) setProductionLine(d.productionLine)
-        if (d.priority) setPriority(d.priority)
-        setOrderDate(d.orderDate ? deserializeDraftDate(d.orderDate) : new DateObject({ calendar: persian, locale: persian_fa }))
-        if (d.deliveryDate) setDeliveryDate(deserializeDraftDate(d.deliveryDate))
-        if (d.deliveryDateMode) setDeliveryDateMode(d.deliveryDateMode)
-        if (d.hasInstallation) setHasInstallation(true)
-        if (d.installDate) setInstallDate(deserializeDraftDate(d.installDate))
-        if (d.installAddress) setInstallAddress(d.installAddress)
-        if (d.installPhone) setInstallPhone(d.installPhone)
-        if (d.installNotes) setInstallNotes(d.installNotes)
-        if (d.manualTotalQuantity) setManualTotalQuantity(d.manualTotalQuantity)
-        if (d.manualTotalMeterage) setManualTotalMeterage(d.manualTotalMeterage)
-        if (d.quantityLocked) setQuantityLocked(true)
-        if (d.meterageLocked) setMeterageLocked(true)
-        if (Array.isArray(d.items) && d.items.length) setItems(d.items)
-        if (Array.isArray(d.mapImages) && d.mapImages.length) setMapImages(d.mapImages)
-        if (d.hasDiscount) setHasDiscount(true)
-        if (d.discountPercent) setDiscountPercent(d.discountPercent)
-        if (d.discountMode) setDiscountMode(d.discountMode)
-        if (d.manualDiscountAmount) setManualDiscountAmount(d.manualDiscountAmount)
-        if (d.isOfficialInvoice) setIsOfficialInvoice(true)
-        if (d.hasExtra) setHasExtra(true)
-        if (d.extraAmount) setExtraAmount(d.extraAmount)
-      } else {
-        setOrderDate(new DateObject({ calendar: persian, locale: persian_fa }))
-      }
+      const d = readDraft(DRAFT_STORAGE_KEY)
+      if (d) applyDraft(d)
+      else setOrderDate(new DateObject({ calendar: persian, locale: persian_fa }))
     } catch (err) {
       console.error(err)
       setOrderDate(new DateObject({ calendar: persian, locale: persian_fa }))
@@ -690,16 +732,17 @@ export default function NewOrderClient() {
     }
   }, [searchParams])
   // ذخیره‌ی خودکار (و با تأخیر کوتاه) پیش‌نویس سفارش در حال تکمیل — با هر تغییری در فرم
-  // (چه وسط ثبت، چه بعد از تکمیل) اجرا می‌شود تا در صورت بسته‌شدن اشتباهیِ صفحه چیزی از
-  // بین نرود. در حالت ویرایش سفارش موجود (editId) چیزی نوشته نمی‌شود.
+  // (چه وسط ثبت، چه بعد از تکمیل) اجرا می‌شود تا در صورت بسته‌شدن اشتباهیِ صفحه یا رفتن به
+  // صفحه‌ی دیگر چیزی از بین نرود. در حالت ویرایش، پیش‌نویس با کلید مخصوص همان سفارش ذخیره می‌شود.
+  // در پیش‌نمایش داخل iframe (embedPreview) چیزی نوشته نمی‌شود.
   useEffect(() => {
-    if (!draftRestoredRef.current || editId) return
+    if (!draftRestoredRef.current || embedPreview) return
     const t = setTimeout(() => {
       try {
         const isEmpty =
           !customerName.trim() && items.length === 0 && !installAddress.trim() && !installPhone.trim() && !installNotes.trim() && mapImages.length === 0
         if (isEmpty) {
-          localStorage.removeItem(DRAFT_STORAGE_KEY)
+          localStorage.removeItem(orderDraftKey(editId))
           return
         }
         const draft = {
@@ -729,8 +772,15 @@ export default function NewOrderClient() {
           isOfficialInvoice,
           hasExtra,
           extraAmount,
+          savedAt: Date.now(),
+          editingOrderId,
+          orderNumber,
+          customerOrderNumber,
+          salesRep,
+          showInvoice,
+          invoiceMode,
         }
-        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft))
+        localStorage.setItem(orderDraftKey(editId), JSON.stringify(draft))
       } catch (err) {
         console.error(err)
       }
@@ -738,6 +788,7 @@ export default function NewOrderClient() {
     return () => clearTimeout(t)
   }, [
     editId,
+    embedPreview,
     customerName,
     customerSearch,
     customerGroup,
@@ -764,6 +815,12 @@ export default function NewOrderClient() {
     isOfficialInvoice,
     hasExtra,
     extraAmount,
+    editingOrderId,
+    orderNumber,
+    customerOrderNumber,
+    salesRep,
+    showInvoice,
+    invoiceMode,
   ])
 
   // محاسبه‌ی خودکار تاریخ تحویل بر اساس تاریخ سفارش و گزینه‌ی انتخاب‌شده (۴/۷/۱۰/۱۵/۳۰ روز
@@ -780,6 +837,19 @@ export default function NewOrderClient() {
 
   useEffect(() => {
     if (!editId) return
+    // اگر برای همین سفارش پیش‌نویسِ ذخیره‌شده‌ای هست (کاربر وسط ویرایش به صفحه‌ی دیگر رفته بوده)،
+    // همان بازیابی می‌شود و دوباره از سرور خوانده نمی‌شود تا تغییرات ناتمامش از بین نرود.
+    if (!embedPreview) {
+      const d = readDraft(orderDraftKey(editId))
+      if (d && String(d.editingOrderId) === String(editId)) {
+        applyDraft(d)
+        setDeliveryDateMode("manual")
+        setQuantityLocked(true)
+        setMeterageLocked(true)
+        draftRestoredRef.current = true
+        return
+      }
+    }
     ;(async () => {
       try {
         const res = await fetch(`/api/orders/${editId}`)
@@ -793,7 +863,7 @@ export default function NewOrderClient() {
         setCustomerSearch(order.customer?.name || "")
         setCustomerGroup(order.customer?.customerGroup || "همکار")
         setPriority(order.priority || "عادی")
-                if (order.salesRep) {
+        if (order.salesRep) {
           setSalesRep(order.salesRep)
         }
 
@@ -868,6 +938,8 @@ export default function NewOrderClient() {
 
         setQuantityLocked(true)
         setMeterageLocked(true)
+        // از این لحظه به بعد، تغییرات فرم ویرایش به‌عنوان پیش‌نویس ذخیره می‌شود
+        draftRestoredRef.current = true
         if (searchParams.get("preview") === "1") setShowInvoice(true)
       } catch (err) {
         console.error(err)
@@ -1004,6 +1076,15 @@ export default function NewOrderClient() {
       .filter((c) => tokens.every((t) => c.normalizedName.includes(t) || c.normalizedCode.includes(t)))
       .slice(0, 300)
   }, [customerSearch, dbCustomers])
+
+  // کدی که کنار «نام مشتری» نمایش داده می‌شود: اگر از لیست انتخاب شده همان؛ وگرنه (مثلاً در حالت
+  // ویرایش یا بازیابی پیش‌نویس) از روی تطابق دقیق نام پیدا می‌شود
+  const customerCodeDisplay = useMemo(() => {
+    if (selectedCustomerCode) return selectedCustomerCode
+    const n = normalizeText(customerName)
+    if (!n) return ""
+    return [...dbCustomers, ...customersList].find((c) => c.normalizedName === n)?.code || ""
+  }, [selectedCustomerCode, customerName, dbCustomers])
 
   // جستجوی کالا با تأخیر کوتاه (debounce) اجرا می‌شود تا حین تایپ سریع،
   // فیلترکردن ۷۵۰۰+ ردیف روی هر keystroke اجرا نشود و صفحه کند نشود
@@ -1175,7 +1256,7 @@ export default function NewOrderClient() {
   }, [showServices])
 
   // میانبرهای کیبوردی روی ردیف انتخاب‌شده‌ی جدول اقلام: F3 = خدمات، F4 = توضیحات
-  // نکته: با کلیک روی ردیف، فوکوس به فیلد «نام کالا» می‌رود (برای ویرایش)، پس این میانبرها
+  // نکته: با دوبار کلیک روی ردیف، فوکوس به فیلد «نام کالا» می‌رود (برای ویرایش)، پس این میانبرها
   // باید حتی وقتی فوکوس داخل اینپوت است کار کنند (کلیدهای F چیزی تایپ نمی‌کنند).
   // وابستگی‌ها شامل items و وضعیت مودال‌ها هم هست تا هندلر همیشه آخرین state را ببیند.
   useEffect(() => {
@@ -1294,6 +1375,7 @@ export default function NewOrderClient() {
   const selectCustomer = (c: { name: string; group: string; code: string }) => {
     setCustomerName(c.name)
     setCustomerSearch(c.name)
+    setSelectedCustomerCode(c.code || "")
     setCustomerGroup(c.group as any)
     setShowCustomerDropdown(false)
   }
@@ -1329,7 +1411,7 @@ export default function NewOrderClient() {
     setSvcUnitPrice(price > 0 ? formatWithCommas(String(Math.round(price))) : "")
   }
 
-  // شروع ویرایش یک قلم موجود (کلیک روی ردیف جدول، مشابه رفتار ویرایش خدمات)
+  // شروع ویرایش یک قلم موجود (دوبار کلیک روی ردیف جدول، مشابه رفتار ویرایش خدمات)
   const startEditItem = (item: OrderItem) => {
     setEditingItemId(item.id)
     setNewProduct(item.productName)
@@ -1910,9 +1992,11 @@ export default function NewOrderClient() {
       }
       if (result.assignedOrderNumber) setOrderNumber(String(result.assignedOrderNumber))
       if (result.assignedCustomerOrderNumber) setCustomerOrderNumber(String(result.assignedCustomerOrderNumber))
-      // با ثبت موفق سفارش، پیش‌نویسِ محلی دیگر لازم نیست و پاک می‌شود
+      // با ثبت موفق سفارش، پیش‌نویسِ محلی (جدید یا ویرایش) دیگر لازم نیست و پاک می‌شود؛
+      // ذخیره‌ی خودکار هم متوقف می‌شود تا دوباره چیزی ننویسد
       try {
-        localStorage.removeItem(DRAFT_STORAGE_KEY)
+        draftRestoredRef.current = false
+        localStorage.removeItem(orderDraftKey(editId))
       } catch (err) {
         console.error(err)
       }
@@ -2731,7 +2815,16 @@ export default function NewOrderClient() {
                 ذخیره
               </button>
               <button
-                onClick={() => router.push("/order")}
+                onClick={() => {
+                  // در حالت ویرایش، «انصراف» یعنی دور ریختن تغییراتِ ناتمام (پیش‌نویسِ آن سفارش پاک می‌شود)
+                  if (editId) {
+                    draftRestoredRef.current = false
+                    try {
+                      localStorage.removeItem(orderDraftKey(editId))
+                    } catch {}
+                  }
+                  router.push("/order")
+                }}
                 className="rounded-xl border border-teal-500/30 bg-white/30 px-7 py-3.5 text-xl font-bold text-blue-900 hover:bg-white/50 transition"
               >
                 انصراف
@@ -2751,7 +2844,14 @@ export default function NewOrderClient() {
                 {/* ردیف ۱: نام مشتری (بزرگ‌تر) + شماره سفارش + شماره سفارش مشتری + گروه مشتری (کوچک‌تر) */}
                 <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-2">
                   <div className="relative min-w-[180px] col-span-2 md:col-span-3" onClick={(e) => e.stopPropagation()}>
-                    <label className={labelCompactClass}>نام مشتری</label>
+                    <label className={labelCompactClass}>
+                      نام مشتری
+                      {customerCodeDisplay && (
+                        <bdi className="mr-2 rounded-md bg-teal-50 px-1.5 py-0.5 font-mono text-xs text-teal-700">
+                          کد: {customerCodeDisplay}
+                        </bdi>
+                      )}
+                    </label>
                     <div className="flex gap-1.5">
                       <div className="relative flex-1">
                         <input
@@ -2761,6 +2861,7 @@ export default function NewOrderClient() {
                           onChange={(e) => {
                             setCustomerSearch(e.target.value)
                             setCustomerName(e.target.value)
+                            setSelectedCustomerCode("")
                             setCustomerActiveIndex(0)
                             setShowCustomerDropdown(true)
                           }}
@@ -3253,16 +3354,20 @@ export default function NewOrderClient() {
                 </div>
               </div>
 
-              {/* جدول اقلام — relative z-0 تا زیر دراپ‌داون‌های بالایی قرار بگیرد */}
+              {/* جدول اقلام — relative z-0 تا زیر دراپ‌داون‌های بالایی قرار بگیرد.
+                  کانتینر خودش اسکرول عمودی دارد (max-h) تا عناوین جدول (thead sticky) بالای آن فریز بمانند. */}
               {items.length > 0 && (
-                <div className="relative z-0 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/20 overflow-x-auto">
+                <div
+                  ref={itemsScrollRef}
+                  className="relative z-0 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/20 overflow-auto max-h-[62vh]"
+                >
                   <p className="text-xs text-blue-700 mb-2">
-                    برای ویرایش روی هر ردیف کلیک کنید (همان ردیف انتخاب هم می‌شود). با ردیف انتخاب‌شده، کلید
+                    برای انتخاب ردیف یک‌بار و برای ویرایش آن <strong>دوبار</strong> روی ردیف کلیک کنید. با ردیف انتخاب‌شده، کلید
                     <strong> F3 </strong> پنجره‌ی خدمات و کلید <strong> F4 </strong> پنجره‌ی توضیحات را باز می‌کند.
                     عرض هر ستون از گوشه‌ی آن قابل تغییر دستی است.
                   </p>
                   <table className="w-full text-sm text-blue-900 border-collapse">
-                    <thead>
+                    <thead className="sticky top-0 z-20 bg-teal-600">
                       <tr className="border-b border-teal-500/30 bg-teal-600 text-white text-center">
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
                           <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "3rem", maxWidth: "10rem" }}>ردیف</div>
@@ -3309,7 +3414,10 @@ export default function NewOrderClient() {
                       {items.map((item, index) => (
                         <tr
                           key={item.id}
-                          onClick={() => {
+                          onClick={() => setSelectedItemId(item.id)}
+                          onDoubleClick={(e) => {
+                            // دابل‌کلیک روی دکمه‌های داخل ردیف (خدمات/توضیحات/استپ/حذف) ویرایش را شروع نکند
+                            if ((e.target as HTMLElement).closest("button")) return
                             setSelectedItemId(item.id)
                             startEditItem(item)
                           }}

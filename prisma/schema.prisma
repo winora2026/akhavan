@@ -67,6 +67,9 @@ model Order {
   sepidarLastPayload  String?   // JSON آخرین درخواست (برای دیباگ) 
   items                  OrderItem[]
   productionOrders       ProductionOrder[]
+    smsStatus   String?
+  smsSentAt   DateTime?
+  smsError    String?
 }
 
 model OrderItem {

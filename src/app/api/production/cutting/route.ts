@@ -80,6 +80,19 @@ const itemInclude = {
   },
 }
 
+// ایستگاه‌های هر قطعه به ترتیب مسیر (برای تشخیص «اولین ایستگاه»)
+const itemIncludeWithStations = {
+  ...itemInclude,
+  stations: {
+    include: { station: true },
+    orderBy: { sequence: "asc" as const },
+  },
+}
+
+// ایستگاهی که هنوز رد نشده است
+const isStationOpen = (status: string) =>
+  status === "در انتظار" || status === "در حال انجام"
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
@@ -97,6 +110,8 @@ export async function GET(req: Request) {
     }
 
     // ۱) قطعاتی که در ایستگاه برش منتظر یا در حال انجام هستند
+    //    (برای سفارش اجرتیِ دارای «اجرت برش»، برش همان اولین ایستگاه است؛
+    //     با رد شدن برش از این لیست خارج می‌شود)
     const rows = await prisma.productionItemStation.findMany({
       where: {
         stationId: cutStation.id,
@@ -111,7 +126,8 @@ export async function GET(req: Request) {
     })
 
     // ۲) قطعات سفارش‌های اجرتی که «اجرت برش» ندارند (ایستگاه برش ندارند):
-    //    فقط برای چاپ لیبل در همین صفحه نشان داده می‌شوند، نه برای برگه‌ی برنامه‌ریزی.
+    //    فقط برای چاپ لیبل نشان داده می‌شوند، نه برای برگه‌ی برنامه‌ریزی.
+    //    تا وقتی اولین ایستگاهِ مسیرشان (مثلاً دیاموند) رد نشده در لیست می‌مانند.
     //    نکته: وضعیت قطعه‌ی تولید در API اسکن با نیم‌فاصله («تکمیل‌شده») ذخیره می‌شود،
     //    ولی وضعیت ایستگاه‌ها با فاصله («تکمیل شده») است؛ هر دو نوشتار حذف می‌شوند.
     const labelOnlyCandidates = await prisma.productionItem.findMany({
@@ -120,12 +136,16 @@ export async function GET(req: Request) {
         productionOrder: { order: { orderNumber: { startsWith: "9" } } },
         stations: { none: { stationId: cutStation.id } },
       },
-      include: itemInclude,
+      include: itemIncludeWithStations,
       orderBy: { createdAt: "asc" },
     })
-    const labelOnlyItems = labelOnlyCandidates.filter((it: any) =>
-      isRentalOrderNumber(it.productionOrder?.order?.orderNumber)
-    )
+    const labelOnlyItems = labelOnlyCandidates.filter((it: any) => {
+      if (!isRentalOrderNumber(it.productionOrder?.order?.orderNumber)) {
+        return false
+      }
+      const first = it.stations?.[0]
+      return !!first && isStationOpen(first.status)
+    })
 
     const rawDebug: any[] = []
 
@@ -174,6 +194,8 @@ export async function GET(req: Request) {
         itemStationStatus: meta.itemStationStatus,
         sequence: meta.sequence,
         labelOnly: meta.labelOnly,
+        // سفارش اجرتی (سریال ۹۰۰xxx) — صفحه‌ی برنامه‌ریزی برش آن را در تب «اجرتی» نشان می‌دهد
+        isRental: isRentalOrderNumber(salesOrder?.orderNumber),
         productionItemId: item.id,
         productName: item.productName,
         barcode: item.barcode,

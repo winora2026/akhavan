@@ -37,6 +37,8 @@ type CuttingItem = {
   installationCode?: string | null
   // قطعه‌ی سفارش اجرتی بدون «اجرت برش»: فقط لیبل دارد، نه برگه‌ی برنامه‌ریزی
   labelOnly?: boolean
+  // قطعه‌ی سفارش اجرتی (سریال ۹۰۰xxx): در تب «اجرتی» نمایش داده می‌شود
+  isRental?: boolean
 }
 
 type WasteRow = {
@@ -72,6 +74,9 @@ type SortKey =
   | "labelStatus"
   | "labelPrintCount"
 
+type ViewKey = "queue" | "rental" | "waste"
+type ReportPaper = "A4" | "A5" | "A5L"
+
 // ───────────── اندازه لیبل: ۹ سانتی‌متر عرض × ۶ سانتی‌متر ارتفاع (افقی) ─────────────
 const LABEL_W_MM = 90
 const LABEL_H_MM = 60
@@ -99,6 +104,9 @@ const BARCODE_HEIGHT_MM = 8
 const BARCODE_MAX_WIDTH_MM = 37
 
 const MM_TO_PX = 96 / 25.4
+
+// انتخاب اندازه‌ی کاغذ برگه‌ی برنامه‌ریزی در مرورگر ذخیره می‌شود
+const REPORT_PAPER_KEY = "cuttingReportPaper"
 
 const LABEL_REPRINT_REASONS = [
   "پارگی لیبل",
@@ -420,6 +428,9 @@ export default function CuttingPlanningPage() {
   const [showLabelPreview, setShowLabelPreview] = useState(false)
   const [showReportPreview, setShowReportPreview] = useState(false)
 
+  // اندازه‌ی کاغذ برگه‌ی برنامه‌ریزی: A4 عمودی / A5 عمودی / A5 افقی
+  const [reportPaper, setReportPaper] = useState<ReportPaper>("A4")
+
   const [showReprintModal, setShowReprintModal] = useState(false)
   const [reprintMode, setReprintMode] = useState<"simple" | "waste">("simple")
   const [wasteReason, setWasteReason] = useState("")
@@ -433,8 +444,8 @@ export default function CuttingPlanningPage() {
   const [sortKey, setSortKey] = useState<SortKey>("orderNumber")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
 
-  // تب «ضایعات / برش مجدد»
-  const [view, setView] = useState<"queue" | "waste">("queue")
+  // تب‌ها: «صف برش»، «اجرتی» و «ضایعات / برش مجدد»
+  const [view, setView] = useState<ViewKey>("queue")
   const [wastes, setWastes] = useState<WasteRow[]>([])
   const [wasteLoading, setWasteLoading] = useState(false)
   const [wasteSelected, setWasteSelected] = useState<string[]>([])
@@ -450,6 +461,31 @@ export default function CuttingPlanningPage() {
   useEffect(() => {
     fetchData()
   }, [])
+
+  // بازیابی آخرین اندازه‌ی کاغذ انتخاب‌شده
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(REPORT_PAPER_KEY)
+      if (v === "A4" || v === "A5" || v === "A5L") setReportPaper(v)
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  const changeReportPaper = (v: ReportPaper) => {
+    setReportPaper(v)
+    try {
+      localStorage.setItem(REPORT_PAPER_KEY, v)
+    } catch {
+      // ignore
+    }
+  }
+
+  // عوض کردن تب؛ انتخاب‌ها پاک می‌شوند تا چاپ اشتباهی از تب دیگر انجام نشود
+  const switchView = (v: ViewKey) => {
+    setView(v)
+    setSelectedIds([])
+  }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -569,8 +605,21 @@ export default function CuttingPlanningPage() {
     [exactProductNames]
   )
 
+  // تعداد قطعات هر تب (برای نمایش روی دکمه‌ی تب)
+  const queueCount = useMemo(
+    () => items.filter((i) => !i.isRental).length,
+    [items]
+  )
+  const rentalCount = useMemo(
+    () => items.filter((i) => i.isRental).length,
+    [items]
+  )
+
   const filtered = useMemo(() => {
-    let list = [...items]
+    // تب «اجرتی» فقط سفارش‌های اجرتی را نشان می‌دهد و «صف برش» فقط بقیه را
+    let list = items.filter((i) =>
+      view === "rental" ? !!i.isRental : !i.isRental
+    )
     const qProduct = productName
     const qSearch = normalizeText(search)
 
@@ -649,6 +698,7 @@ export default function CuttingPlanningPage() {
     return list
   }, [
     items,
+    view,
     productName,
     labelStatus,
     priority,
@@ -1094,14 +1144,26 @@ export default function CuttingPlanningPage() {
     }
   }
 
-  const thClass =
-    "p-3 font-bold text-center cursor-pointer select-none hover:bg-teal-500/25 transition whitespace-nowrap"
-  const thNarrowClass =
-    "px-1.5 py-3 text-xs font-bold text-center cursor-pointer select-none hover:bg-teal-500/25 transition whitespace-nowrap"
+  // عنوان‌های جدول ثابت (sticky) هستند؛ پس‌زمینه‌ی کاملاً مات لازم دارند
+  const thBase =
+    "sticky top-0 z-20 bg-teal-100 shadow-[0_1px_0_0_rgba(20,184,166,0.4)]"
+  const thClass = `${thBase} p-3 font-bold text-center cursor-pointer select-none hover:bg-teal-200 transition whitespace-nowrap`
+  const thNarrowClass = `${thBase} px-1.5 py-3 text-xs font-bold text-center cursor-pointer select-none hover:bg-teal-200 transition whitespace-nowrap`
+  const thPlain = `${thBase} p-3 font-bold text-center`
+  // خط زیر هر ردیف (چون جدول border-separate است، خط روی td گذاشته می‌شود)
+  const rowClass =
+    "hover:bg-teal-400/20 bg-white/30 transition [&>td]:border-b [&>td]:border-teal-500/10"
+
+  const reportPageSize =
+    reportPaper === "A5"
+      ? "A5 portrait"
+      : reportPaper === "A5L"
+        ? "A5 landscape"
+        : "A4 portrait"
 
     const pageCss = `
     @page {
-      size: ${showLabelPreview ? `${LABEL_H_MM}mm ${LABEL_W_MM}mm` : "A4 portrait"};
+      size: ${showLabelPreview ? `${LABEL_H_MM}mm ${LABEL_W_MM}mm` : reportPageSize};
       margin: 0;
     }
     @media print {
@@ -1111,6 +1173,11 @@ export default function CuttingPlanningPage() {
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
         background: #fff !important;
+      }
+      /* صفحه روی صفحه‌نمایش هم‌اندازه‌ی پنجره است؛ در چاپ نباید محتوا را ببرد */
+      .print-root {
+        height: auto !important;
+        overflow: visible !important;
       }
       ${
         showLabelPreview
@@ -1168,6 +1235,24 @@ export default function CuttingPlanningPage() {
       `
           : `
       html, body, .print-root { background: none !important; }
+      ${
+        reportPaper === "A5"
+          ? `
+      /* A5 عمودی عرض کمی دارد؛ جدول برگه فشرده‌تر چاپ می‌شود */
+      .report-sheet table { font-size: 10px !important; }
+      .report-sheet th,
+      .report-sheet td,
+      .report-sheet td * {
+        font-size: 9px !important;
+      }
+      .report-sheet th,
+      .report-sheet td {
+        padding: 2px 3px !important;
+        min-width: 0 !important;
+      }
+      `
+          : ""
+      }
       `
       }
     }
@@ -1303,7 +1388,7 @@ export default function CuttingPlanningPage() {
 
   return (
     <div
-      className="print-root min-h-screen p-4 bg-cover bg-center bg-fixed"
+      className="print-root h-screen overflow-hidden p-4 bg-cover bg-center bg-fixed print:h-auto print:overflow-visible"
       style={{
         backgroundImage:
           "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
@@ -1315,8 +1400,8 @@ export default function CuttingPlanningPage() {
 
       <div className="pointer-events-none fixed inset-0 bg-black/5 print:hidden" />
 
-      <div className="relative z-10 max-w-[1600px] mx-auto print:hidden">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
+      <div className="relative z-10 max-w-[1600px] mx-auto h-full flex flex-col print:hidden">
+        <div className="mb-4 shrink-0 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
           <div>
             <h1 className="text-2xl font-bold text-blue-950">برنامه‌ریزی برش</h1>
             <p className="text-sm text-blue-800 mt-1">
@@ -1345,21 +1430,32 @@ export default function CuttingPlanningPage() {
           </div>
         </div>
 
-        <div className="mb-4 flex flex-wrap gap-2">
+        <div className="mb-4 shrink-0 flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => setView("queue")}
+            onClick={() => switchView("queue")}
             className={`rounded-xl px-5 py-2.5 font-bold border ${
               view === "queue"
                 ? "bg-teal-500 text-white border-teal-600"
                 : "bg-white/50 text-blue-900 border-teal-500/30 hover:bg-white/70"
             }`}
           >
-            صف برش
+            صف برش ({queueCount})
           </button>
           <button
             type="button"
-            onClick={() => setView("waste")}
+            onClick={() => switchView("rental")}
+            className={`rounded-xl px-5 py-2.5 font-bold border ${
+              view === "rental"
+                ? "bg-purple-600 text-white border-purple-700"
+                : "bg-white/50 text-blue-900 border-teal-500/30 hover:bg-white/70"
+            }`}
+          >
+            اجرتی ({rentalCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => switchView("waste")}
             className={`rounded-xl px-5 py-2.5 font-bold border ${
               view === "waste"
                 ? "bg-orange-500 text-white border-orange-600"
@@ -1370,7 +1466,14 @@ export default function CuttingPlanningPage() {
           </button>
         </div>
 
-        <div className="mb-4 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
+        {view === "rental" && (
+          <p className="mb-3 shrink-0 text-xs font-semibold text-purple-800">
+            سفارش‌های اجرتی: قطعاتی که «اجرت برش» دارند هم لیبل و هم برگه‌ی برنامه‌ریزی می‌گیرند؛ بقیه
+            (برچسب «فقط لیبل») فقط لیبل. با رد شدن اولین ایستگاه هر قطعه، از این لیست خارج می‌شود.
+          </p>
+        )}
+
+        <div className="mb-4 shrink-0 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
             <div className="md:col-span-3">
               <label className="mb-1.5 block text-sm font-bold text-blue-900">
@@ -1445,9 +1548,9 @@ export default function CuttingPlanningPage() {
           </div>
         </div>
 
-        {view === "queue" ? (
+        {view !== "waste" ? (
         <>
-        <div className="mb-4 flex flex-wrap gap-2">
+        <div className="mb-4 shrink-0 flex flex-wrap gap-2">
           <button
             onClick={printLabels}
             disabled={actionLoading || selectedIds.length === 0}
@@ -1494,20 +1597,23 @@ export default function CuttingPlanningPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-x-auto">
+        <div className="flex-1 min-h-0 flex flex-col rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-2 shadow-lg border border-teal-500/20">
           {loading ? (
             <p className="text-center text-blue-700 py-16 text-xl font-bold">
               در حال بارگذاری...
             </p>
           ) : filtered.length === 0 ? (
             <p className="text-center text-blue-700 py-16 text-xl font-bold">
-              قطعه‌ای برای برش یافت نشد
+              {view === "rental"
+                ? "قطعه‌ی اجرتی‌ای در انتظار رد شدن اولین ایستگاه نیست"
+                : "قطعه‌ای برای برش یافت نشد"}
             </p>
           ) : (
-            <table className="w-full text-sm text-blue-900 border-collapse">
+            <div className="flex-1 min-h-0 overflow-auto rounded-xl">
+            <table className="w-full text-sm text-blue-900 border-separate border-spacing-0">
               <thead>
-                <tr className="border-b border-teal-500/30 bg-teal-500/15 text-right">
-                  <th className="p-3 font-bold text-center">
+                <tr className="text-right">
+                  <th className={thPlain}>
                     <input
                       type="checkbox"
                       checked={
@@ -1517,7 +1623,7 @@ export default function CuttingPlanningPage() {
                       onChange={toggleSelectAll}
                     />
                   </th>
-                  <th className="p-3 font-bold text-center">ردیف</th>
+                  <th className={thPlain}>ردیف</th>
                   <th
                     className={thNarrowClass}
                     onClick={() => toggleSort("barcode")}
@@ -1548,7 +1654,7 @@ export default function CuttingPlanningPage() {
                   <th className={thClass} onClick={() => toggleSort("meterage")}>
                     متراژ{sortIndicator("meterage")}
                   </th>
-                  <th className="p-3 font-bold text-center w-[30%] min-w-[260px]">
+                  <th className={`${thPlain} w-[30%] min-w-[260px]`}>
                     خدمات
                   </th>
                   <th
@@ -1578,7 +1684,7 @@ export default function CuttingPlanningPage() {
                 {filtered.map((item, index) => (
                   <tr
                     key={item.productionItemId}
-                    className="border-b border-teal-500/10 hover:bg-teal-400/20 bg-white/30 transition"
+                    className={rowClass}
                   >
                     <td className="p-3 text-center">
                       <input
@@ -1635,12 +1741,13 @@ export default function CuttingPlanningPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
         </>
         ) : (
         <>
-        <div className="mb-4 rounded-2xl border border-orange-200 bg-orange-50/90 p-4">
+        <div className="mb-4 shrink-0 max-h-[40vh] overflow-y-auto rounded-2xl border border-orange-200 bg-orange-50/90 p-4">
           <h3 className="text-base font-bold text-orange-900 mb-3">
             ثبت ضایعات با بارکد
             <span className="block text-xs font-semibold text-orange-800 mt-1">
@@ -1712,7 +1819,7 @@ export default function CuttingPlanningPage() {
           </div>
         </div>
 
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="mb-4 shrink-0 flex flex-wrap items-center gap-2">
           <button
             onClick={submitRecut}
             disabled={actionLoading || wasteSelected.length === 0}
@@ -1741,7 +1848,7 @@ export default function CuttingPlanningPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-x-auto">
+        <div className="flex-1 min-h-0 flex flex-col rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-2 shadow-lg border border-teal-500/20">
           {wasteLoading ? (
             <p className="text-center text-blue-700 py-16 text-xl font-bold">
               در حال بارگذاری...
@@ -1751,10 +1858,11 @@ export default function CuttingPlanningPage() {
               موردی یافت نشد
             </p>
           ) : (
-            <table className="w-full text-sm text-blue-900 border-collapse">
+            <div className="flex-1 min-h-0 overflow-auto rounded-xl">
+            <table className="w-full text-sm text-blue-900 border-separate border-spacing-0">
               <thead>
-                <tr className="border-b border-teal-500/30 bg-teal-500/15 text-right">
-                  <th className="p-3 font-bold text-center">
+                <tr className="text-right">
+                  <th className={thPlain}>
                     <input
                       type="checkbox"
                       checked={
@@ -1766,19 +1874,19 @@ export default function CuttingPlanningPage() {
                       onChange={toggleWasteAll}
                     />
                   </th>
-                  <th className="p-3 font-bold text-center">ردیف</th>
-                  <th className="p-3 font-bold text-center">تاریخ ثبت</th>
-                  <th className="p-3 font-bold text-center">بارکد</th>
-                  <th className="p-3 font-bold text-right">نام کالا</th>
-                  <th className="p-3 font-bold text-center">عرض</th>
-                  <th className="p-3 font-bold text-center">طول</th>
-                  <th className="p-3 font-bold text-center">تعداد</th>
-                  <th className="p-3 font-bold text-right">مشتری</th>
-                  <th className="p-3 font-bold text-center">ش سفارش</th>
-                  <th className="p-3 font-bold text-right">علت</th>
-                  <th className="p-3 font-bold text-right">بخش / شخص مسبب</th>
-                  <th className="p-3 font-bold text-center">وضعیت</th>
-                  <th className="p-3 font-bold text-center">بارکد جدید</th>
+                  <th className={thPlain}>ردیف</th>
+                  <th className={thPlain}>تاریخ ثبت</th>
+                  <th className={thPlain}>بارکد</th>
+                  <th className={`${thPlain} text-right`}>نام کالا</th>
+                  <th className={thPlain}>عرض</th>
+                  <th className={thPlain}>طول</th>
+                  <th className={thPlain}>تعداد</th>
+                  <th className={`${thPlain} text-right`}>مشتری</th>
+                  <th className={thPlain}>ش سفارش</th>
+                  <th className={`${thPlain} text-right`}>علت</th>
+                  <th className={`${thPlain} text-right`}>بخش / شخص مسبب</th>
+                  <th className={thPlain}>وضعیت</th>
+                  <th className={thPlain}>بارکد جدید</th>
                 </tr>
               </thead>
               <tbody>
@@ -1794,7 +1902,7 @@ export default function CuttingPlanningPage() {
                   return (
                     <tr
                       key={w.wasteId}
-                      className="border-b border-teal-500/10 hover:bg-teal-400/20 bg-white/30 transition"
+                      className={rowClass}
                     >
                       <td className="p-3 text-center">
                         <input
@@ -1839,6 +1947,7 @@ export default function CuttingPlanningPage() {
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </div>
         </>
@@ -2093,7 +2202,19 @@ export default function CuttingPlanningPage() {
               <h2 className="text-xl font-bold text-blue-950">
                 برگه برنامه‌ریزی برش
               </h2>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={reportPaper}
+                  onChange={(e) =>
+                    changeReportPaper(e.target.value as ReportPaper)
+                  }
+                  title="اندازه‌ی کاغذ چاپ"
+                  className="rounded-xl border border-blue-300 bg-white px-3 py-2.5 text-sm font-bold text-blue-900 focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="A4">کاغذ A4</option>
+                  <option value="A5">کاغذ A5 (عمودی)</option>
+                  <option value="A5L">کاغذ A5 (افقی)</option>
+                </select>
                 <button
                   onClick={exportReportExcel}
                   className="rounded-xl bg-emerald-600 hover:bg-emerald-700 px-5 py-2.5 text-white font-bold"
@@ -2115,7 +2236,7 @@ export default function CuttingPlanningPage() {
               </div>
             </div>
 
-            <div className="text-black" dir="rtl">
+            <div className="report-sheet text-black" dir="rtl">
               <div className="text-center mb-2">
                 <h3 className="text-xl font-black tracking-wide">
                   لیست برش CNC
