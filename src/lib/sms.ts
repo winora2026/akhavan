@@ -4,6 +4,8 @@
 //   SMS_API_KEY  = کلید API پنل
 //   SMS_SENDER   = شماره‌ی خط ارسال‌کننده
 
+import customersSeedRaw from "@/app/customers/customers-seed.json" // مسیر را با پروژه‌تان تطبیق دهید
+
 export type SmsResult =
   | { ok: true; mock?: boolean; providerId?: string }
   | { ok: false; error: string }
@@ -22,13 +24,48 @@ export function normalizeIranMobile(raw: string | null | undefined): string | nu
   return /^9\d{9}$/.test(n) ? `0${n}` : null
 }
 
-// شماره‌ی موبایل مشتری از هر کدام از فیلدهای رایج؛ اگر نام فیلد در دیتابیس شما فرق دارد، اینجا اضافه کنید
+// ── پیدا کردن شماره‌ی مشتری: دیتابیس، profile و فایل مشتریان قدیمی ──
+const norm = (v: any) =>
+  toLatinDigits(String(v ?? ""))
+    .replace(/ي/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/[\u200c\u200f\u200e]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+
+const PHONE_KEYS = ["mobile", "mobilePhone", "cellphone", "cellPhone", "phone", "phoneNumber", "tel"]
+
+function phonesFrom(obj: any): string[] {
+  if (!obj || typeof obj !== "object") return []
+  return PHONE_KEYS.map((k) => obj[k]).filter((v) => v && String(v).trim()).map(String)
+}
+
+function seedPhones(customer: any): string[] {
+  const code = String(customer?.customerCode || "").trim()
+  const name = norm(customer?.name)
+  const hit = (customersSeedRaw as any[]).find(
+    (c) =>
+      (code && String(c.code || "").trim() === code) ||
+      (name &&
+        [
+          c.companyName,
+          `${c.lastName || ""} ${c.firstName || ""}`,
+          `${c.firstName || ""} ${c.lastName || ""}`,
+        ].some((n) => norm(n) === name))
+  )
+  return hit ? phonesFrom(hit) : []
+}
+
 export function pickCustomerPhone(customer: any): string {
-  for (const key of ["mobile", "mobilePhone", "cellphone", "cellPhone", "phone", "phoneNumber", "tel"]) {
-    const v = customer?.[key]
-    if (v && String(v).trim()) return String(v)
-  }
-  return ""
+  let profile: any = null
+  try {
+    profile = customer?.profile ? JSON.parse(customer.profile) : null
+  } catch {}
+
+  const candidates = [...phonesFrom(customer), ...phonesFrom(profile), ...seedPhones(customer)]
+  // اولین شماره‌ای که موبایل معتبر باشد؛ وگرنه اولین شماره (تا پیام خطای دقیق نشان داده شود)
+  return candidates.find((p) => normalizeIranMobile(p)) || candidates[0] || ""
 }
 
 // متن پیامک ثبت سفارش
