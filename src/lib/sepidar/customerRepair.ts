@@ -40,10 +40,19 @@ function partyDisplayName(p: any) {
   return `${p?.name ?? p?.Name ?? ""} ${p?.lastName ?? p?.LastName ?? ""}`.trim()
 }
 
+// دو نام حداقل یک کلمه‌ی مشترک دارند، یا فقط در فاصله‌گذاری فرق دارند
+// («داورملارجبی» و «داور ملارجبی»). برای اطمینان از اینکه تطبیق با کد، شخص دیگری را برنمی‌دارد.
 function sharesNameToken(a: string, b: string) {
-  const ta = nameTokens(a).filter((t) => t.length >= 2)
-  const tb = new Set(nameTokens(b).filter((t) => t.length >= 2))
-  return ta.some((t) => tb.has(t))
+  const na = nameTokens(a).filter((t) => t.length >= 2)
+  const nb = nameTokens(b).filter((t) => t.length >= 2)
+  const setB = new Set(nb)
+  if (na.some((t) => setB.has(t))) return true
+
+  const joinA = na.join("")
+  const joinB = nb.join("")
+  const sortA = [...na].sort().join("")
+  const sortB = [...nb].sort().join("")
+  return joinA.length >= 4 && (joinA === joinB || sortA === sortB)
 }
 
 // نام مشتری با همان قاعده‌ی صفحه‌ی ثبت سفارش (تا با Customer.name یکی باشد)
@@ -142,6 +151,7 @@ export async function relinkCustomersByCode(apply: boolean) {
     const hits = customersOnly.length ? customersOnly : all
     const currentInfo = {
       partyId: c.sepidarPartyRef,
+      exists: Boolean(current), // false یعنی این طرف‌حساب در سپیدار پیدا نشد (احتمالاً حذف شده)
       code: currentCode || null,
       name: current ? partyDisplayName(current) : null,
     }
@@ -161,7 +171,7 @@ export async function relinkCustomersByCode(apply: boolean) {
         akhavanCode: code,
         current: currentInfo,
         target: { partyId: pickId(target, PARTY_ID_KEYS), name: partyDisplayName(target) },
-        reason: "نام مشتری و نام طرف‌حسابِ هم‌کد هیچ کلمه‌ی مشترکی ندارند؛ دستی بررسی شود",
+        reason: "نام مشتری و نام طرف‌حسابِ هم‌کد هیچ شباهتی ندارند؛ دستی بررسی شود",
       })
       continue
     }
