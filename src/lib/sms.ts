@@ -4,7 +4,7 @@
 //   SMS_API_KEY  = کلید API پنل
 //   SMS_SENDER   = شماره‌ی خط ارسال‌کننده
 
-import customersSeedRaw from "@/app/customers/customers-seed.json" // مسیر را با پروژه‌تان تطبیق دهید
+import customersSeedRaw from "@/app/customers/customers-seed.json"
 
 export type SmsResult =
   | { ok: true; mock?: boolean; providerId?: string }
@@ -34,17 +34,49 @@ const norm = (v: any) =>
     .trim()
     .toLowerCase()
 
-const PHONE_KEYS = ["mobile", "mobilePhone", "cellphone", "cellPhone", "phone", "phoneNumber", "tel"]
+// فیلدهایی که ممکن است شماره داشته باشند (phones در فایل مشتریان قدیمی آرایه است)
+const PHONE_KEYS = [
+  "mobile",
+  "mobiles",
+  "mobilePhone",
+  "cellphone",
+  "cellPhone",
+  "phone",
+  "phones",
+  "phoneNumber",
+  "tel",
+]
+
+const PHONE_LIKE = /^[\d\s\-+()۰-۹٠-٩]{7,20}$/
+
+// هر مقدار (رشته، عدد، آرایه یا آبجکتِ تو در تو) را می‌گردد و هرچه شبیه شماره باشد جمع می‌کند
+function collectPhones(v: any, out: string[], depth = 0) {
+  if (v == null || depth > 4) return
+  if (typeof v === "string" || typeof v === "number") {
+    const s = String(v).trim()
+    if (PHONE_LIKE.test(s)) out.push(s)
+    return
+  }
+  if (Array.isArray(v)) {
+    v.forEach((x) => collectPhones(x, out, depth + 1))
+    return
+  }
+  if (typeof v === "object") {
+    Object.values(v).forEach((x) => collectPhones(x, out, depth + 1))
+  }
+}
 
 function phonesFrom(obj: any): string[] {
   if (!obj || typeof obj !== "object") return []
-  return PHONE_KEYS.map((k) => obj[k]).filter((v) => v && String(v).trim()).map(String)
+  const out: string[] = []
+  PHONE_KEYS.forEach((k) => collectPhones(obj[k], out))
+  return out
 }
 
-function seedPhones(customer: any): string[] {
+export function findSeed(customer: any): any {
   const code = String(customer?.customerCode || "").trim()
   const name = norm(customer?.name)
-  const hit = (customersSeedRaw as any[]).find(
+  return (customersSeedRaw as any[]).find(
     (c) =>
       (code && String(c.code || "").trim() === code) ||
       (name &&
@@ -54,7 +86,20 @@ function seedPhones(customer: any): string[] {
           `${c.firstName || ""} ${c.lastName || ""}`,
         ].some((n) => norm(n) === name))
   )
+}
+
+function seedPhones(customer: any): string[] {
+  const hit = findSeed(customer)
   return hit ? phonesFrom(hit) : []
+}
+
+// فقط برای عیب‌یابی موقت (بعد از رفع مشکل می‌شود حذفش کرد). رقم‌ها با # پنهان می‌شوند.
+export function seedDebug(customer: any): string {
+  const hit = findSeed(customer)
+  if (!hit) return "seed: پیدا نشد"
+  const fields = Object.keys(hit).filter((k) => hit[k]).join(", ")
+  const shape = JSON.stringify(hit.phones ?? null).replace(/[0-9۰-۹٠-٩]/g, "#")
+  return `seed: پیدا شد | فیلدها: ${fields}\nساختار phones: ${shape}`
 }
 
 export function pickCustomerPhone(customer: any): string {

@@ -255,18 +255,39 @@ function dbRowToCustomer(r: any, rowNo: number): Customer {
   }
 }
 
-// مشتریان دیتابیس که در فایل seed نیستند (برای جلوگیری از تکرار)
+// ترکیب مشتریان فایل seed و دیتابیس:
+// - مشتری seed که ویرایش و در دیتابیس ذخیره شده، نسخهٔ دیتابیس جایگزین نسخهٔ seed می‌شود
+// - مشتریان فقط-دیتابیس به انتهای لیست اضافه می‌شوند
 function mergeDbCustomers(seed: Customer[], rows: any[]): Customer[] {
-  const seedCodes = new Set(seed.map((c) => c.code).filter(Boolean))
-  const seedNames = new Set(seed.map((c) => normalizeFa(getDisplayName(c))))
-  const out: Customer[] = []
+  const merged = [...seed]
+  const seedByCode = new Map<string, number>()
+  const seedByName = new Map<string, number>()
+  seed.forEach((c, i) => {
+    if (c.code) seedByCode.set(c.code, i)
+    seedByName.set(normalizeFa(getDisplayName(c)), i)
+  })
+
+  const extra: Customer[] = []
   for (const r of rows) {
     const code = r.customerCode && !String(r.customerCode).startsWith("C-") ? String(r.customerCode) : ""
-    if (code && seedCodes.has(code)) continue
-    if (!r.profile && seedNames.has(normalizeFa(String(r.name || "").trim()))) continue
-    out.push(dbRowToCustomer(r, seed.length + out.length + 1))
+    const nameKey = normalizeFa(String(r.name || "").trim())
+
+    let seedIndex: number | undefined
+    if (code && seedByCode.has(code)) seedIndex = seedByCode.get(code)
+    else if (!code && r.profile && seedByName.has(nameKey)) seedIndex = seedByName.get(nameKey)
+
+    if (seedIndex !== undefined) {
+      // فقط رکوردی که پروفایل کامل دارد (یعنی از همین صفحه ذخیره شده) جایگزین seed می‌شود
+      if (r.profile) {
+        const base = merged[seedIndex]
+        merged[seedIndex] = { ...dbRowToCustomer(r, base.row), id: base.id, row: base.row }
+      }
+      continue
+    }
+    if (!r.profile && seedByName.has(nameKey)) continue
+    extra.push(dbRowToCustomer(r, merged.length + extra.length + 1))
   }
-  return out
+  return [...merged, ...extra]
 }
 
 const emptyForm: Omit<Customer, "id" | "row" | "createdAt" | "updatedAt"> = {
@@ -372,19 +393,19 @@ function CustomersContent() {
     import("./customers-seed.json").then(async (mod) => {
       if (cancelled) return
       const seed = (mod.default as Customer[]) || []
-      // مشتریانی که بعداً از همین صفحه ثبت شده‌اند از دیتابیس خوانده و به لیست اضافه می‌شوند
-      let extra: Customer[] = []
+      // مشتریانی که از همین صفحه ثبت یا ویرایش شده‌اند از دیتابیس خوانده و با لیست seed ترکیب می‌شوند
+      let all: Customer[] = seed
       try {
         const res = await fetch("/api/customer-profiles")
         if (res.ok) {
           const rows = await res.json()
-          extra = mergeDbCustomers(seed, Array.isArray(rows) ? rows : [])
+          all = mergeDbCustomers(seed, Array.isArray(rows) ? rows : [])
         }
       } catch (e) {
         console.error(e)
       }
       if (cancelled) return
-      setData([...seed, ...extra])
+      setData(all)
       setSeedLoading(false)
     })
     return () => {
@@ -823,9 +844,16 @@ function CustomersContent() {
     try {
       if (editingId) {
         const existing = data.find((c) => c.id === editingId)
-        // مشتری ثبت‌شده در دیتابیس: ویرایش روی سرور هم ذخیره می‌شود
-        if (existing?.dbId) await saveToServer("PUT", existing.dbId, buildPayload(cleaned))
-        setData((prev) => prev.map((c) => (c.id === editingId ? { ...c, ...cleaned, updatedAt: now } : c)))
+        let dbId = existing?.dbId
+        if (dbId) {
+          // مشتری ثبت‌شده در دیتابیس: ویرایش روی سرور ذخیره می‌شود
+          await saveToServer("PUT", dbId, buildPayload(cleaned))
+        } else {
+          // مشتری فایل seed: اولین ویرایش یک نسخهٔ دیتابیسی می‌سازد تا تغییرات (مثلاً شماره) ماندگار شود
+          const saved = await saveToServer("POST", null, buildPayload(cleaned))
+          dbId = saved.id
+        }
+        setData((prev) => prev.map((c) => (c.id === editingId ? { ...c, ...cleaned, dbId, updatedAt: now } : c)))
       } else {
         // مشتری جدید: اول روی سرور ذخیره می‌شود تا با رفرش یا رفتن به صفحه‌ی دیگر از بین نرود
         const saved = await saveToServer("POST", null, buildPayload(cleaned))

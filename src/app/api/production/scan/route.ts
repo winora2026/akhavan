@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
+import { notifyOrderReadyForDelivery } from "@/lib/orderReadySms"
 
 function norm(s: string) {
   return (s || "")
@@ -579,6 +580,13 @@ export async function POST(req: Request) {
         operatorName: operatorName || null,
       },
     })
+
+    // پیامک «سفارش آماده تحویل است»: وقتی این قطعه کامل از انبار کالای نیمه‌ساخته رد شد.
+    // تابع خودش چک می‌کند که همه‌ی قطعه‌های سفارش رد شده باشند و فقط یک‌بار بفرستد.
+    // منتظر نتیجه‌اش نمی‌مانیم تا اسکن کند نشود؛ تابع هیچ‌وقت ارور نمی‌دهد.
+    if (remaining === 0 && isSemiFinishedWh(stationRow.station.name)) {
+      void notifyOrderReadyForDelivery(item.id)
+    }
 
     return NextResponse.json({
       success: true,

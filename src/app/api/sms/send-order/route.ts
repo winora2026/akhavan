@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getSession } from "@/lib/auth"
-import { buildOrderSms, normalizeIranMobile, pickCustomerPhone, sendSms } from "@/lib/sms"
+import {
+  buildOrderSms,
+  findSeed,
+  normalizeIranMobile,
+  pickCustomerPhone,
+  sendSms,
+  seedDebug,
+} from "@/lib/sms"
 
 export async function POST(req: NextRequest) {
   try {
@@ -27,9 +34,58 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "پیامک این فاکتور قبلاً ارسال شده" }, { status: 409 })
     }
 
-    const rawPhone = pickCustomerPhone(order.customer)
+    // 1) شماره از خود رکورد مشتریِ سفارش (یا profile یا فایل مشتریان قدیمی)
+    let rawPhone = pickCustomerPhone(order.customer)
+    let lookupInfo = "route v3 | جستجوی رکوردهای دیگر لازم نشد"
+
+    // 2) اگر پیدا نشد یا معتبر نبود: رکوردهای دیگرِ هم‌نام یا هم‌کد (مثلاً شماره‌ای که در «مدیریت مشتریان» ذخیره شده)
+    if (!normalizeIranMobile(rawPhone) && order.customer) {
+      const seedCode = String(findSeed(order.customer)?.code || "").trim()
+      const others = await prisma.customer.findMany({
+        where: {
+          id: { not: order.customer.id },
+          OR: [
+            { name: order.customer.name },
+            ...(seedCode ? [{ customerCode: seedCode }] : []),
+          ],
+        },
+      })
+      const details = others.map((o: any, i: number) => {
+        const p = pickCustomerPhone(o)
+        return `#${i + 1} کد=${o.customerCode ?? "-"} | شماره دارد: ${p ? "بله" : "خیر"} | موبایل معتبر: ${
+          normalizeIranMobile(p) ? "بله" : "خیر"
+        } | profile دارد: ${o.profile ? "بله" : "خیر"}`
+      })
+      lookupInfo = [
+        "route v3",
+        "کد seed: " + (seedCode || "پیدا نشد"),
+        "تعداد رکوردهای دیگر یافت‌شده: " + others.length,
+        ...details,
+      ].join("\n")
+
+      for (const other of others) {
+        const p = pickCustomerPhone(other)
+        if (normalizeIranMobile(p)) {
+          rawPhone = p
+          break
+        }
+      }
+    }
+
     if (!rawPhone) {
-      return NextResponse.json({ error: "شماره موبایل برای این مشتری ثبت نشده" }, { status: 400 })
+      // عیب‌یابی موقت: فقط اسم فیلدها و وضعیت جستجو نشان داده می‌شود، نه شماره‌ها
+      const c: any = order.customer
+      const debug = [
+        "کد دیتابیس: " + c?.customerCode,
+        "نام: " + c?.name,
+        "فیلدهای دارای مقدار: " + Object.keys(c || {}).filter((k) => c[k]).join(", "),
+        seedDebug(c),
+        lookupInfo,
+      ].join("\n")
+      return NextResponse.json(
+        { error: "شماره موبایل برای این مشتری ثبت نشده\n\n" + debug },
+        { status: 400 }
+      )
     }
     const mobile = normalizeIranMobile(rawPhone)
     if (!mobile) {
