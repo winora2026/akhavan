@@ -990,7 +990,7 @@ export default function StationQueuePage() {
 
   // th های sticky پس‌زمینه‌ی مات می‌خواهند تا ردیف‌ها زیرشان دیده نشوند
   const thS =
-    "sticky top-0 z-10 bg-teal-100 border border-gray-400 p-2 shadow-[0_1px_0_0_rgba(20,184,166,0.5)]"
+    "sticky top-0 z-10 bg-teal-100 border border-gray-400 px-2 py-1.5 shadow-[0_1px_0_0_rgba(20,184,166,0.5)]"
   const sortTh = (
     label: string,
     key: string,
@@ -1462,30 +1462,70 @@ export default function StationQueuePage() {
         }`}
       >
         {/* هدر کارتابل ایستگاه: عنوان + گزارش (جمع تعداد و متراژ) + خروجی اکسل */}
-        <div className="mb-2 shrink-0 rounded-2xl bg-white/95 shadow-md p-3 border border-teal-300">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-bold text-blue-950">
-                کارتابل {stationLocked ? selectedStationName : "ایستگاه"}
+        <div className="mb-1.5 shrink-0 rounded-2xl bg-white/95 shadow-md px-3 py-2 border border-teal-300">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+            <div className="leading-tight">
+              <h1 className="text-lg font-bold text-blue-950">
+                کارتابل {selectedStationName}
               </h1>
-              <p className="text-sm text-blue-800 mt-1">
-                ایستگاه:{" "}
-                <span className="font-bold text-teal-700">
-                  {selectedStationName}
-                </span>
-                {stationLocked ? " (قفل — بر اساس ورود شما)" : ""}
+              <p className="text-[11px] text-blue-700">
+                {todayFa}
+                {stationLocked ? " — ایستگاه قفل (بر اساس ورود شما)" : ""}
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
+
+            {(!isLoadingStation || mainTab === "queue") && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-sm text-blue-800">
+                  سفارش <b className="text-teal-700">{totals.orders}</b>
+                </span>
+                <span className="rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-sm text-blue-800">
+                  قلم (باقی‌مانده){" "}
+                  <b className="text-teal-700">{totals.items}</b>
+                  {totals.totalItems > totals.items && (
+                    <span className="mr-1 text-xs font-semibold text-blue-700">
+                      از {totals.totalItems}
+                    </span>
+                  )}
+                </span>
+                <span className="rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-sm text-blue-800">
+                  جمع تعداد <b className="text-teal-700">{totals.qty}</b>
+                </span>
+                <span className="rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-sm text-blue-800">
+                  جمع متراژ{" "}
+                  <b className="text-teal-700">{totals.meterage.toFixed(4)}</b>
+                </span>
+              </div>
+            )}
+
+            <div className="mr-auto flex flex-wrap items-center gap-1.5">
+              {(!isLoadingStation || mainTab === "queue") && (
+                <>
+                  <button
+                    type="button"
+                    onClick={exportStationExcel}
+                    className="rounded-lg border border-teal-600 bg-white px-3 py-1.5 text-sm font-bold text-teal-800 hover:bg-teal-50"
+                  >
+                    خروجی اکسل
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => fetchQueue()}
+                    className="rounded-lg bg-teal-500 hover:bg-teal-600 px-3 py-1.5 text-sm font-bold text-white"
+                  >
+                    بروزرسانی
+                  </button>
+                </>
+              )}
               <Link
                 href="/production/cutting"
-                className="rounded-xl border border-teal-500/40 bg-white px-4 py-2.5 shadow-sm font-bold text-blue-900"
+                className="rounded-lg border border-teal-500/40 bg-white px-3 py-1.5 text-sm shadow-sm font-bold text-blue-900"
               >
                 برنامه‌ریزی برش
               </Link>
               <Link
                 href="/production/queue"
-                className="rounded-xl border border-teal-500/40 bg-white px-4 py-2.5 shadow-sm font-bold text-blue-900"
+                className="rounded-lg border border-teal-500/40 bg-white px-3 py-1.5 text-sm shadow-sm font-bold text-blue-900"
               >
                 روند کاری
               </Link>
@@ -1498,75 +1538,17 @@ export default function StationQueuePage() {
                     closeTopRef.current()
                   }
                 }}
-                className="rounded-xl border border-teal-500/40 bg-white px-4 py-2.5 shadow-sm font-bold text-blue-900"
+                className="rounded-lg border border-teal-500/40 bg-white px-3 py-1.5 text-sm shadow-sm font-bold text-blue-900"
               >
                 {layerOpen ? "بازگشت (یک مرحله)" : "بازگشت"}
               </Link>
             </div>
           </div>
-
-          {(!isLoadingStation || mainTab === "queue") && (
-            <div className="mt-2 border-t border-teal-200 pt-2">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-                <h2 className="font-black text-blue-950">
-                  گزارش کارتابل {selectedStationName} — {todayFa}
-                </h2>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={exportStationExcel}
-                    className="rounded-xl border border-teal-600 bg-white px-4 py-2 text-sm font-bold text-teal-800 hover:bg-teal-50"
-                  >
-                    خروجی اکسل
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => fetchQueue()}
-                    className="rounded-xl bg-teal-500 hover:bg-teal-600 px-4 py-2 text-sm font-bold text-white"
-                  >
-                    بروزرسانی
-                  </button>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="rounded-xl bg-teal-50 border border-teal-200 p-2 text-center">
-                  <p className="text-sm text-blue-700">تعداد سفارش</p>
-                  <p className="text-xl font-bold text-teal-700">
-                    {totals.orders}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-teal-50 border border-teal-200 p-2 text-center">
-                  <p className="text-sm text-blue-700">تعداد قلم (باقی‌مانده)</p>
-                  <p className="text-xl font-bold text-teal-700">
-                    {totals.items}
-                    {totals.totalItems > totals.items && (
-                      <span className="mr-1 text-sm font-semibold text-blue-700">
-                        از {totals.totalItems}
-                      </span>
-                    )}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-teal-50 border border-teal-200 p-2 text-center">
-                  <p className="text-sm text-blue-700">جمع تعداد</p>
-                  <p className="text-xl font-bold text-teal-700">
-                    {totals.qty}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-teal-50 border border-teal-200 p-2 text-center">
-                  <p className="text-sm text-blue-700">جمع متراژ</p>
-                  <p className="text-xl font-bold text-teal-700">
-                    {totals.meterage.toFixed(4)}
-                  </p>
-                </div>
-              </div>
-              {filterActive && summary && (
-                <p className="mt-2 text-xs text-blue-700">
-                  فیلتر فعال است — کل صف این ایستگاه (بدون فیلتر): {summary.count}{" "}
-                  قطعه | {summary.totalQuantity} عدد |{" "}
-                  {Number(summary.totalMeterage).toFixed(3)} متر
-                </p>
-              )}
-            </div>
+          {(!isLoadingStation || mainTab === "queue") && filterActive && summary && (
+            <p className="mt-1 text-xs text-blue-700">
+              فیلتر فعال است — کل صف این ایستگاه (بدون فیلتر): {summary.count} قطعه |{" "}
+              {summary.totalQuantity} عدد | {Number(summary.totalMeterage).toFixed(3)} متر
+            </p>
           )}
         </div>
 
@@ -1599,14 +1581,14 @@ export default function StationQueuePage() {
 
         {(!isLoadingStation || mainTab === "queue") && (
           <>
-            <div className="mb-2 shrink-0 rounded-2xl bg-white/95 shadow-md p-3 border border-teal-300">
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+            <div className="mb-1.5 shrink-0 rounded-2xl bg-white/95 shadow-md px-3 py-2 border border-teal-300">
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
                 <div className="md:col-span-3">
-                  <label className="mb-1.5 block text-sm font-bold text-blue-900">
+                  <label className="mb-0.5 block text-xs font-bold text-blue-900">
                     ایستگاه
                   </label>
                   {stationLocked ? (
-                    <div className="w-full rounded-xl border border-teal-500/40 bg-teal-50 px-4 py-3 text-sm font-bold text-teal-900">
+                    <div className="w-full rounded-xl border border-teal-500/40 bg-teal-50 px-3 py-1.5 text-sm font-bold text-teal-900">
                       {selectedStationName}
                     </div>
                   ) : (
@@ -1617,7 +1599,7 @@ export default function StationQueuePage() {
                         setDetail(null)
                         setMainTab("queue")
                       }}
-                      className="w-full rounded-xl border border-teal-500/30 bg-white px-4 py-3 text-sm font-semibold"
+                      className="w-full rounded-xl border border-teal-500/30 bg-white px-3 py-1.5 text-sm font-semibold"
                     >
                       {stations.map((s) => (
                         <option key={s.id} value={s.id}>
@@ -1628,7 +1610,7 @@ export default function StationQueuePage() {
                   )}
                 </div>
                 <div className="md:col-span-5">
-                  <label className="mb-1.5 block text-sm font-bold text-blue-900">
+                  <label className="mb-0.5 block text-xs font-bold text-blue-900">
                     اسکن بارکد
                   </label>
                   {/* readOnly به‌جای disabled: با disabled شدن فیلد، فوکوس از دست می‌رفت و کاراکترهای اسکنر گم می‌شد */}
@@ -1638,12 +1620,12 @@ export default function StationQueuePage() {
                     value={barcode}
                     onChange={(e) => setBarcode(e.target.value)}
                     onKeyDown={onKeyDown}
-                    className="w-full rounded-xl border-2 border-teal-500 bg-white px-4 py-3 text-lg font-bold"
+                    className="w-full rounded-xl border-2 border-teal-500 bg-white px-3 py-1.5 text-base font-bold"
                     autoComplete="off"
                     readOnly={scanLoading}
                   />
                   {lastScanned && (
-                    <p className="mt-1 text-xs text-blue-700">
+                    <p className="mt-0.5 text-[11px] leading-tight text-blue-700">
                       آخرین بارکد دریافتی:{" "}
                       <span className="font-mono font-bold" dir="ltr">
                         {lastScanned}
@@ -1652,13 +1634,13 @@ export default function StationQueuePage() {
                   )}
                 </div>
                 <div className="md:col-span-2">
-                  <label className="mb-1.5 block text-sm font-bold text-blue-900">
+                  <label className="mb-0.5 block text-xs font-bold text-blue-900">
                     اپراتور
                   </label>
                   <input
                     value={operatorName}
                     onChange={(e) => setOperatorName(e.target.value)}
-                    className="w-full rounded-xl border border-teal-500/30 bg-white px-4 py-3 text-sm font-semibold"
+                    className="w-full rounded-xl border border-teal-500/30 bg-white px-3 py-1.5 text-sm font-semibold"
                   />
                 </div>
                 <div className="md:col-span-2">
@@ -1667,26 +1649,26 @@ export default function StationQueuePage() {
                       doScan(false, null, inputRef.current?.value || barcode)
                     }
                     disabled={scanLoading}
-                    className="w-full rounded-xl bg-green-600 text-white px-4 py-3 font-bold text-lg disabled:opacity-50"
+                    className="w-full rounded-xl bg-green-600 text-white px-4 py-1.5 font-bold text-base disabled:opacity-50"
                   >
                     {scanLoading ? "..." : "ثبت"}
                   </button>
                 </div>
               </div>
               {lastResult?.type === "err" && (
-                <div className="mt-3 rounded-xl bg-red-100 border border-red-300 px-4 py-3 font-bold text-red-800 text-sm">
+                <div className="mt-1.5 rounded-xl bg-red-100 border border-red-300 px-3 py-1.5 font-bold text-red-800 text-sm">
                   {lastResult.text}
                 </div>
               )}
               {lastResult?.type === "ok" && (
-                <div className="mt-3 rounded-xl bg-green-100 border border-green-300 px-4 py-3 font-bold text-green-800 text-sm">
+                <div className="mt-1.5 rounded-xl bg-green-100 border border-green-300 px-3 py-1.5 font-bold text-green-800 text-sm">
                   {lastResult.text}
                 </div>
               )}
             </div>
 
-            <div className="mb-2 shrink-0 rounded-2xl bg-white/95 shadow-md p-3 border border-teal-300">
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+            <div className="mb-1.5 shrink-0 rounded-2xl bg-white/95 shadow-md px-3 py-1.5 border border-teal-300">
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
                 <div className="md:col-span-4">
                   <input
                     list="pl"
@@ -1697,7 +1679,7 @@ export default function StationQueuePage() {
                     onKeyDown={(e) => filterKeyDown(e, () => setProductFilter(""))}
                     disabled={filtersFrozen}
                     placeholder="فیلتر کالا"
-                    className="w-full rounded-xl border px-4 py-2.5 text-sm font-semibold disabled:bg-amber-50"
+                    className="w-full rounded-xl border px-3 py-1.5 text-sm font-semibold disabled:bg-amber-50"
                   />
                   <datalist id="pl">
                     {productNames.map((n) => (
@@ -1714,14 +1696,14 @@ export default function StationQueuePage() {
                     onKeyDown={(e) => filterKeyDown(e, () => setSearch(""))}
                     disabled={filtersFrozen}
                     placeholder="مشتری / سفارش / بارکد"
-                    className="w-full rounded-xl border px-4 py-2.5 text-sm font-semibold disabled:bg-amber-50"
+                    className="w-full rounded-xl border px-3 py-1.5 text-sm font-semibold disabled:bg-amber-50"
                   />
                 </div>
                 <div className="md:col-span-2">
                   <button
                     type="button"
                     onClick={() => setFiltersFrozen((v) => !v)}
-                    className={`w-full rounded-xl px-3 py-2.5 text-sm font-bold border ${
+                    className={`w-full rounded-xl px-3 py-1.5 text-sm font-bold border ${
                       filtersFrozen
                         ? "bg-amber-500 text-white border-amber-600"
                         : "bg-white text-blue-900 border-teal-300"
@@ -1730,29 +1712,29 @@ export default function StationQueuePage() {
                     {filtersFrozen ? "فیلتر قفل" : "قفل فیلتر"}
                   </button>
                 </div>
-                <div className="md:col-span-2 text-center font-bold py-2 text-sm">
+                <div className="md:col-span-2 text-center font-bold py-1 text-sm">
                   {orderGroups.length} سفارش / {filtered.length} قلم
                 </div>
               </div>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-hidden rounded-2xl bg-white shadow-md p-4 border border-teal-300">
+            <div className="flex-1 min-h-0 overflow-hidden rounded-2xl bg-white shadow-md p-2 border border-teal-300">
               {loading ? (
                 <p className="text-center py-16 font-bold">بارگذاری...</p>
               ) : openOrderKey ? (
                 /* ---------- داخل سفارش: لیست اقلام ---------- */
                 openGroup ? (
                   <div className="h-full flex flex-col">
-                    <div className="mb-2 shrink-0 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-teal-200 bg-teal-50 p-3">
+                    <div className="mb-1 shrink-0 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-teal-200 bg-teal-50 px-3 py-1.5">
                       <div className="flex flex-wrap items-center gap-3">
                         <button
                           type="button"
                           onClick={() => setOpenOrderKey(null)}
-                          className="rounded-xl border border-teal-500 bg-white px-4 py-2 font-bold text-teal-800 hover:bg-teal-100"
+                          className="rounded-lg border border-teal-500 bg-white px-3 py-1 text-sm font-bold text-teal-800 hover:bg-teal-100"
                         >
                           → بازگشت به لیست سفارش‌ها
                         </button>
-                        <span className="text-lg font-black text-blue-950">
+                        <span className="text-base font-black text-blue-950">
                           سفارش {openGroup.orderNumber}
                         </span>
                         <span className="font-bold text-blue-900">
@@ -1773,8 +1755,8 @@ export default function StationQueuePage() {
                         </span>
                       </div>
                     </div>
-                    <div className="mb-2 shrink-0 flex flex-wrap items-center gap-3">
-                      <p className="text-xs text-blue-700">
+                    <div className="mb-1 shrink-0 flex flex-wrap items-center gap-2">
+                      <p className="text-[11px] leading-tight text-blue-700">
                         دبل‌کلیک روی قلم یا اسکن بارکد = رد ایستگاه | تیک چند قلم + «رد گروهی» = رد
                         همه‌ی انتخاب‌شده‌ها با هم | «نمایش» = جزئیات و نقشه بدون رد | Esc = یک مرحله
                         بازگشت
@@ -1842,7 +1824,7 @@ export default function StationQueuePage() {
                             onDoubleClick={() => completeByRow(row)}
                           >
                             <td
-                              className="border border-gray-400 p-2 text-center"
+                              className="border border-gray-400 px-2 py-1 text-center"
                               onClick={(e) => e.stopPropagation()}
                               onDoubleClick={(e) => e.stopPropagation()}
                             >
@@ -1854,33 +1836,33 @@ export default function StationQueuePage() {
                                 className="h-4 w-4 cursor-pointer"
                               />
                             </td>
-                            <td className="border border-gray-400 p-2 text-center font-bold">
+                            <td className="border border-gray-400 px-2 py-1 text-center font-bold">
                               {index + 1}
                             </td>
-                            <td className="border border-gray-400 p-2 font-bold">
+                            <td className="border border-gray-400 px-2 py-1 font-bold">
                               {row.productionItem.productName}
                             </td>
-                            <td className="border border-gray-400 p-2 text-center font-mono font-bold">
+                            <td className="border border-gray-400 px-2 py-1 text-center font-mono font-bold">
                               {row.productionItem.barcode || "—"}
                             </td>
-                            <td className="border border-gray-400 p-2 text-center font-black">
+                            <td className="border border-gray-400 px-2 py-1 text-center font-black">
                               {row.productionItem.length ?? "—"}
                             </td>
-                            <td className="border border-gray-400 p-2 text-center font-black">
+                            <td className="border border-gray-400 px-2 py-1 text-center font-black">
                               {row.productionItem.width ?? "—"}
                             </td>
-                            <td className="border border-gray-400 p-2 text-center font-black">
+                            <td className="border border-gray-400 px-2 py-1 text-center font-black">
                               {row.quantityIn ?? row.productionItem.quantity}
                             </td>
-                            <td className="border border-gray-400 p-2 text-center">
+                            <td className="border border-gray-400 px-2 py-1 text-center">
                               {row.quantityOut ?? 0}
                             </td>
-                            <td className="border border-gray-400 p-2 text-center">
+                            <td className="border border-gray-400 px-2 py-1 text-center">
                               {row.productionItem.meterage != null
                                 ? Number(row.productionItem.meterage).toFixed(3)
                                 : "—"}
                             </td>
-                            <td className="border border-gray-400 p-2 font-bold">
+                            <td className="border border-gray-400 px-2 py-1 font-bold">
                               {servicesLines(row.productionItem.servicesText).length >
                               0
                                 ? servicesLines(row.productionItem.servicesText).map(
@@ -1888,15 +1870,15 @@ export default function StationQueuePage() {
                                   )
                                 : "—"}
                             </td>
-                            <td className="border border-gray-400 p-2 text-xs">
+                            <td className="border border-gray-400 px-2 py-1 text-xs">
                               {row.productionItem.notes || "—"}
                             </td>
-                            <td className="border border-gray-400 p-2 text-center">
+                            <td className="border border-gray-400 px-2 py-1 text-center">
                               <span className="whitespace-nowrap rounded-full bg-yellow-100 px-3 py-1 text-xs font-bold">
                                 {statusLabel(row.status)}
                               </span>
                             </td>
-                            <td className="border border-gray-400 p-2 text-center">
+                            <td className="border border-gray-400 px-2 py-1 text-center">
                               <div className="flex flex-wrap justify-center gap-1">
                                 {showRouteBtn && (
                                   <button
@@ -1974,7 +1956,7 @@ export default function StationQueuePage() {
               ) : (
                 /* ---------- لیست سفارش‌ها (هر سفارش یک ردیف) ---------- */
                 <div className="h-full flex flex-col">
-                  <p className="mb-2 shrink-0 text-xs text-blue-700">
+                  <p className="mb-1 shrink-0 text-[11px] text-blue-700">
                     کلیک روی هر سفارش = ورود به اقلام همان سفارش، سپس دبل‌کلیک روی قلم یا اسکن بارکد برای رد
                   </p>
                   <div className="flex-1 min-h-0 overflow-auto">
@@ -2005,26 +1987,26 @@ export default function StationQueuePage() {
                             setSelectedRowId(null)
                           }}
                         >
-                          <td className="border border-gray-400 p-2 text-center font-bold">
+                          <td className="border border-gray-400 px-2 py-1 text-center font-bold">
                             {i + 1}
                           </td>
-                          <td className="border border-gray-400 p-2 text-center font-black text-teal-800">
+                          <td className="border border-gray-400 px-2 py-1 text-center font-black text-teal-800">
                             {g.orderNumber}
                           </td>
-                          <td className="border border-gray-400 p-2 font-bold">
+                          <td className="border border-gray-400 px-2 py-1 font-bold">
                             {g.customerName}
                           </td>
-                          <td className="border border-gray-400 p-2 font-bold">
+                          <td className="border border-gray-400 px-2 py-1 font-bold">
                             {g.productSummary}
                           </td>
                           <td
-                            className={`border border-gray-400 p-2 text-center ${
+                            className={`border border-gray-400 px-2 py-1 text-center ${
                               g.priority !== "عادی" ? "font-black text-red-700" : ""
                             }`}
                           >
                             {g.priority}
                           </td>
-                          <td className="border border-gray-400 p-2 text-center font-bold">
+                          <td className="border border-gray-400 px-2 py-1 text-center font-bold">
                             {g.itemCount}
                             {g.totalItems > g.itemCount && (
                               <span className="mr-1 text-xs font-semibold text-blue-700">
@@ -2032,19 +2014,19 @@ export default function StationQueuePage() {
                               </span>
                             )}
                           </td>
-                          <td className="border border-gray-400 p-2 text-center font-black">
+                          <td className="border border-gray-400 px-2 py-1 text-center font-black">
                             {g.totalQty}
                           </td>
-                          <td className="border border-gray-400 p-2 text-center">
+                          <td className="border border-gray-400 px-2 py-1 text-center">
                             {g.totalMeterage.toFixed(3)}
                           </td>
-                          <td className="border border-gray-400 p-2 text-center">
+                          <td className="border border-gray-400 px-2 py-1 text-center">
                             {formatFaDate(g.orderDate)}
                           </td>
-                          <td className="border border-gray-400 p-2 text-center">
+                          <td className="border border-gray-400 px-2 py-1 text-center">
                             {formatFaDate(g.deliveryDate)}
                           </td>
-                          <td className="border border-gray-400 p-2 text-xs font-bold">
+                          <td className="border border-gray-400 px-2 py-1 text-xs font-bold">
                             {g.servicesSummary.length > 0
                               ? g.servicesSummary.slice(0, 3).map((sv, k) => (
                                   <div key={k}>{sv}</div>
