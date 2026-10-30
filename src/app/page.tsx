@@ -8,6 +8,7 @@ const FISCAL_KEY = "akhavan_fiscal_year"
 export default function HomePage() {
   const [showSalesMenu, setShowSalesMenu] = useState(false)
   const [showProductionMenu, setShowProductionMenu] = useState(false)
+  const [showFinanceMenu, setShowFinanceMenu] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [fiscalYear, setFiscalYear] = useState("1405")
   const [editingFiscal, setEditingFiscal] = useState(false)
@@ -17,6 +18,7 @@ export default function HomePage() {
   } | null>(null)
   const salesRef = useRef<HTMLDivElement>(null)
   const productionRef = useRef<HTMLDivElement>(null)
+  const financeRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const saved = localStorage.getItem(FISCAL_KEY)
@@ -58,7 +60,6 @@ export default function HomePage() {
     })()
   }, [])
 
-  // Esc = خروج
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return
@@ -80,6 +81,9 @@ export default function HomePage() {
       ) {
         setShowProductionMenu(false)
       }
+      if (financeRef.current && !financeRef.current.contains(e.target as Node)) {
+        setShowFinanceMenu(false)
+      }
     }
     document.addEventListener("mousedown", handleClickOutside)
     return () => document.removeEventListener("mousedown", handleClickOutside)
@@ -87,6 +91,7 @@ export default function HomePage() {
 
   const isProductionOnly = currentUser?.role === "production"
   const canOpenSales = !isProductionOnly
+  const canOpenFinance = !isProductionOnly
 
   const menuItems = [
     {
@@ -116,6 +121,7 @@ export default function HomePage() {
       title: "مالی",
       href: "#",
       icon: "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+      isFinance: true,
       lockedForProduction: true,
     },
     {
@@ -190,6 +196,14 @@ export default function HomePage() {
       title: "برنامه‌ریزی برش",
       href: "/production/cutting",
       icon: "M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z",
+    },
+  ]
+
+  const financeItems = [
+    {
+      title: "واریزی‌های مشتریان",
+      href: "/finance/deposits",
+      icon: "M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z",
     },
   ]
 
@@ -368,7 +382,9 @@ export default function HomePage() {
                 {menuItems.map((item) => {
                   const blockedForProduction =
                     isProductionOnly &&
-                    (item.isSales || (item as any).lockedForProduction)
+                    (item.isSales ||
+                      (item as any).isFinance ||
+                      (item as any).lockedForProduction)
 
                   if (item.isSales) {
                     return (
@@ -380,6 +396,7 @@ export default function HomePage() {
                           onClick={() => {
                             if (!canOpenSales) return
                             setShowProductionMenu(false)
+                            setShowFinanceMenu(false)
                             setShowSalesMenu((prev) => !prev)
                           }}
                           className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition group"
@@ -424,6 +441,7 @@ export default function HomePage() {
                           aria-expanded={showProductionMenu}
                           onClick={() => {
                             setShowSalesMenu(false)
+                            setShowFinanceMenu(false)
                             setShowProductionMenu((prev) => !prev)
                           }}
                           className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition group"
@@ -456,7 +474,81 @@ export default function HomePage() {
                     )
                   }
 
-                  // انبار / مالی / گزارش / تنظیمات — برای تولید فقط کلیک بی‌اثر
+                  if ((item as any).isFinance) {
+                    if (blockedForProduction) {
+                      return (
+                        <button
+                          key={item.title}
+                          type="button"
+                          onClick={() => {}}
+                          className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
+                        >
+                          <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
+                            <svg
+                              className="w-7 h-7 text-teal-700"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2.2}
+                                d={item.icon}
+                              />
+                            </svg>
+                          </div>
+                          <span className="text-sm sm:text-base font-bold text-gray-800 text-center">
+                            {item.title}
+                          </span>
+                        </button>
+                      )
+                    }
+                    return (
+                      <div
+                        key={item.title}
+                        ref={financeRef}
+                        className="relative"
+                      >
+                        <button
+                          type="button"
+                          aria-haspopup="menu"
+                          aria-expanded={showFinanceMenu}
+                          onClick={() => {
+                            if (!canOpenFinance) return
+                            setShowSalesMenu(false)
+                            setShowProductionMenu(false)
+                            setShowFinanceMenu((prev) => !prev)
+                          }}
+                          className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition group"
+                        >
+                          <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
+                            <svg
+                              className="w-7 h-7 text-teal-700"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2.2}
+                                d={item.icon}
+                              />
+                            </svg>
+                          </div>
+                          <span className="text-sm sm:text-base font-bold text-gray-800 text-center">
+                            {item.title}
+                          </span>
+                        </button>
+                        {canOpenFinance &&
+                          renderSubMenu(showFinanceMenu, financeItems, () =>
+                            setShowFinanceMenu(false)
+                          )}
+                      </div>
+                    )
+                  }
+
                   if (blockedForProduction) {
                     return (
                       <button

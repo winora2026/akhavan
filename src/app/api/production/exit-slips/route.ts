@@ -104,7 +104,14 @@ export async function POST(req: Request) {
     const itemsData = productionItems.map((item) => {
       const order = item.productionOrder?.order
       const salesItem =
-        order?.items?.find((si: any) => si.id === item.orderItemId) || null
+        order?.items?.find((si: any) => si.id === item.orderItemId) ||
+        (order?.items || []).find(
+          (si: any) =>
+            si.productName === item.productName &&
+            Number(si.length || 0) === Number(item.length || 0) &&
+            Number(si.width || 0) === Number(item.width || 0)
+        ) ||
+        null
       return {
         productionItemId: item.id,
         orderId: order?.id ?? null,
@@ -121,18 +128,19 @@ export async function POST(req: Request) {
       }
     })
 
-    // ساخت شماره خروج (با چند بار تلاش در صورت تکراری بودن)
+    // ساخت شماره خروج: سریالی از ۵۰۰ به بعد (بزرگ‌ترین شماره‌ی موجود + ۱).
+    // اگر دو نفر هم‌زمان ثبت کنند و شماره تکراری شد، دوباره محاسبه و تلاش می‌شود.
+    const EXIT_NUMBER_START = 500
     let slip = null
     let lastError: any = null
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const last = await prisma.exitSlip.findFirst({
-        orderBy: { createdAt: "desc" },
-        select: { exitNumber: true },
-      })
-      const lastNum = last
-        ? parseInt(String(last.exitNumber).replace(/\D/g, ""), 10) || 0
-        : 0
-      const exitNumber = String(lastNum + 1 + attempt)
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const all = await prisma.exitSlip.findMany({ select: { exitNumber: true } })
+      let maxNum = EXIT_NUMBER_START - 1
+      for (const s of all) {
+        const n = parseInt(String(s.exitNumber).replace(/\D/g, ""), 10)
+        if (!isNaN(n) && n > maxNum) maxNum = n
+      }
+      const exitNumber = String(maxNum + 1)
 
       try {
         slip = await prisma.exitSlip.create({

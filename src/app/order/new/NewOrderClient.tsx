@@ -63,6 +63,10 @@ const INVOICE_FOOTER_H = 210
 // ۱۲۰ پیکسلی بالای صفحه شروع می‌شود، پس در چاپ هم نباید ۲۳۰ پیکسل کامل رزرو شود؛ وگرنه ظرفیت هر صفحه
 // کم می‌شود و پیش‌فاکتورِ یک‌صفحه‌ای دو صفحه چاپ می‌شود. اگر محتوا زیر تصویر هدر رفت، این عدد را زیاد کنید.
 const INVOICE_PRINT_HEADER_SPACE = 130
+// حاشیه‌ی صفحه‌ی چاپ (میلی‌متر). ۰ یعنی تصویر هدر/فوتر تا لبه‌ی کاغذ می‌رود؛ ولی بیشتر پرینترها
+// (مثلاً Canon) حدود ۳ تا ۶ میلی‌متر از لبه‌ی کاغذ را نمی‌توانند چاپ کنند و محتوا بریده یا جابه‌جا
+// می‌شود. اگر روی پرینتری چاپ بریده/بهم‌ریخته بود این عدد را مثلاً ۵ بگذارید.
+const PRINT_PAGE_MARGIN_MM = 0
 
 // لیست اولیه‌ی توضیحات (از فایل seed — همان لیست نرم‌افزار قبلی). توضیحات جدیدی که
 // کارشناس‌ها اضافه می‌کنند روی سرور ذخیره می‌شود (/api/descriptions) و با این لیست ادغام می‌شود.
@@ -313,6 +317,24 @@ const productsList = (productsSeedRaw as any[]).map((p: any) => {
   }
 })
 
+// جستجوی کالا (همان منطق جستجوی فرم افزودن کالا) برای پنجره‌ی «ویرایش گروهی»
+const searchProductList = (rawQuery: string) => {
+  const raw = rawQuery.trim()
+  if (!raw) return productsList.slice(0, 8)
+  const normalizedQuery = normalizeText(raw)
+  const tokens = normalizedQuery.split(/\s+/).filter(Boolean)
+  const isNumericQuery = /^[0-9]+(\.[0-9]+)?$/.test(normalizedQuery)
+  if (isNumericQuery) {
+    const escaped = normalizedQuery.replace(/\./g, "\\.")
+    const thicknessRegex = new RegExp(`(^|[^0-9.])${escaped}\\s*میل`)
+    const thicknessMatches = productsList.filter((p) => thicknessRegex.test(p.normalizedName))
+    if (thicknessMatches.length) return thicknessMatches.slice(0, 40)
+  }
+  return productsList
+    .filter((p) => tokens.every((t) => p.normalizedName.includes(t) || p.normalizedCode.includes(t)))
+    .slice(0, 20)
+}
+
 // لیست خدمات از فایل seed (کد، نام، واحد) — نسخه‌ی نرمال‌شده‌ی نام و کد هم
 // همین‌جا محاسبه می‌شود تا جستجوی داخل مودال خدمات کند نشود.
 const servicesList = (servicesSeedRaw as any[]).map((s: any) => {
@@ -475,6 +497,21 @@ export default function NewOrderClient() {
   // ردیف انتخاب‌شده در جدول اقلام — با کلیک روی ردیف انتخاب می‌شود و کلیدهای
   // F3 (خدمات) و F4 (توضیحات) پنجره‌ی مربوطه را برای همین ردیف باز می‌کنند
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null)
+  // انتخاب چندتایی اقلام (چک‌باکس ستون اول جدول) برای «ویرایش گروهی»
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [showBulkModal, setShowBulkModal] = useState(false)
+  const [bulkProduct, setBulkProduct] = useState("")
+  const [bulkProductCode, setBulkProductCode] = useState("")
+  const [bulkUnitPrice, setBulkUnitPrice] = useState("")
+  const [bulkUnit, setBulkUnit] = useState("")
+  const [bulkQuantity, setBulkQuantity] = useState("")
+  const [bulkLength, setBulkLength] = useState("")
+  const [bulkWidth, setBulkWidth] = useState("")
+  const [bulkInstallCode, setBulkInstallCode] = useState("")
+  const [showBulkProductDropdown, setShowBulkProductDropdown] = useState(false)
+  const [bulkActiveIndex, setBulkActiveIndex] = useState(0)
+  const [debouncedBulkQuery, setDebouncedBulkQuery] = useState("")
+  const bulkPriceRef = useRef<HTMLInputElement>(null)
   const [mapImages, setMapImages] = useState<MapImage[]>([])
   const [previewFile, setPreviewFile] = useState<{ url: string; type: "image" | "pdf" } | null>(null)
   const [showServices, setShowServices] = useState(false)
@@ -1143,6 +1180,15 @@ export default function NewOrderClient() {
     return results.slice(0, 20)
   }, [debouncedProductQuery])
 
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedBulkQuery(bulkProduct), 120)
+    return () => clearTimeout(t)
+  }, [bulkProduct])
+  const filteredBulkProducts = useMemo(
+    () => (showBulkModal && debouncedBulkQuery.trim() ? searchProductList(debouncedBulkQuery) : []),
+    [showBulkModal, debouncedBulkQuery]
+  )
+
   // فهرست کامل توضیحات = توضیحات اضافه‌شده توسط کارشناس‌ها (اول) + لیست اولیه.
   // نسخه‌ی نرمال‌شده فقط وقتی لیست عوض شود دوباره محاسبه می‌شود (نه در هر keystroke).
   const descriptionsIndex = useMemo(() => {
@@ -1241,6 +1287,7 @@ export default function NewOrderClient() {
       setShowCustomerDropdown(false)
       setShowProductDropdown(false)
       setShowModalDescDropdown(false)
+      setShowBulkProductDropdown(false)
     }
     window.addEventListener("click", handleClick)
     return () => window.removeEventListener("click", handleClick)
@@ -1265,7 +1312,7 @@ export default function NewOrderClient() {
       // جلوی رفتار پیش‌فرض مرورگر (F3 = جستجو در صفحه) همیشه گرفته شود
       e.preventDefault()
       // وقتی یکی از پنجره‌ها باز است، پنجره‌ی دیگری باز نشود
-      if (showServices || showDescriptionModal || showInstallModal || showInvoice || copyModal) return
+      if (showServices || showDescriptionModal || showInstallModal || showInvoice || copyModal || showBulkModal) return
       // ردیف انتخاب‌شده؛ اگر انتخابی نیست (یا حذف شده) آخرین قلم لیست
       const target = items.find((i) => i.id === selectedItemId) ?? items[items.length - 1]
       if (!target) return
@@ -1274,7 +1321,7 @@ export default function NewOrderClient() {
     }
     window.addEventListener("keydown", handleFKeys)
     return () => window.removeEventListener("keydown", handleFKeys)
-  }, [selectedItemId, items, showServices, showDescriptionModal, showInstallModal, showInvoice, copyModal])
+  }, [selectedItemId, items, showServices, showDescriptionModal, showInstallModal, showInvoice, copyModal, showBulkModal])
 
   const isOrderInfoComplete =
     customerName.trim() !== "" &&
@@ -1465,6 +1512,14 @@ export default function NewOrderClient() {
         setContextMenu(null)
         return
       }
+      if (showBulkProductDropdown) {
+        setShowBulkProductDropdown(false)
+        return
+      }
+      if (showBulkModal) {
+        setShowBulkModal(false)
+        return
+      }
       if (copyModal) {
         setCopyModal(null)
         setCopyTargetIds([])
@@ -1523,6 +1578,8 @@ export default function NewOrderClient() {
     showProductDropdown,
     showModalDescDropdown,
     contextMenu,
+    showBulkModal,
+    showBulkProductDropdown,
     copyModal,
     showLogoModal,
     showDescriptionModal,
@@ -1853,6 +1910,114 @@ export default function NewOrderClient() {
     }
     setCopyModal(null)
     setCopyTargetIds([])
+  }
+
+  // ===== انتخاب چندتایی و ویرایش گروهی اقلام =====
+  const validSelectedIds = selectedIds.filter((id) => items.some((i) => i.id === id))
+  const allItemsSelected = items.length > 0 && validSelectedIds.length === items.length
+
+  const toggleSelectItem = (id: number) =>
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+
+  const toggleSelectAllItems = () =>
+    setSelectedIds(allItemsSelected ? [] : items.map((i) => i.id))
+
+  // انتخاب همه‌ی اقلامِ هم‌نام با ردیفی که با کلیک انتخاب شده (یا اولین قلمِ تیک‌خورده)
+  const selectSameNameItems = () => {
+    const base =
+      items.find((i) => i.id === selectedItemId) ?? items.find((i) => validSelectedIds.includes(i.id))
+    if (!base) {
+      alert("ابتدا روی یک ردیف کلیک کنید")
+      return
+    }
+    const key = normalizeText(base.productName)
+    setSelectedIds(items.filter((i) => normalizeText(i.productName) === key).map((i) => i.id))
+  }
+
+  const openBulkModal = () => {
+    if (validSelectedIds.length === 0) {
+      alert("ابتدا اقلام موردنظر را با چک‌باکس ستون اول انتخاب کنید")
+      return
+    }
+    setBulkProduct("")
+    setBulkProductCode("")
+    setBulkUnitPrice("")
+    setBulkUnit("")
+    setBulkQuantity("")
+    setBulkLength("")
+    setBulkWidth("")
+    setBulkInstallCode("")
+    setDebouncedBulkQuery("")
+    setShowBulkProductDropdown(false)
+    setBulkActiveIndex(0)
+    setShowBulkModal(true)
+  }
+
+  const pickBulkProduct = (p: { name: string; code: string; price?: number }) => {
+    setBulkProduct(p.name)
+    setBulkProductCode(p.code)
+    setDebouncedBulkQuery(p.name)
+    const price = p.price || 0
+    if (price > 0) setBulkUnitPrice(formatWithCommas(String(Math.round(price))))
+    setShowBulkProductDropdown(false)
+    setBulkActiveIndex(0)
+    setTimeout(() => {
+      bulkPriceRef.current?.focus()
+      bulkPriceRef.current?.select()
+    }, 0)
+  }
+
+  // اعمال تغییرات روی همه‌ی اقلام انتخاب‌شده؛ فیلد خالی = بدون تغییر
+  const applyBulkEdit = () => {
+    if (validSelectedIds.length === 0) return
+    const fields = [bulkProduct, bulkUnitPrice, bulkUnit, bulkQuantity, bulkLength, bulkWidth, bulkInstallCode]
+    if (!fields.some((v) => v.trim() !== "")) {
+      alert("حداقل یکی از فیلدها را پر کنید")
+      return
+    }
+    const dimsChanged = [bulkUnit, bulkQuantity, bulkLength, bulkWidth].some((v) => v.trim() !== "")
+    setItems((prev) =>
+      prev.map((item) => {
+        if (!validSelectedIds.includes(item.id)) return item
+        const next: OrderItem = { ...item }
+        if (bulkProduct.trim()) {
+          next.productName = bulkProduct.trim()
+          next.productCode = bulkProductCode
+        }
+        if (bulkUnit.trim()) next.unit = bulkUnit
+        if (bulkInstallCode.trim()) next.installCode = bulkInstallCode.trim()
+        if (bulkUnitPrice.trim()) next.unitPrice = bulkUnitPrice
+        if (bulkQuantity.trim()) next.quantity = String(parseFloat(bulkQuantity) || 1)
+        const d = normalizeDims(
+          bulkLength.trim() ? bulkLength : next.length,
+          bulkWidth.trim() ? bulkWidth : next.width
+        )
+        next.length = d.length
+        next.width = d.width
+
+        const calc = calculate(next.length, next.width, next.quantity, next.unit)
+        next.meterage = calc.meterage
+        next.perimeter = calc.perimeter
+
+        // اگر ابعاد/تعداد/واحد عوض شد، خدماتی که به ابعاد قلم وابسته‌اند دوباره محاسبه می‌شوند
+        if (dimsChanged) {
+          next.services = next.services.map((s) => {
+            if (!autoUnits.includes(s.unit)) return s
+            const unitQuantity = calcServiceUnitQty(next, s)
+            const count = String(parseFloat(next.quantity) || 1)
+            const total = (parseFloat(count) || 1) * (parseFloat(unitQuantity) || 0) * parsePrice(s.unitPrice)
+            return { ...s, count, unitQuantity, totalPrice: total ? total.toLocaleString("en-US") : "0" }
+          })
+        }
+
+        const servicesTotal = next.services.reduce((sum, s) => sum + parsePrice(s.totalPrice), 0)
+        const base = parsePrice(next.unitPrice) * (parseFloat(next.meterage) || 0)
+        const total = base + servicesTotal
+        next.totalPrice = total ? total.toLocaleString("en-US") : ""
+        return next
+      })
+    )
+    setShowBulkModal(false)
   }
 
   // پاپ‌آپ توضیحات
@@ -2353,7 +2518,14 @@ export default function NewOrderClient() {
           {/* اطلاعات مشتری */}
           <div className="flex justify-between text-sm mb-6 print:mb-3 leading-7 bg-teal-50/50 rounded-xl p-4 border border-teal-100">
             <div>
-              <p><strong>نام مشتری:</strong> {customerName || "—"}</p>
+              <p>
+                <strong>نام مشتری:</strong> {customerName || "—"}
+                {customerCodeDisplay && (
+                  <span className="mr-3">
+                    <strong>کد مشتری:</strong> <bdi>{customerCodeDisplay}</bdi>
+                  </span>
+                )}
+              </p>
               <p className="mt-1"><strong>کارشناس فروش:</strong> {salesRep || "—"}</p>
             </div>
             <div className="text-left">
@@ -2844,14 +3016,7 @@ export default function NewOrderClient() {
                 {/* ردیف ۱: نام مشتری (بزرگ‌تر) + شماره سفارش + شماره سفارش مشتری + گروه مشتری (کوچک‌تر) */}
                 <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-2">
                   <div className="relative min-w-[180px] col-span-2 md:col-span-3" onClick={(e) => e.stopPropagation()}>
-                    <label className={labelCompactClass}>
-                      نام مشتری
-                      {customerCodeDisplay && (
-                        <bdi className="mr-2 rounded-md bg-teal-50 px-1.5 py-0.5 font-mono text-xs text-teal-700">
-                          کد: {customerCodeDisplay}
-                        </bdi>
-                      )}
-                    </label>
+                    <label className={labelCompactClass}>نام مشتری</label>
                     <div className="flex gap-1.5">
                       <div className="relative flex-1">
                         <input
@@ -3357,18 +3522,59 @@ export default function NewOrderClient() {
               {/* جدول اقلام — relative z-0 تا زیر دراپ‌داون‌های بالایی قرار بگیرد.
                   کانتینر خودش اسکرول عمودی دارد (max-h) تا عناوین جدول (thead sticky) بالای آن فریز بمانند. */}
               {items.length > 0 && (
-                <div
-                  ref={itemsScrollRef}
-                  className="relative z-0 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/20 overflow-auto max-h-[62vh]"
-                >
+                <div className="relative z-0 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/20">
                   <p className="text-xs text-blue-700 mb-2">
                     برای انتخاب ردیف یک‌بار و برای ویرایش آن <strong>دوبار</strong> روی ردیف کلیک کنید. با ردیف انتخاب‌شده، کلید
                     <strong> F3 </strong> پنجره‌ی خدمات و کلید <strong> F4 </strong> پنجره‌ی توضیحات را باز می‌کند.
                     عرض هر ستون از گوشه‌ی آن قابل تغییر دستی است.
                   </p>
+                  {/* نوار انتخاب چندتایی / ویرایش گروهی */}
+                  <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl bg-white/50 border border-teal-500/20 px-3 py-2">
+                    <span className="text-sm font-bold text-blue-900">
+                      {validSelectedIds.length > 0 ? `${validSelectedIds.length} قلم انتخاب شده` : "هیچ قلمی تیک نخورده"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={selectSameNameItems}
+                      className="rounded-lg bg-teal-500/15 hover:bg-teal-500/30 px-3 py-1.5 text-xs font-bold text-teal-800"
+                      title="همه‌ی اقلامِ هم‌نام با ردیفی که روی آن کلیک کرده‌اید را تیک می‌زند"
+                    >
+                      انتخاب هم‌نام‌ها
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedIds([])}
+                      disabled={validSelectedIds.length === 0}
+                      className="rounded-lg bg-gray-200 hover:bg-gray-300 px-3 py-1.5 text-xs font-bold text-gray-700 disabled:opacity-50"
+                    >
+                      لغو انتخاب
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openBulkModal}
+                      disabled={validSelectedIds.length === 0}
+                      className={`mr-auto rounded-lg px-4 py-1.5 text-sm font-bold text-white ${
+                        validSelectedIds.length === 0 ? "bg-gray-400 cursor-not-allowed" : "bg-amber-500 hover:bg-amber-600"
+                      }`}
+                    >
+                      ✎ ویرایش گروهی ({validSelectedIds.length})
+                    </button>
+                  </div>
+                  <div ref={itemsScrollRef} className="overflow-auto max-h-[56vh]">
                   <table className="w-full text-sm text-blue-900 border-collapse">
                     <thead className="sticky top-0 z-20 bg-teal-600">
                       <tr className="border-b border-teal-500/30 bg-teal-600 text-white text-center">
+                        <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
+                          <div className="px-2.5 py-2.5 text-center" style={{ minWidth: "2.5rem" }}>
+                            <input
+                              type="checkbox"
+                              checked={allItemsSelected}
+                              onChange={toggleSelectAllItems}
+                              title="انتخاب / لغو انتخاب همه"
+                              className="w-4 h-4 accent-amber-500 cursor-pointer"
+                            />
+                          </div>
+                        </th>
                         <th className="p-0 font-bold border border-teal-500 whitespace-nowrap">
                           <div className={`${resizableHeaderClass} px-2.5 py-2.5`} style={{ minWidth: "3rem", maxWidth: "10rem" }}>ردیف</div>
                         </th>
@@ -3422,7 +3628,7 @@ export default function NewOrderClient() {
                             startEditItem(item)
                           }}
                           className={`border-b border-teal-500/10 hover:bg-yellow-50 cursor-pointer transition-colors ${
-                            item.flagged ? "bg-orange-100" : "bg-white/40"
+                            item.flagged ? "bg-orange-100" : selectedIds.includes(item.id) ? "bg-amber-100/70" : "bg-white/40"
                           } ${editingItemId === item.id ? "ring-2 ring-inset ring-amber-400" : ""} ${
                             selectedItemId === item.id && editingItemId !== item.id ? "ring-2 ring-inset ring-teal-500" : ""
                           }`}
@@ -3431,6 +3637,14 @@ export default function NewOrderClient() {
                             setContextMenu({ x: e.clientX, y: e.clientY, itemId: item.id })
                           }}
                         >
+                          <td className="p-2.5 text-center border border-teal-100" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.includes(item.id)}
+                              onChange={() => toggleSelectItem(item.id)}
+                              className="w-4 h-4 accent-amber-500 cursor-pointer"
+                            />
+                          </td>
                           <td className="p-2.5 text-center border border-teal-100">{index + 1}</td>
                           <td className="p-2.5 font-bold border border-teal-100 truncate" title={item.productName}>
                             {item.productCode && (
@@ -3515,6 +3729,7 @@ export default function NewOrderClient() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
             </div>
@@ -3863,6 +4078,153 @@ export default function NewOrderClient() {
                   <div className="flex justify-end gap-3 mt-6">
                     <button onClick={() => setShowDescriptionModal(false)} className="rounded-xl border border-gray-300 px-5 py-2.5 text-base font-bold text-blue-900">انصراف</button>
                     <button onClick={saveDescription} className="rounded-xl bg-teal-500 hover:bg-teal-600 px-5 py-2.5 text-base font-bold text-white">تأیید</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* مودال ویرایش گروهی اقلام انتخاب‌شده */}
+            {showBulkModal && (
+              <div className="fixed inset-0 z-[175] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                <div
+                  className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white shadow-2xl p-6"
+                  onKeyDown={(e) => {
+                    const t = e.target as HTMLElement
+                    if (e.key === "Enter" && (t.tagName === "INPUT" || t.tagName === "SELECT") && !t.closest("[data-bulk-product]")) {
+                      e.preventDefault()
+                      applyBulkEdit()
+                    }
+                  }}
+                >
+                  <h3 className="text-xl font-bold text-blue-950 mb-1">ویرایش گروهی اقلام</h3>
+                  <p className="text-sm text-blue-700 mb-4">
+                    تغییرات روی <strong>{validSelectedIds.length}</strong> قلم انتخاب‌شده اعمال می‌شود. فیلدی که خالی بماند تغییر نمی‌کند.
+                  </p>
+
+                  <div className="mb-4 flex flex-wrap gap-1.5 rounded-xl bg-teal-50 border border-teal-200 p-3 max-h-28 overflow-y-auto">
+                    {items
+                      .map((it, idx) => ({ it, idx }))
+                      .filter(({ it }) => validSelectedIds.includes(it.id))
+                      .map(({ it, idx }) => (
+                        <span key={it.id} className="rounded-md bg-white border border-teal-200 px-2 py-0.5 text-xs font-bold text-blue-900">
+                          {idx + 1}: <bdi>{it.productName}</bdi> ({it.length}×{it.width})
+                        </span>
+                      ))}
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="relative" data-bulk-product onClick={(e) => e.stopPropagation()}>
+                      <label className={labelClass}>نام کالای جدید</label>
+                      <input
+                        type="text"
+                        value={bulkProduct}
+                        onChange={(e) => {
+                          setBulkProduct(e.target.value)
+                          setBulkProductCode("")
+                          setBulkActiveIndex(0)
+                          setShowBulkProductDropdown(true)
+                        }}
+                        onFocus={() => setShowBulkProductDropdown(true)}
+                        onKeyDown={(e) => {
+                          const listOpen = showBulkProductDropdown && filteredBulkProducts.length > 0
+                          if (e.key === "ArrowDown" && listOpen) {
+                            e.preventDefault()
+                            setBulkActiveIndex((i) => Math.min(i + 1, filteredBulkProducts.length - 1))
+                          } else if (e.key === "ArrowUp" && listOpen) {
+                            e.preventDefault()
+                            setBulkActiveIndex((i) => Math.max(i - 1, 0))
+                          } else if (e.key === "Enter") {
+                            e.preventDefault()
+                            if (listOpen && bulkProduct.trim()) {
+                              pickBulkProduct(filteredBulkProducts[Math.min(bulkActiveIndex, filteredBulkProducts.length - 1)])
+                            } else {
+                              focusRef(bulkPriceRef)
+                            }
+                          }
+                        }}
+                        placeholder="جستجوی کالا... (خالی = بدون تغییر)"
+                        className={inputClass}
+                        autoComplete="off"
+                        autoFocus
+                      />
+                      {showBulkProductDropdown && bulkProduct.trim() && filteredBulkProducts.length > 0 && (
+                        <div className="absolute z-50 mt-1 w-full max-h-64 overflow-y-auto rounded-xl border border-teal-200 bg-white shadow-2xl">
+                          {filteredBulkProducts.map((p, idx) => (
+                            <button
+                              key={p.code || p.name}
+                              type="button"
+                              ref={(el) => {
+                                if (el && idx === bulkActiveIndex) el.scrollIntoView({ block: "nearest" })
+                              }}
+                              onClick={() => pickBulkProduct(p)}
+                              className={`flex w-full items-center gap-2 text-right px-3 py-2 text-sm font-bold text-blue-900 hover:bg-yellow-100 border-b border-teal-50 ${
+                                idx === bulkActiveIndex ? "bg-yellow-100" : ""
+                              }`}
+                            >
+                              <bdi className="shrink-0 rounded-md bg-teal-50 px-1.5 py-0.5 text-teal-700 font-mono text-xs">{p.code}</bdi>
+                              <bdi>{p.name}</bdi>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <p className="mt-1 text-xs text-gray-500">با انتخاب کالا از لیست، اگر قیمتی برایش ثبت شده باشد در «قیمت واحد» گذاشته می‌شود (قابل تغییر یا پاک‌کردن).</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className={labelClass}>قیمت واحد</label>
+                        <input
+                          ref={bulkPriceRef}
+                          type="text"
+                          value={bulkUnitPrice}
+                          onChange={(e) => setBulkUnitPrice(formatWithCommas(e.target.value))}
+                          className={`${inputClass} font-bold`}
+                          autoComplete="off"
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>تعداد</label>
+                        <input
+                          type="number"
+                          value={bulkQuantity}
+                          onChange={(e) => setBulkQuantity(e.target.value)}
+                          onWheel={blockWheelChange}
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>واحد</label>
+                        <select value={bulkUnit} onChange={(e) => setBulkUnit(e.target.value)} className={inputClass}>
+                          <option value="">بدون تغییر</option>
+                          <option value="مترمربع">مترمربع</option>
+                          <option value="مترطول">مترطول</option>
+                          <option value="عددی">عددی</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className={labelClass}>طول (cm)</label>
+                        <input type="number" value={bulkLength} onChange={(e) => setBulkLength(e.target.value)} onWheel={blockWheelChange} className={inputClass} />
+                      </div>
+                      <div>
+                        <label className={labelClass}>عرض (cm)</label>
+                        <input type="number" value={bulkWidth} onChange={(e) => setBulkWidth(e.target.value)} onWheel={blockWheelChange} className={inputClass} />
+                      </div>
+                      <div>
+                        <label className={labelClass}>کد نصب</label>
+                        <input type="text" value={bulkInstallCode} onChange={(e) => setBulkInstallCode(e.target.value)} className={inputClass} />
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-gray-500">
+                      متراژ، محیط و قیمت کل هر قلم دوباره محاسبه می‌شود؛ خدمات وابسته به ابعاد (مثل محیط یا مترمربع) هم با ابعاد/تعداد جدید به‌روز می‌شوند. قیمت خدماتی که بر اساس ضخامت شیشه ثبت شده‌اند با عوض‌شدن نام کالا تغییر نمی‌کند. کلید Enter = اعمال.
+                    </p>
+                  </div>
+
+                  <div className="flex justify-end gap-3 mt-6">
+                    <button onClick={() => setShowBulkModal(false)} className="rounded-xl border border-gray-300 px-5 py-2.5 text-base font-bold text-blue-900">انصراف</button>
+                    <button onClick={applyBulkEdit} className="rounded-xl bg-amber-500 hover:bg-amber-600 px-5 py-2.5 text-base font-bold text-white">
+                      اعمال روی {validSelectedIds.length} قلم
+                    </button>
                   </div>
                 </div>
               </div>
@@ -4584,8 +4946,8 @@ export default function NewOrderClient() {
 
         @media print {
           @page {
-            size: A4;
-            margin: 0;
+            size: A4 portrait;
+            margin: ${PRINT_PAGE_MARGIN_MM}mm;
           }
           html, body {
             background: white !important;

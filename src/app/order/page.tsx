@@ -5,6 +5,7 @@ import Link from "next/link"
 import DatePicker, { DateObject } from "react-multi-date-picker"
 import persian from "react-date-object/calendars/persian"
 import persian_fa from "react-date-object/locales/persian_fa"
+import customersSeedRaw from "../customers/customers-seed.json"
 
 type OrderFromApi = {
   id: string
@@ -105,11 +106,45 @@ const deserializeFilterDate = (iso: string | null | undefined) =>
       })
     : null
 
-// کد مشتری واقعی (کدهای خودکارِ «C-...» که سیستم برای مشتریان جدید می‌سازد نمایش داده نمی‌شوند)
+const normalizeText = (value: string | null | undefined) => {
+  if (!value) return ""
+  return String(value)
+    .replace(/[\u200c\u200f\u200e]/g, " ")
+    .replace(/ي/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/ة/g, "ه")
+    .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .trim()
+}
+
+// کدهای مشتریان قدیمی (از فایل لیست مشتریان): نام نرمال‌شده → کد (همان منطق صفحه‌ی فاکتورها)
+const seedCodeByName = (() => {
+  const map = new Map<string, string>()
+  ;(customersSeedRaw as any[]).forEach((c: any) => {
+    const code = String(c.code || "").trim()
+    if (!code) return
+    const names = [
+      c.companyName,
+      `${c.lastName || ""} ${c.firstName || ""}`,
+      `${c.firstName || ""} ${c.lastName || ""}`,
+    ]
+    names.forEach((n) => {
+      const key = normalizeText(String(n || ""))
+      if (key && !map.has(key)) map.set(key, code)
+    })
+  })
+  return map
+})()
+
+// کد مشتری: اگر در دیتابیس کد واقعی ثبت شده همان؛ وگرنه (خالی یا کد خودکارِ C-عدد که سیستم هنگام
+// ثبت سفارش می‌سازد) از لیست مشتریان قدیمی به‌اسم پیدا می‌شود
 const getCustomerCode = (o: OrderFromApi) => {
-  const code = String(o.customer?.customerCode || o.customer?.code || "").trim()
-  if (!code || code.startsWith("C-")) return ""
-  return code
+  const dbCode = String(o.customer?.customerCode || o.customer?.code || "").trim()
+  if (dbCode && !/^C-\d{8,}$/.test(dbCode)) return dbCode
+  return seedCodeByName.get(normalizeText(o.customer?.name)) || ""
 }
 
 const parseOrderDate = (dateStr: string | null | undefined): Date | null => {
@@ -673,7 +708,7 @@ export default function PreInvoicesPage() {
   const newDates = confirmItem ? calcNewDates(confirmItem) : null
 
   const chip = (active: boolean) =>
-    `rounded-xl px-4 py-2 text-sm font-bold transition ${
+    `rounded-lg px-3 py-1 text-sm font-bold transition ${
       active
         ? "bg-teal-600 text-white"
         : "bg-white/50 text-blue-900 border border-teal-500/30 hover:bg-white/70"
@@ -698,35 +733,35 @@ export default function PreInvoicesPage() {
       <div className="pointer-events-none fixed inset-0 bg-black/5" />
 
       <div className="relative z-10 max-w-[1920px] mx-auto lg:h-full lg:flex lg:flex-col">
-        <div className="mb-4 lg:shrink-0 flex items-center justify-between rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
+        <div className="mb-2 lg:shrink-0 flex items-center justify-between rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-2.5 shadow-lg border border-teal-500/20">
           <div className="w-48" />
           <div className="text-center flex-1">
-            <h1 className="text-3xl font-bold text-blue-950">
+            <h1 className="text-lg font-bold text-blue-950">
               لیست پیش‌فاکتورها
             </h1>
-            <p className="text-lg font-bold text-blue-900 mt-1">
+            <p className="text-sm font-bold text-blue-900">
               نرم‌افزار اخوان | شیشه و آینه
             </p>
           </div>
           <div className="flex gap-3">
             <Link
               href="/order/new"
-              className="rounded-xl bg-teal-500 hover:bg-teal-600 px-6 py-3 text-lg font-bold text-white shadow transition focus:outline-none focus:ring-2 focus:ring-teal-400"
+              className="rounded-xl bg-teal-500 hover:bg-teal-600 px-4 py-1.5 text-base font-bold text-white shadow transition focus:outline-none focus:ring-2 focus:ring-teal-400"
             >
               + ثبت سفارش جدید
             </Link>
             <Link
               href="/invoices"
-              className="rounded-xl border border-teal-500/40 bg-white/40 hover:bg-white/60 px-6 py-3 text-lg font-bold text-blue-900 transition focus:outline-none focus:ring-2 focus:ring-teal-400"
+              className="rounded-xl border border-teal-500/40 bg-white/40 hover:bg-white/60 px-4 py-1.5 text-base font-bold text-blue-900 transition focus:outline-none focus:ring-2 focus:ring-teal-400"
             >
               فاکتورها
             </Link>
           </div>
         </div>
 
-        <div className="mb-4 lg:shrink-0 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20">
+        <div className="mb-2 lg:shrink-0 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-2.5 shadow-lg border border-teal-500/20">
           {/* فیلتر وضعیت: پیش‌فاکتور / فاکتور / همه */}
-          <div className="mb-3 flex flex-wrap gap-2 items-center">
+          <div className="mb-2 flex flex-wrap gap-1.5 items-center">
             <span className="text-sm font-bold text-blue-900 ml-1">وضعیت:</span>
             <button
               type="button"
@@ -775,9 +810,9 @@ export default function PreInvoicesPage() {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
             <div className="md:col-span-3">
-              <label className="mb-1.5 block text-sm font-bold text-blue-900">
+              <label className="mb-0.5 block text-xs font-bold text-blue-900">
                 جستجو
               </label>
               <input
@@ -785,17 +820,17 @@ export default function PreInvoicesPage() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="نام / کد مشتری / شماره سفارش / کارشناس..."
-                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400 hover:bg-yellow-100 transition"
+                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-3 py-1.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400 hover:bg-yellow-100 transition"
               />
             </div>
             <div className="md:col-span-2">
-              <label className="mb-1.5 block text-sm font-bold text-blue-900">
+              <label className="mb-0.5 block text-xs font-bold text-blue-900">
                 ماه پیش‌فاکتور
               </label>
               <select
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(e.target.value)}
-                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400"
+                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-3 py-1.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400"
               >
                 {PERSIAN_MONTHS.map((m) => (
                   <option key={m.value} value={m.value}>
@@ -805,7 +840,7 @@ export default function PreInvoicesPage() {
               </select>
             </div>
             <div className="md:col-span-2 relative z-30">
-              <label className="mb-1.5 block text-sm font-bold text-blue-900">
+              <label className="mb-0.5 block text-xs font-bold text-blue-900">
                 از تاریخ ثبت
               </label>
               <DatePicker
@@ -814,7 +849,7 @@ export default function PreInvoicesPage() {
                 calendar={persian}
                 locale={persian_fa}
                 calendarPosition="bottom-right"
-                inputClass="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
+                inputClass="w-full rounded-xl border border-teal-500/30 bg-white/50 px-3 py-1.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
                 containerClassName="w-full"
                 placeholder="از تاریخ"
                 portal
@@ -822,7 +857,7 @@ export default function PreInvoicesPage() {
               />
             </div>
             <div className="md:col-span-2 relative z-30">
-              <label className="mb-1.5 block text-sm font-bold text-blue-900">
+              <label className="mb-0.5 block text-xs font-bold text-blue-900">
                 تا تاریخ ثبت
               </label>
               <DatePicker
@@ -831,7 +866,7 @@ export default function PreInvoicesPage() {
                 calendar={persian}
                 locale={persian_fa}
                 calendarPosition="bottom-right"
-                inputClass="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
+                inputClass="w-full rounded-xl border border-teal-500/30 bg-white/50 px-3 py-1.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
                 containerClassName="w-full"
                 placeholder="تا تاریخ"
                 portal
@@ -839,13 +874,13 @@ export default function PreInvoicesPage() {
               />
             </div>
             <div className="md:col-span-2">
-              <label className="mb-1.5 block text-sm font-bold text-blue-900">
+              <label className="mb-0.5 block text-xs font-bold text-blue-900">
                 کارشناس فروش
               </label>
               <select
                 value={selectedExpert}
                 onChange={(e) => setSelectedExpert(e.target.value)}
-                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400"
+                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-3 py-1.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400"
               >
                 {salesExperts.map((name) => (
                   <option key={name} value={name}>
@@ -855,7 +890,7 @@ export default function PreInvoicesPage() {
               </select>
             </div>
             <div className="md:col-span-1">
-              <div className="rounded-xl bg-teal-500/20 border border-teal-500/30 px-3 py-2.5 text-center">
+              <div className="rounded-xl bg-teal-500/20 border border-teal-500/30 px-3 py-1.5 text-center">
                 <span className="text-sm text-blue-700">تعداد: </span>
                 <span className="text-xl font-bold text-teal-700">
                   {filtered.length}
@@ -876,7 +911,7 @@ export default function PreInvoicesPage() {
               sessionStorage.setItem(SCROLL_STORAGE_KEY, String(top))
             } catch {}
           }}
-          className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-4 shadow-lg border border-teal-500/20 overflow-auto min-h-[260px] lg:flex-1 lg:min-h-0 focus:outline-none focus:ring-2 focus:ring-teal-400"
+          className="rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-2 shadow-lg border border-teal-500/20 overflow-auto min-h-[260px] lg:flex-1 lg:min-h-0 focus:outline-none focus:ring-2 focus:ring-teal-400"
         >
           {loading ? (
             <p className="text-center text-blue-700 py-16 text-xl font-bold">
@@ -887,14 +922,14 @@ export default function PreInvoicesPage() {
               <thead className="sticky top-0 z-10 shadow-[0_1px_0_rgba(20,184,166,0.35)]">
                 <tr className="border-b border-teal-500/30 bg-teal-100 text-right">
                   <th className="p-3 font-bold text-center">ردیف</th>
-                  <th className={thClass} onClick={() => toggleSort("customer")}>
-                    نام مشتری{sortIndicator("customer")}
-                  </th>
                   <th
                     className={thClass}
                     onClick={() => toggleSort("customerCode")}
                   >
                     کد مشتری{sortIndicator("customerCode")}
+                  </th>
+                  <th className={thClass} onClick={() => toggleSort("customer")}>
+                    نام مشتری{sortIndicator("customer")}
                   </th>
                   <th
                     className={thClass}
@@ -983,11 +1018,11 @@ export default function PreInvoicesPage() {
                       }`}
                     >
                       <td className="p-3 text-center font-bold">{index + 1}</td>
+                      <td className="p-3 text-center font-mono font-semibold text-teal-700 whitespace-nowrap">
+                        <bdi>{getCustomerCode(item) || "—"}</bdi>
+                      </td>
                       <td className="p-3 font-bold whitespace-nowrap">
                         {item.customer?.name || "—"}
-                      </td>
-                      <td className="p-3 text-center font-mono text-xs font-bold text-teal-700 whitespace-nowrap">
-                        <bdi>{getCustomerCode(item) || "—"}</bdi>
                       </td>
                       <td className="p-3 font-semibold text-center">
                         {item.orderNumber}
@@ -1092,38 +1127,35 @@ export default function PreInvoicesPage() {
         </div>
 
         {!loading && filtered.length > 0 && (
-          <div className="mt-3 lg:shrink-0 rounded-2xl bg-teal-600/10 backdrop-blur-2xl p-3 shadow-lg border border-teal-500/30">
-            <h3 className="text-lg font-bold text-blue-950 mb-2 text-center">
-              گزارش خلاصه
-            </h3>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
-                <p className="text-sm text-blue-700 mb-1">تعداد کل</p>
-                <p className="text-2xl font-bold text-teal-700">
+          <div className="mt-2 lg:shrink-0 rounded-2xl bg-teal-600/10 backdrop-blur-2xl p-1.5 shadow-lg border border-teal-500/30">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+              <div className="rounded-lg bg-white/50 border border-teal-500/20 px-2 py-1 text-center">
+                <p className="text-xs text-blue-700">تعداد کل</p>
+                <p className="text-lg font-bold text-teal-700">
                   {report.totalCount}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
-                <p className="text-sm text-blue-700 mb-1">متراژ کل</p>
-                <p className="text-2xl font-bold text-teal-700">
+              <div className="rounded-lg bg-white/50 border border-teal-500/20 px-2 py-1 text-center">
+                <p className="text-xs text-blue-700">متراژ کل</p>
+                <p className="text-lg font-bold text-teal-700">
                   {report.totalMeterage.toFixed(4)}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
-                <p className="text-sm text-blue-700 mb-1">قیمت کل</p>
-                <p className="text-2xl font-bold text-teal-700">
+              <div className="rounded-lg bg-white/50 border border-teal-500/20 px-2 py-1 text-center">
+                <p className="text-xs text-blue-700">قیمت کل</p>
+                <p className="text-lg font-bold text-teal-700">
                   {formatPrice(report.totalPrice)}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
-                <p className="text-sm text-blue-700 mb-1">مجموع تخفیف</p>
-                <p className="text-2xl font-bold text-orange-600">
+              <div className="rounded-lg bg-white/50 border border-teal-500/20 px-2 py-1 text-center">
+                <p className="text-xs text-blue-700">مجموع تخفیف</p>
+                <p className="text-lg font-bold text-orange-600">
                   {formatPrice(report.totalDiscount)}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/50 border border-teal-500/20 p-2.5 text-center">
-                <p className="text-sm text-blue-700 mb-1">مجموع ارزش افزوده</p>
-                <p className="text-2xl font-bold text-amber-600">
+              <div className="rounded-lg bg-white/50 border border-teal-500/20 px-2 py-1 text-center">
+                <p className="text-xs text-blue-700">مجموع ارزش افزوده</p>
+                <p className="text-lg font-bold text-amber-600">
                   {formatPrice(report.totalVat)}
                 </p>
               </div>

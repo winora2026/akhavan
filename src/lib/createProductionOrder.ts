@@ -13,7 +13,7 @@ function norm(s: string) {
  * نگاشت نام خدمت فروش → نام ایستگاه تولید
  * ترتیب ifها مهم است
  */
-function mapServiceToStation(serviceName: string): string | null {
+export function mapServiceToStation(serviceName: string): string | null {
   const name = norm(serviceName)
   if (!name) return null
 

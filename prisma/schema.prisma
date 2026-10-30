@@ -8,23 +8,24 @@ datasource db {
 }
 
 model Customer {
-  id            String   @id @default(cuid())
-  customerCode  String?  @unique
-  name          String
-  customerGroup String?
-  agency        String?
-  phone         String?
-  address       String?
-  notes         String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  orders        Order[]
-  leads         Lead[]
-  opportunities Opportunity[]
-  activities    Activity[]
-  followUps     FollowUp[]
-    sepidarPartyRef     Int?
-    profile String?
+  id                String             @id @default(cuid())
+  customerCode      String?            @unique
+  name              String
+  customerGroup     String?
+  agency            String?
+  phone             String?
+  address           String?
+  notes             String?
+  sepidarPartyRef   Int?
+  profile           String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  orders            Order[]
+  leads             Lead[]
+  opportunities     Opportunity[]
+  activities        Activity[]
+  followUps         FollowUp[]
+  deposits          CustomerDeposit[]
 }
 
 model Order {
@@ -60,16 +61,16 @@ model Order {
   notes                  String?
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
-   sepidarSyncStatus   String?   // null | PENDING | SUCCESS | FAILED
-  sepidarInvoiceId    String?
-  sepidarSyncedAt     DateTime?
-  sepidarSyncError    String?
-  sepidarLastPayload  String?   // JSON آخرین درخواست (برای دیباگ) 
+  sepidarSyncStatus      String?
+  sepidarInvoiceId       String?
+  sepidarSyncedAt        DateTime?
+  sepidarSyncError       String?
+  sepidarLastPayload     String?
+  smsStatus              String?
+  smsSentAt              DateTime?
+  smsError               String?
   items                  OrderItem[]
   productionOrders       ProductionOrder[]
-    smsStatus   String?
-  smsSentAt   DateTime?
-  smsError    String?
 }
 
 model OrderItem {
@@ -141,17 +142,17 @@ model ProductionStation {
 }
 
 model ProductionOrder {
-  id               String               @id @default(cuid())
+  id               String              @id @default(cuid())
   orderId          String
-  order            Order                @relation(fields: [orderId], references: [id])
-  productionNumber String               @unique
-  status           String               @default("در انتظار")
-  priority         String               @default("عادی")
+  order            Order               @relation(fields: [orderId], references: [id])
+  productionNumber String              @unique
+  status           String              @default("در انتظار")
+  priority         String              @default("عادی")
   notes            String?
   startedAt        DateTime?
   completedAt      DateTime?
-  createdAt        DateTime             @default(now())
-  updatedAt        DateTime             @updatedAt
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
   createdBy        String?
   items            ProductionItem[]
   history          ProductionHistory[]
@@ -257,7 +258,6 @@ model User {
 }
 
 // ====================== برگه خروج / بارگیری ======================
-
 model ExitSlip {
   id               String         @id @default(cuid())
   exitNumber       String         @unique
@@ -300,8 +300,45 @@ model ExitSlipItem {
   createdAt        DateTime  @default(now())
 }
 
-// ====================== CRM ======================
+// ====================== مالی / واریزی مشتریان ======================
+model BankAccount {
+  id            String            @id @default(cuid())
+  name          String
+  bankName      String?
+  ownerName     String?
+  cardNumber    String?
+  accountNumber String?
+  iban          String?
+  isActive      Boolean           @default(true)
+  sortOrder     Int               @default(0)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  deposits      CustomerDeposit[]
+}
 
+model CustomerDeposit {
+  id              String      @id @default(cuid())
+  customerId      String?
+  customer        Customer?   @relation(fields: [customerId], references: [id])
+  customerName    String
+  customerCode    String?
+  amount          Float
+  depositDate     DateTime
+  bankAccountId   String
+  bankAccount     BankAccount @relation(fields: [bankAccountId], references: [id])
+  receiptImageUrl String?
+  notes           String?
+  status          String      @default("PENDING") // PENDING | CONFIRMED
+  createdById     String?
+  createdByName   String?
+  confirmedById   String?
+  confirmedByName String?
+  confirmedAt     DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+// ====================== CRM ======================
 model Lead {
   id              String        @id @default(cuid())
   name            String
@@ -427,6 +464,7 @@ model LostReason {
   opportunities Opportunity[]
   createdAt     DateTime      @default(now())
 }
+
 // ====================== نگاشت سپیدار ======================
 model SepidarItemMap {
   id          String   @id @default(cuid())
@@ -440,15 +478,15 @@ model SepidarItemMap {
 }
 
 model SepidarSettings {
-  id                String   @id @default("default")
-  saleTypeRef       Int?
-  currencyRef       Int      @default(1)
-  slRef             Int?
+  id                  String   @id @default("default")
+  saleTypeRef         Int?
+  currencyRef         Int      @default(1)
+  slRef               Int?
   deliveryLocationRef Int?
-  defaultStockRef   Int?
-  settlementType    Int      @default(1)
-  state             Int      @default(1)
-  rate              Float    @default(1)
-  mockMode          Boolean  @default(true)
-  updatedAt         DateTime @updatedAt
+  defaultStockRef     Int?
+  settlementType      Int      @default(1)
+  state               Int      @default(1)
+  rate                Float    @default(1)
+  mockMode            Boolean  @default(true)
+  updatedAt           DateTime @updatedAt
 }

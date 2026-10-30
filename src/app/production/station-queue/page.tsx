@@ -29,6 +29,8 @@ type QueueItem = {
     barcode?: string | null
     notes?: string | null
     servicesText?: string
+    /** مقدار کار این ایستگاه به تفکیک واحد خدمت (متر مربع / متر طول / عدد) */
+    measures?: { label: string; qty: number }[]
     /** روند کاری قطعه: همه‌ی ایستگاه‌های مسیر به‌ترتیب */
     route?: {
       id: string
@@ -71,6 +73,8 @@ type OrderGroup = {
   itemCount: number
   totalQty: number
   totalMeterage: number
+  /** مقدار کار سفارش در این ایستگاه به تفکیک واحد */
+  measures: { label: string; qty: number }[]
   /** قلم‌های رد شده‌ی همین سفارش در این ایستگاه */
   doneItems: number
   /** قلم باقی‌مانده + قلم رد شده */
@@ -148,6 +152,23 @@ type ExitSlip = {
     barcode?: string | null
     loadedAt?: string | null
   }[]
+}
+
+/** «۱۲٫۵ متر مربع + ۴۰ متر طول» */
+function fmtMeasures(ms?: { label: string; qty: number }[] | null, fallback?: number | null) {
+  if (ms && ms.length > 0)
+    return ms.map((m) => `${Number(Number(m.qty).toFixed(3))} ${m.label}`).join(" + ")
+  if (fallback != null && Number(fallback) > 0)
+    return `${Number(Number(fallback).toFixed(3))} متر مربع`
+  return "—"
+}
+
+/** جمع چند آرایه‌ی measures بر اساس واحد */
+function sumMeasures(list: ({ label: string; qty: number }[] | null | undefined)[]) {
+  const map = new Map<string, number>()
+  for (const ms of list)
+    for (const m of ms || []) map.set(m.label, (map.get(m.label) || 0) + Number(m.qty || 0))
+  return Array.from(map.entries()).map(([label, qty]) => ({ label, qty }))
 }
 
 function norm(s: string) {
@@ -306,6 +327,20 @@ export default function StationQueuePage() {
   const [vehicleName, setVehicleName] = useState("")
   const [plateNumber, setPlateNumber] = useState("")
   const [slipNotes, setSlipNotes] = useState("")
+  // اندازه‌ی کاغذ برگه خروج (به‌خاطر سپرده می‌شود)
+  const [paper, setPaper] = useState<"A4" | "A5" | "A5L">("A4")
+  useEffect(() => {
+    try {
+      const p = localStorage.getItem("exit-slip-paper")
+      if (p === "A4" || p === "A5" || p === "A5L") setPaper(p)
+    } catch {}
+  }, [])
+  const changePaper = (p: "A4" | "A5" | "A5L") => {
+    setPaper(p)
+    try {
+      localStorage.setItem("exit-slip-paper", p)
+    } catch {}
+  }
 
   const selectedStationName =
     stations.find((s) => s.id === selectedStationId)?.name || "—"
@@ -847,6 +882,7 @@ export default function StationQueuePage() {
         itemCount: number
         totalQty: number
         totalMeterage: number
+        measureLists: ({ label: string; qty: number }[] | undefined)[]
         doneItems: number
         rows: QueueItem[]
       }
@@ -868,6 +904,7 @@ export default function StationQueuePage() {
           itemCount: 0,
           totalQty: 0,
           totalMeterage: 0,
+          measureLists: [],
           doneItems: pi.productionOrder.stationDoneItems ?? 0,
           rows: [],
         }
@@ -877,6 +914,13 @@ export default function StationQueuePage() {
       g.itemCount += 1
       g.totalQty += row.quantityIn ?? pi.quantity ?? 0
       g.totalMeterage += Number(pi.meterage) || 0
+      g.measureLists.push(
+        pi.measures && pi.measures.length
+          ? pi.measures
+          : Number(pi.meterage) > 0
+            ? [{ label: "متر مربع", qty: Number(pi.meterage) }]
+            : []
+      )
       g.products.add(pi.productName)
       for (const s of servicesLines(pi.servicesText)) g.services.add(s)
     }
@@ -896,7 +940,8 @@ export default function StationQueuePage() {
         servicesSummary: Array.from(g.services),
         itemCount: g.itemCount,
         totalQty: g.totalQty,
-        totalMeterage: g.totalMeterage,
+        totalMeterage: sumMeasures(g.measureLists).reduce((s, m) => s + m.qty, 0),
+        measures: sumMeasures(g.measureLists),
         doneItems: g.doneItems,
         totalItems: g.rows.length + g.doneItems,
         rows: g.rows,
@@ -961,7 +1006,11 @@ export default function StationQueuePage() {
         case "quantityOut":
           return r.quantityOut ?? 0
         case "meterage":
-          return Number(p.meterage) || 0
+          return (
+            (p.measures || []).reduce((s, m) => s + Number(m.qty || 0), 0) ||
+            Number(p.meterage) ||
+            0
+          )
         case "services":
           return p.servicesText || ""
         case "notes":
@@ -1023,6 +1072,15 @@ export default function StationQueuePage() {
       qty += r.quantityIn ?? r.productionItem.quantity ?? 0
       meterage += Number(r.productionItem.meterage) || 0
     }
+    const measures = sumMeasures(
+      filtered.map((r) =>
+        r.productionItem.measures && r.productionItem.measures.length
+          ? r.productionItem.measures
+          : Number(r.productionItem.meterage) > 0
+            ? [{ label: "متر مربع", qty: Number(r.productionItem.meterage) }]
+            : []
+      )
+    )
     const totalItems = orderGroups.reduce((s, g) => s + g.totalItems, 0)
     return {
       orders: orderGroups.length,
@@ -1030,6 +1088,7 @@ export default function StationQueuePage() {
       totalItems,
       qty,
       meterage,
+      measures,
     }
   }, [filtered, orderGroups])
 
@@ -1104,6 +1163,22 @@ export default function StationQueuePage() {
       return new Date(dateStr).toLocaleDateString("fa-IR")
     } catch {
       return "—"
+    }
+  }
+
+  /** ساعت (مثلاً ۱۴:۳۵) از یک تاریخ ISO */
+  const formatFaTime = (dateStr?: string | null) => {
+    if (!dateStr) return ""
+    try {
+      const d = new Date(dateStr)
+      if (isNaN(d.getTime())) return ""
+      return d.toLocaleTimeString("fa-IR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+    } catch {
+      return ""
     }
   }
 
@@ -1492,8 +1567,10 @@ export default function StationQueuePage() {
                   جمع تعداد <b className="text-teal-700">{totals.qty}</b>
                 </span>
                 <span className="rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-sm text-blue-800">
-                  جمع متراژ{" "}
-                  <b className="text-teal-700">{totals.meterage.toFixed(4)}</b>
+                  جمع مقدار کار{" "}
+                  <b className="text-teal-700">
+                    {fmtMeasures(totals.measures, totals.meterage)}
+                  </b>
                 </span>
               </div>
             )}
@@ -1751,7 +1828,7 @@ export default function StationQueuePage() {
                             ? ` از ${openGroup.totalItems}`
                             : ""}{" "}
                           | {openGroup.totalQty} عدد |{" "}
-                          {openGroup.totalMeterage.toFixed(3)} متر
+                          {fmtMeasures(openGroup.measures)}
                         </span>
                       </div>
                     </div>
@@ -1801,7 +1878,7 @@ export default function StationQueuePage() {
                           {sortTh("عرض", "width", itemSort, setItemSort)}
                           {sortTh("تعداد (باقی)", "quantity", itemSort, setItemSort)}
                           {sortTh("رد شده", "quantityOut", itemSort, setItemSort)}
-                          {sortTh("متراژ", "meterage", itemSort, setItemSort)}
+                          {sortTh("مقدار کار", "meterage", itemSort, setItemSort)}
                           {sortTh("سختی کار", "services", itemSort, setItemSort)}
                           {sortTh("توضیحات", "notes", itemSort, setItemSort)}
                           {sortTh("وضعیت", "status", itemSort, setItemSort)}
@@ -1858,9 +1935,10 @@ export default function StationQueuePage() {
                               {row.quantityOut ?? 0}
                             </td>
                             <td className="border border-gray-400 px-2 py-1 text-center">
-                              {row.productionItem.meterage != null
-                                ? Number(row.productionItem.meterage).toFixed(3)
-                                : "—"}
+                              {fmtMeasures(
+                                row.productionItem.measures,
+                                row.productionItem.meterage
+                              )}
                             </td>
                             <td className="border border-gray-400 px-2 py-1 font-bold">
                               {servicesLines(row.productionItem.servicesText).length >
@@ -1970,7 +2048,7 @@ export default function StationQueuePage() {
                         {sortTh("اولویت", "priority", orderSort, setOrderSort)}
                         {sortTh("تعداد قلم", "itemCount", orderSort, setOrderSort)}
                         {sortTh("جمع تعداد", "totalQty", orderSort, setOrderSort)}
-                        {sortTh("جمع متراژ", "totalMeterage", orderSort, setOrderSort)}
+                        {sortTh("جمع مقدار کار", "totalMeterage", orderSort, setOrderSort)}
                         {sortTh("تاریخ سفارش", "orderDate", orderSort, setOrderSort)}
                         {sortTh("تاریخ تحویل", "deliveryDate", orderSort, setOrderSort)}
                         {sortTh("سختی کار", "services", orderSort, setOrderSort)}
@@ -2018,7 +2096,7 @@ export default function StationQueuePage() {
                             {g.totalQty}
                           </td>
                           <td className="border border-gray-400 px-2 py-1 text-center">
-                            {g.totalMeterage.toFixed(3)}
+                            {fmtMeasures(g.measures)}
                           </td>
                           <td className="border border-gray-400 px-2 py-1 text-center">
                             {formatFaDate(g.orderDate)}
@@ -2219,12 +2297,31 @@ export default function StationQueuePage() {
                   <table className="w-full text-sm">
                     <thead className="bg-teal-600 text-white">
                       <tr>
-                        <th className="p-2">✓</th>
+                        <th className="p-2">
+                          <input
+                            type="checkbox"
+                            title="انتخاب همه"
+                            checked={
+                              displayPendingItems.length > 0 &&
+                              displayPendingItems.every((i) =>
+                                selectedExitIds.includes(i.productionItemId)
+                              )
+                            }
+                            onChange={(e) =>
+                              setSelectedExitIds(
+                                e.target.checked
+                                  ? displayPendingItems.map((i) => i.productionItemId)
+                                  : []
+                              )
+                            }
+                          />
+                        </th>
                         <th className="p-2">سفارش</th>
                         <th className="p-2">کالا</th>
                         <th className="p-2">ابعاد</th>
                         <th className="p-2">تعداد</th>
                         <th className="p-2">متراژ</th>
+                        <th className="p-2">کد نصب</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2260,10 +2357,27 @@ export default function StationQueuePage() {
                               ? Number(it.meterage).toFixed(3)
                               : "—"}
                           </td>
+                          <td className="p-2 text-center font-bold">
+                            {it.installationCode || "—"}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                )}
+                {selectedExitIds.length > 0 && (
+                  <p className="mt-2 rounded-xl bg-teal-50 border border-teal-200 p-2 text-sm font-bold text-teal-900">
+                    انتخاب‌شده: {selectedExitIds.length} قلم |{" "}
+                    {displayPendingItems
+                      .filter((i) => selectedExitIds.includes(i.productionItemId))
+                      .reduce((s, i) => s + (i.quantity || 0), 0)}{" "}
+                    عدد |{" "}
+                    {displayPendingItems
+                      .filter((i) => selectedExitIds.includes(i.productionItemId))
+                      .reduce((s, i) => s + (Number(i.meterage) || 0), 0)
+                      .toFixed(3)}{" "}
+                    متر
+                  </p>
                 )}
               </div>
             )}
@@ -2313,7 +2427,9 @@ export default function StationQueuePage() {
                     className="flex flex-wrap justify-between border-b py-2 text-sm"
                   >
                     <span className="font-bold">{h.exitNumber}</span>
-                    <span>{formatFaDate(h.exitDate)}</span>
+                    <span>
+                      {formatFaDate(h.exitDate)} — {formatFaTime(h.exitDate)}
+                    </span>
                     <span>{h.items?.length} قلم</span>
                     <span>چاپ: {h.printCount}</span>
                     <button
@@ -2770,8 +2886,16 @@ export default function StationQueuePage() {
 
       {showPrint && currentSlip && (
         <div className="fixed inset-0 z-40 overflow-auto bg-black/40 p-4 print:static print:bg-white print:p-0">
-          <div className="mx-auto max-w-[210mm] bg-white shadow print:shadow-none">
-            <div className="flex gap-2 p-3 print:hidden border-b">
+          <div
+            className={`mx-auto bg-white shadow print:shadow-none ${
+              paper === "A4"
+                ? "max-w-[210mm]"
+                : paper === "A5"
+                  ? "max-w-[148mm]"
+                  : "max-w-[210mm]"
+            }`}
+          >
+            <div className="flex flex-wrap items-center gap-2 p-3 print:hidden border-b">
               <button
                 type="button"
                 onClick={markPrinted}
@@ -2786,6 +2910,16 @@ export default function StationQueuePage() {
               >
                 اکسل
               </button>
+              <select
+                value={paper}
+                onChange={(e) => changePaper(e.target.value as "A4" | "A5" | "A5L")}
+                className="rounded-xl border px-3 py-2 text-sm font-bold"
+                title="اندازه‌ی کاغذ"
+              >
+                <option value="A4">کاغذ A4</option>
+                <option value="A5">کاغذ A5 عمودی</option>
+                <option value="A5L">کاغذ A5 افقی</option>
+              </select>
               <span className="px-2 py-2 text-sm font-bold">
                 چاپ: {currentSlip.printCount}
               </span>
@@ -2797,20 +2931,36 @@ export default function StationQueuePage() {
                 بستن
               </button>
             </div>
-            <div className="p-6" dir="rtl" id="exit-print-area">
-              <div className="text-center mb-3">
-                <h1 className="text-xl font-black">فرم خروج کالا</h1>
-                <h2 className="font-bold">شیشه و آینه اخوان</h2>
+            <div
+              className={`${paper === "A4" ? "p-6" : "p-3"} ${
+                paper === "A4" ? "" : "text-[11px]"
+              }`}
+              dir="rtl"
+              id="exit-print-area"
+            >
+              <div className="mb-2 flex items-start justify-between gap-2">
+                <div className="text-right">
+                  <h1 className={paper === "A4" ? "text-xl font-black" : "text-base font-black"}>
+                    فرم خروج کالا
+                  </h1>
+                  <h2 className="font-bold">شیشه و آینه اخوان</h2>
+                </div>
+                <div className="text-left" dir="rtl">
+                  <p className="text-xs">شماره خروج</p>
+                  <p className={`${paper === "A4" ? "text-3xl" : "text-2xl"} font-black leading-none`}>
+                    {currentSlip.exitNumber}
+                  </p>
+                </div>
               </div>
-              <div className="flex flex-wrap gap-3 text-sm mb-3">
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm mb-2">
                 <span>
                   مشتری: <strong>{currentSlip.customerName}</strong>
                 </span>
                 <span>
-                  شماره: <strong>{currentSlip.exitNumber}</strong>
+                  تاریخ: <strong>{formatFaDate(currentSlip.exitDate)}</strong>
                 </span>
                 <span>
-                  تاریخ: <strong>{formatFaDate(currentSlip.exitDate)}</strong>
+                  ساعت خروج: <strong>{formatFaTime(currentSlip.exitDate) || "—"}</strong>
                 </span>
               </div>
               <table className="w-full border-collapse border border-black text-xs">
@@ -2823,6 +2973,7 @@ export default function StationQueuePage() {
                     <th className="border border-black p-1">عرض</th>
                     <th className="border border-black p-1">تعداد</th>
                     <th className="border border-black p-1">متراژ</th>
+                    <th className="border border-black p-1">کد نصب</th>
                     <th className="border border-black p-1">خدمات</th>
                     <th className="border border-black p-1">توضیحات</th>
                   </tr>
@@ -2853,6 +3004,9 @@ export default function StationQueuePage() {
                           ? Number(it.meterage).toFixed(4)
                           : ""}
                       </td>
+                      <td className="border border-black p-1 text-center">
+                        {it.installationCode || ""}
+                      </td>
                       <td className="border border-black p-1">
                         {it.servicesText || ""}
                       </td>
@@ -2871,15 +3025,15 @@ export default function StationQueuePage() {
                     <td className="border border-black p-1 text-center">
                       {printTotals.meterage.toFixed(4)}
                     </td>
-                    <td className="border border-black p-1" colSpan={2}></td>
+                    <td className="border border-black p-1" colSpan={3}></td>
                   </tr>
                 </tbody>
               </table>
-              <p className="mt-4 text-sm leading-7">
+              <p className="mt-3 text-sm leading-6">
                 اجناس فوق سالم و شمارش‌شده تحویل اینجانب گردید و تا تسویه نهایی
                 به‌صورت امانی نزد اینجانب می‌باشد.
               </p>
-              <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+              <div className="mt-2 grid grid-cols-2 gap-1 text-sm">
                 <p>
                   راننده: <strong>{currentSlip.driverName || "—"}</strong>
                 </p>
@@ -2894,13 +3048,13 @@ export default function StationQueuePage() {
                   پلاک: <strong>{currentSlip.plateNumber || "—"}</strong>
                 </p>
               </div>
-              <div className="mt-10 grid grid-cols-2 gap-4 text-center text-sm">
+              <div className={`${paper === "A4" ? "mt-10" : "mt-5"} grid grid-cols-2 gap-4 text-center text-sm`}>
                 <div>
-                  <p className="font-bold mb-8">مسئول بارگیری</p>
+                  <p className={`font-bold ${paper === "A4" ? "mb-8" : "mb-4"}`}>مسئول بارگیری</p>
                   <p>امضا</p>
                 </div>
                 <div>
-                  <p className="font-bold mb-8">تحویل‌گیرنده</p>
+                  <p className={`font-bold ${paper === "A4" ? "mb-8" : "mb-4"}`}>تحویل‌گیرنده</p>
                   <p>امضا</p>
                 </div>
               </div>
@@ -2911,6 +3065,14 @@ export default function StationQueuePage() {
 
       <style jsx global>{`
         @media print {
+          @page {
+            size: ${paper === "A4"
+              ? "A4 portrait"
+              : paper === "A5"
+                ? "A5 portrait"
+                : "A5 landscape"};
+            margin: 8mm;
+          }
           body * {
             visibility: hidden;
           }

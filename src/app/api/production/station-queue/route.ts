@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
+import { mapServiceToStation } from "@/lib/createProductionOrder"
 
 function norm(s: string) {
   return (s || "")
@@ -41,6 +42,80 @@ function isReadyWh(name: string) {
 }
 function isLoading(name: string) {
   return norm(name).includes("بارگیری")
+}
+
+const canon = (s: string) => norm(s).replace(/\s+/g, "")
+
+/** نام ایستگاه کارتابل با ایستگاهِ نگاشت‌شده‌ی یک خدمت یکی است؟ */
+function stationIsMapped(stationName: string, mapped: string) {
+  const a = canon(stationName)
+  const b = canon(mapped)
+  if (!a || !b) return false
+  if (a === b) return true
+  // «تراش» → تراش ۱ و تراش ۲ (نه تراش الگویی)
+  if (b === canon("تراش") && a.startsWith("تراش") && !a.includes("الگویی")) return true
+  return false
+}
+
+/** واحد خدمت → برچسب نمایش و گروه جمع‌زدن */
+function unitLabel(unit: string): string | null {
+  switch (unit) {
+    case "مترمربع":
+      return "متر مربع"
+    case "مترطول":
+    case "محیط":
+    case "چند طول چند عرض":
+      return "متر طول"
+    case "عددی":
+      return "عدد"
+    case "ابعاد دایره":
+      return "دایره"
+    default:
+      return null // درصد و ناشناخته: جمع‌زدنی نیست
+  }
+}
+
+/**
+ * مقدار کار یک قطعه در ایستگاه فعلی بر اساس واحدِ خدماتی که به همین ایستگاه می‌رسند.
+ * مقدار هر خدمت = تعداد × تعداد واحد (همان فرمول ثبت سفارش)؛ برای باقی‌مانده‌ی قطعه‌های نیمه‌رد‌شده
+ * به نسبت تعداد باقی‌مانده کم می‌شود. اگر خدمتی به این ایستگاه نرسد (مثلاً برش یا انبارها)،
+ * همان متر مربع قطعه برگردانده می‌شود.
+ */
+function computeMeasures(
+  servicesData: any,
+  stationName: string,
+  itemMeterage: number | null,
+  itemQuantity: number,
+  remainingQty: number
+): { label: string; qty: number }[] {
+  const factor = itemQuantity > 0 ? remainingQty / itemQuantity : 1
+  const sums = new Map<string, number>()
+  try {
+    const parsed =
+      typeof servicesData === "string" ? JSON.parse(servicesData) : servicesData
+    if (Array.isArray(parsed)) {
+      for (const s of parsed) {
+        const title = String(s?.title || s?.name || "")
+        const mapped = title ? mapServiceToStation(title) : null
+        if (!mapped || !stationIsMapped(stationName, mapped)) continue
+        const label = unitLabel(String(s?.unit || ""))
+        if (!label) continue
+        const count = parseFloat(String(s?.count ?? "")) || 1
+        const uq = String(s?.unitQuantity ?? "").trim()
+        const unitQty = uq === "" ? (s?.unit === "عددی" ? 1 : 0) : parseFloat(uq) || 0
+        const total = count * unitQty * factor
+        if (total > 0) sums.set(label, (sums.get(label) || 0) + total)
+      }
+    }
+  } catch {}
+  if (sums.size === 0) {
+    const m = (Number(itemMeterage) || 0) * factor
+    return m > 0 ? [{ label: "متر مربع", qty: Number(m.toFixed(4)) }] : []
+  }
+  return Array.from(sums.entries()).map(([label, qty]) => ({
+    label,
+    qty: Number(qty.toFixed(4)),
+  }))
 }
 
 /** یادداشت رد گروهی از انبار نیمه‌ساخته (باید با scan/route.ts یکی باشد) */
@@ -255,6 +330,14 @@ export async function GET(req: Request) {
           status: item.status,
           barcode: item.barcode,
           notes: item.notes || (salesItem as any)?.notes || null,
+          // مقدار کار این ایستگاه بر اساس واحد خدمات (مترمربع / مترطول / عدد)
+          measures: computeMeasures(
+            (salesItem as any)?.servicesData ?? null,
+            station.name,
+            item.meterage,
+            item.quantity || 1,
+            row.quantityIn ?? item.quantity ?? 1
+          ),
           // روند کاری قطعه: همه‌ی ایستگاه‌های مسیر به‌ترتیب (برای دیدن در کارتابل انبارها)
           route: (item.stations || [])
             .slice()
