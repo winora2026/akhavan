@@ -9,7 +9,10 @@ const partyName = (p: any) =>
 const isCustomerParty = (p: any) => (p?.isCustomer ?? p?.IsCustomer) === true
 
 // فقط‌خواندنی: لیست مشتریان اخوان (کد + نام) را با طرف‌حساب‌های سپیدار مقایسه می‌کند
-export async function auditSeedAgainstSepidar() {
+// full=true: همه‌ی ردیف‌ها (برای خروجی CSV)؛ وگرنه فقط نمونه
+export async function auditSeedAgainstSepidar(opts: { full?: boolean } = {}) {
+  const cap = <T>(arr: T[], n: number): T[] => (opts.full ? arr : arr.slice(0, n))
+
   const rows = await getAll("/api/sepidar/v1/Parties/GetAllParty", { IsCustomer: true }, 400)
 
   const byId = new Map<string, any>()
@@ -81,7 +84,7 @@ export async function auditSeedAgainstSepidar() {
     .filter(([, s]) => s.size > 1)
     .map(([code, s]) => ({ code, names: Array.from(s) }))
 
-  // مشتری‌های سپیدار که در لیست اخوان نیستند (مثلاً مشتری‌هایی که بعداً ساخته شده‌اند)
+  // مشتری‌های سپیدار که در لیست اخوان نیستند (جدیدترین‌ها اول)
   const sepidarNotInList = parties
     .filter((p) => isCustomerParty(p))
     .filter((p) => {
@@ -89,22 +92,20 @@ export async function auditSeedAgainstSepidar() {
       return dl && !seedCodes.has(dl)
     })
     .sort((a, b) => Number(pickId(b, PARTY_ID_KEYS)) - Number(pickId(a, PARTY_ID_KEYS)))
+    .map((p) => ({
+      partyId: pickId(p, PARTY_ID_KEYS),
+      code: cleanCode(p?.dlCode ?? p?.DlCode),
+      name: partyName(p),
+    }))
 
   return {
     listEntriesWithCode: seedEntries.length,
     sepidarCustomerParties: parties.filter(isCustomerParty).length,
-    codeNotInSepidar: { count: codeNotInSepidar.length, sample: codeNotInSepidar.slice(0, 100) },
-    codeOnManyParties: { count: codeOnManyParties.length, sample: codeOnManyParties.slice(0, 50) },
-    nameMismatch: { count: nameMismatch.length, sample: nameMismatch.slice(0, 100) },
-    duplicateNamesInList: { count: duplicateNamesInList.length, sample: duplicateNamesInList.slice(0, 100) },
-    duplicateCodesInList: { count: duplicateCodesInList.length, sample: duplicateCodesInList.slice(0, 100) },
-    sepidarNotInList: {
-      count: sepidarNotInList.length,
-      newestSample: sepidarNotInList.slice(0, 40).map((p) => ({
-        partyId: pickId(p, PARTY_ID_KEYS),
-        code: cleanCode(p?.dlCode ?? p?.DlCode),
-        name: partyName(p),
-      })),
-    },
+    codeNotInSepidar: { count: codeNotInSepidar.length, sample: cap(codeNotInSepidar, 100) },
+    codeOnManyParties: { count: codeOnManyParties.length, sample: cap(codeOnManyParties, 50) },
+    nameMismatch: { count: nameMismatch.length, sample: cap(nameMismatch, 100) },
+    duplicateNamesInList: { count: duplicateNamesInList.length, sample: cap(duplicateNamesInList, 100) },
+    duplicateCodesInList: { count: duplicateCodesInList.length, sample: cap(duplicateCodesInList, 100) },
+    sepidarNotInList: { count: sepidarNotInList.length, sample: cap(sepidarNotInList, 40) },
   }
 }

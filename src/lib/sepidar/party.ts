@@ -180,8 +180,8 @@ async function readCreatedParty(id: number | string): Promise<PartyRow | null> {
 }
 
 // کد سپیدار را روی مشتری اخوان می‌نویسد.
-// force=false (پیش‌فرض، برای مشتری‌های قدیمی): فقط اگر کد فعلی موقت/خالی باشد؛ کد عددی واقعی بازنویسی نمی‌شود.
-// force=true (فقط برای مشتری‌ای که همین حالا در سپیدار ساخته شده): کد سپیدار مرجع است و همیشه نوشته می‌شود.
+// force=false (پیش‌فرض): فقط اگر کد فعلی موقت/خالی باشد؛ کد عددی واقعی بازنویسی نمی‌شود.
+// force=true: کد سپیدار مرجع است و همیشه نوشته می‌شود (مشتری تازه‌ساخته یا وصل‌شده با نام).
 async function syncCodeFromSepidar(
   customerId: string,
   party: PartyRow,
@@ -202,17 +202,18 @@ async function syncCodeFromSepidar(
       data: { customerCode: sepCode } as any,
     })
   } catch (e) {
+    // مثلاً کد روی مشتری دیگری ثبت شده (customerCode یکتاست)
     console.error("Sepidar: ذخیره‌ی کد سپیدار روی مشتری ممکن نشد", e)
   }
   return sepCode
 }
 
-// forceCode: کد مرجع (از لیست مشتریان) که باید روی مشتری اخوان بنشیند، حتی اگر کد دیگری روی آن باشد
-async function linkToCustomer(
-  customerId: string,
-  party: PartyRow,
-  opts: { forceCode?: string } = {}
-) {
+type LinkOpts = {
+  forceCode?: string // کد مرجع (از لیست مشتریان) که باید روی مشتری اخوان بنشیند
+  trustSepidarCode?: boolean // وصل با نام؛ کد سپیدار مرجع است و روی مشتری اخوان نوشته می‌شود
+}
+
+async function linkToCustomer(customerId: string, party: PartyRow, opts: LinkOpts = {}) {
   const id = pickId(party, PARTY_ID_KEYS)
   if (!id) {
     throw new Error(
@@ -237,7 +238,7 @@ async function linkToCustomer(
     }
     sepidarCode = opts.forceCode
   } else {
-    sepidarCode = await syncCodeFromSepidar(customerId, party)
+    sepidarCode = await syncCodeFromSepidar(customerId, party, { force: opts.trustSepidarCode === true })
   }
 
   return {
@@ -250,8 +251,7 @@ async function linkToCustomer(
   }
 }
 
-// اتصال دستی مشتری به یک طرف‌حساب سپیدار (برای مشتری‌هایی که در لیست مشتریان نیستند).
-// مشتری‌های داخل لیست در هر ارسال با کد لیست مقایسه می‌شوند؛ برای آن‌ها اگر کد لیست اشتباه است، خود لیست را اصلاح کنید.
+// اتصال دستی مشتری به یک طرف‌حساب سپیدار
 export async function linkCustomerToSepidarParty(customerId: string, partyRef: number) {
   await prisma.customer.update({
     where: { id: customerId },
@@ -306,13 +306,15 @@ type EnsureResult = {
 }
 
 /**
- * قبل از هر ارسال: لینک موجود مشتری را با کد او در لیست مشتریان می‌سنجد.
+ * قبل از هر ارسال: لینک موجود مشتری را می‌سنجد.
+ *  - طرف‌حساب فعلی در سپیدار نیست (حذف شده) → لینک پاک می‌شود و مشتری از اول تطبیق می‌خورد (برمی‌گرداند null)
+ *  - مشتری در لیست مشتریان نیست یا نامش در لیست با چند کد آمده → مرجعی نداریم، همان لینک
  *  - کد طرف‌حساب فعلی برابر کد لیست → همان لینک
- *  - برابر نبود و طرف‌حسابی با کد لیست هست (و نام‌ها شبیه‌اند) → لینک خودکار اصلاح می‌شود
- *  - برابر نبود و راه درستی پیدا نشد → ارسال متوقف می‌شود (فاکتور به طرف‌حساب اشتباه نمی‌رود)
- * مشتری‌هایی که در لیست نیستند (جدید) یا نامشان در لیست با چند کد آمده، مرجعی ندارند و همان لینک می‌ماند.
+ *  - طرف‌حسابی با کد لیست هست و نامش به مشتری می‌خورد → لینک خودکار اصلاح می‌شود
+ *  - کد لیست در سپیدار نیست یا مال شخص دیگری است ولی لینک فعلی نام درستی دارد → کد لیست کهنه فرض می‌شود، همان لینک
+ *  - در غیر این صورت لینک مشکوک است → ارسال متوقف می‌شود (فاکتور به طرف‌حساب اشتباه نمی‌رود)
  */
-async function verifyExistingLink(customerId: string, c: any): Promise<EnsureResult> {
+async function verifyExistingLink(customerId: string, c: any): Promise<EnsureResult | null> {
   const current: EnsureResult = {
     partyRef: Number(c.sepidarPartyRef),
     created: false,
@@ -320,16 +322,25 @@ async function verifyExistingLink(customerId: string, c: any): Promise<EnsureRes
   }
   if (isMockMode()) return current
 
-  const key = nameKey(c.name)
-  if (!seedCodeByName.has(key)) return current
-  const expected = seedCodeByName.get(key)
-  if (!expected) {
-    console.warn(`Sepidar: نام «${c.name}» در لیست مشتریان با چند کد آمده؛ لینک قابل سنجش نیست`)
-    return current
-  }
-
   const parties = await loadParties()
   const cur = parties.find((p) => String(pickId(p, PARTY_ID_KEYS)) === String(c.sepidarPartyRef))
+
+  // طرف‌حساب فعلی دیگر در سپیدار نیست؛ (فقط وقتی لیست سپیدار به‌طور معقول خوانده شده)
+  if (!cur && parties.length > 100) {
+    console.warn(
+      `Sepidar: طرف‌حساب ${c.sepidarPartyRef} مشتری «${c.name}» در سپیدار پیدا نشد؛ لینک پاک شد و دوباره تطبیق داده می‌شود`
+    )
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: { sepidarPartyRef: null } as any,
+    })
+    c.sepidarPartyRef = null
+    return null
+  }
+
+  const expected = seedCodeByName.get(nameKey(c.name)) // undefined: در لیست نیست؛ null: چند کد
+  if (!expected) return current
+
   const curCode = cleanCode(cur?.dlCode ?? cur?.DlCode)
   if (curCode === expected) return current
 
@@ -345,15 +356,24 @@ async function verifyExistingLink(customerId: string, c: any): Promise<EnsureRes
     }
   }
 
+  const curNameOk = cur ? sharesNameToken(c.name, partyDisplayName(cur)) : false
+  if (curNameOk) {
+    console.warn(
+      `Sepidar: کد «${c.name}» در لیست (${expected}) در سپیدار نیست یا به شخص دیگری تعلق دارد؛ لینک فعلی (کد ${curCode || "؟"}) که نامش می‌خواند حفظ شد`
+    )
+    return current
+  }
+
   throw new Error(
-    `لینک مشتری «${c.name}» با کد او در لیست مشتریان (${expected}) نمی‌خواند ` +
-      `(طرف‌حساب فعلی: شناسه ${c.sepidarPartyRef}، کد ${curCode || "نامشخص"}` +
-      `${cur ? `، نام «${partyDisplayName(cur).trim()}»` : "، در سپیدار پیدا نشد"}). ` +
-      (target
-        ? `طرف‌حسابِ هم‌کد «${partyDisplayName(target).trim()}» هیچ شباهتی به نام مشتری ندارد. `
-        : `طرف‌حسابی با کد ${expected} در سپیدار نیست. `) +
-      `برای احتیاط ارسال متوقف شد تا فاکتور به طرف‌حساب اشتباه نرود. ` +
-      `اگر کد در لیست مشتریان اشتباه است، لیست را اصلاح کنید.`
+    `لینک مشتری «${c.name}» مشکوک است: کد او در لیست مشتریان ${expected} است ولی طرف‌حساب فعلی ` +
+      `(شناسه ${c.sepidarPartyRef}، کد ${curCode || "نامشخص"}` +
+      `${cur ? `، نام «${partyDisplayName(cur).trim()}»` : ""}) نامش به او نمی‌خورد` +
+      `${
+        target
+          ? ` و طرف‌حسابِ هم‌کد «${partyDisplayName(target).trim()}» هم شبیه نیست. `
+          : ` و طرف‌حسابی با کد ${expected} در سپیدار نیست. `
+      }` +
+      `برای احتیاط ارسال متوقف شد تا فاکتور به طرف‌حساب اشتباه نرود؛ لینک را با مسیر customers/link دستی اصلاح کنید.`
   )
 }
 
@@ -363,7 +383,9 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
 
   const c: any = customer
   if (c.sepidarPartyRef) {
-    return verifyExistingLink(customerId, c)
+    const verified = await verifyExistingLink(customerId, c)
+    if (verified) return verified
+    // لینک پاک شده (طرف‌حساب حذف‌شده)؛ ادامه به‌عنوان مشتری بدون لینک
   }
 
   if (isMockMode()) {
@@ -378,6 +400,9 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
       if (sharesNameToken(c.name, partyDisplayName(byCode))) {
         return linkToCustomer(customerId, byCode)
       }
+      // کد در سپیدار مال شخص دیگری است (کد لیست کهنه): اگر با نام دقیقاً پیدا شد همان، وگرنه توقف
+      const byName = await findExistingParty(c.name, c.phone)
+      if (byName.match) return linkToCustomer(customerId, byName.match, { trustSepidarCode: true })
       throw new Error(
         `کد ${akhavanCode} در سپیدار برای «${partyDisplayName(byCode).trim()}» ` +
           `(شناسه: ${pickId(byCode, PARTY_ID_KEYS) ?? "؟"}) ثبت شده که با نام «${c.name}» هیچ شباهتی ندارد؛ ` +
@@ -388,7 +413,7 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
 
   // ۱) اگر در سپیدار با همین نام هست، فقط لینک می‌کنیم (بدون ساخت تکراری)
   const found = await findExistingParty(c.name, c.phone)
-  if (found.match) return linkToCustomer(customerId, found.match)
+  if (found.match) return linkToCustomer(customerId, found.match, { trustSepidarCode: true })
 
   // ۲) در غیر این صورت می‌سازیم
   const payload = buildCreatePartyPayload(c)
@@ -402,7 +427,7 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
     // لیست را تازه می‌خوانیم و این بار با تطبیق نرم‌تر دنبالش می‌گردیم
     partyCache = null
     const retry = await findExistingParty(c.name, c.phone, { fuzzy: true })
-    if (retry.match) return linkToCustomer(customerId, retry.match)
+    if (retry.match) return linkToCustomer(customerId, retry.match, { trustSepidarCode: true })
 
     const sample = retry.candidates
       .slice(0, 5)
@@ -411,7 +436,7 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
     throw new Error(
       `سپیدار این مشتری را تکراری می‌داند ولی طرف‌حسابِ مطابق پیدا نشد (نام: «${c.name}»). ` +
         (sample
-          ? `نزدیک‌ترین‌ها: ${sample}. شناسه‌ی درست را با linkCustomerToSepidarParty دستی وصل کنید.`
+          ? `نزدیک‌ترین‌ها: ${sample}. شناسه‌ی درست را با customers/link دستی وصل کنید.`
           : "در سپیدار با نام، کد و کد ملی جستجو کنید و شناسه را دستی وصل کنید.") +
         ` | پیام اصلی: ${e?.message}`
     )
@@ -465,13 +490,10 @@ const inflightByCustomer = new Map<string, Promise<EnsureResult>>()
 
 /**
  * مشتری اخوان را در سپیدار تضمین می‌کند:
- * 1) اگر قبلاً لینک شده، لینک با کد لیست مشتریان سنجیده می‌شود (اصلاح خودکار یا توقف ارسال)
+ * 1) اگر قبلاً لینک شده، لینک سنجیده می‌شود (اصلاح خودکار، حفظ، پاک‌کردن لینک حذف‌شده یا توقف ارسال)
  * 2) اگر طرف‌حسابی با همان کد (از لیست یا دیتابیس) هست، به آن لینک می‌کند
- * 3) اگر طرف‌حسابی با همین نام (با هر ترتیب کلمات) هست، به آن لینک می‌کند
+ * 3) اگر طرف‌حسابی با همین نام (با هر ترتیب کلمات) هست، به آن لینک می‌کند و کد سپیدار را روی مشتری می‌نویسد
  * 4) در غیر این صورت با CreateParty می‌سازد؛ اگر سپیدار «تکراری» گفت، دوباره جستجو و لینک می‌کند
- * کد سپیدار روی مشتری اخوان هم نوشته می‌شود:
- *  - برای مشتری قدیمی (لینک‌شده): فقط اگر کد فعلی موقت/خالی باشد
- *  - برای مشتری تازه‌ساخته‌شده در سپیدار: همیشه (کد سپیدار مرجع است)
  */
 export function ensureSepidarParty(customerId: string): Promise<EnsureResult> {
   const running = inflightByCustomer.get(customerId)
