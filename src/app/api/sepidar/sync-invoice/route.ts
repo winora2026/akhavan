@@ -14,8 +14,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "ورود لازم است" }, { status: 401 })
     }
 
+    // فقط مالی و مدیر
+    if (session.role !== "finance" && session.role !== "admin") {
+      return NextResponse.json(
+        { error: "فقط مالی/مدیر می‌تواند به سپیدار ارسال کند" },
+        { status: 403 }
+      )
+    }
+
     const body = await req.json()
     orderId = String(body.orderId || "").trim()
+    const force = Boolean(body.force)
+
     if (!orderId) {
       return NextResponse.json({ error: "orderId الزامی است" }, { status: 400 })
     }
@@ -30,7 +40,13 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       )
     }
-    if (existing.sepidarSyncStatus === "SUCCESS" && existing.sepidarInvoiceId) {
+
+    // بدون force: اگر قبلاً موفق بوده، تکراری نفرست
+    if (
+      !force &&
+      existing.sepidarSyncStatus === "SUCCESS" &&
+      existing.sepidarInvoiceId
+    ) {
       return NextResponse.json(
         {
           error: "این فاکتور قبلاً به سپیدار ارسال شده",
@@ -40,26 +56,43 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // قفل اتمیک: جلوگیری از ارسال همزمان/دوبار کلیک
-    const lock = await prisma.order.updateMany({
-      where: {
-        id: orderId,
-        OR: [
-          { sepidarSyncStatus: null },
-          { sepidarSyncStatus: { notIn: ["PENDING", "SUCCESS"] } },
-        ],
-      },
-      data: { sepidarSyncStatus: "PENDING", sepidarSyncError: null },
-    })
+    // قفل اتمیک
+    // با force: حتی SUCCESS را هم دوباره PENDING می‌کنیم
+    const lock = force
+      ? await prisma.order.updateMany({
+          where: {
+            id: orderId,
+            sepidarSyncStatus: { not: "PENDING" },
+          },
+          data: {
+            sepidarSyncStatus: "PENDING",
+            sepidarSyncError: null,
+            // شناسه قبلی را نگه می‌داریم تا در لاگ بماند؛ بعد از موفقیت عوض می‌شود
+          },
+        })
+      : await prisma.order.updateMany({
+          where: {
+            id: orderId,
+            OR: [
+              { sepidarSyncStatus: null },
+              { sepidarSyncStatus: { notIn: ["PENDING", "SUCCESS"] } },
+            ],
+          },
+          data: { sepidarSyncStatus: "PENDING", sepidarSyncError: null },
+        })
+
     if (lock.count === 0) {
       return NextResponse.json(
-        { error: "ارسال این فاکتور در حال انجام است" },
+        {
+          error: force
+            ? "ارسال این فاکتور در حال انجام است"
+            : "ارسال این فاکتور در حال انجام است یا قبلاً موفق بوده",
+        },
         { status: 409 }
       )
     }
     locked = true
 
-    // اگر مشتری هنوز در سپیدار نیست، اول او را بساز/لینک کن
     await ensureSepidarParty(existing.customerId)
 
     const { payload } = await buildCreateInvoicePayload(orderId)
@@ -73,7 +106,6 @@ export async function POST(req: NextRequest) {
     await prisma.order.update({
       where: { id: orderId },
       data: {
-        // در حالت آزمایشی SUCCESS ثبت نمی‌شود تا بعداً ارسال واقعی مسدود نشود
         sepidarSyncStatus: mock ? "MOCK" : "SUCCESS",
         sepidarInvoiceId: invoiceId,
         sepidarSyncedAt: mock ? null : new Date(),
@@ -85,6 +117,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       mock,
+      force,
       sepidarInvoiceId: invoiceId,
       result,
       payload,

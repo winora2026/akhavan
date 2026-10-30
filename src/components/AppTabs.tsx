@@ -21,6 +21,7 @@ const TITLE_MAP: Record<string, string> = {
   "/production/stations": "ایستگاه‌ها",
   "/login": "ورود",
   "/finance/deposits": "واریزی‌های مشتریان",
+  "/finance/convert": "کانورت فاکتورها",
 }
 
 const STORAGE_KEY = "akhavan_open_tabs"
