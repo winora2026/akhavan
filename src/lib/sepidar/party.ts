@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma"
 import { sepidarPost, sepidarGet, extractList, getAll, isMockMode, pickId } from "./client"
 import { cleanCode, nameTokens, nameKey, sharesNameToken, seedCodeByName } from "./customerCodes"
+import customersSeedRaw from "@/app/customers/customers-seed.json"
 
 function digits(s: string) {
   return (s || "")
@@ -22,86 +23,382 @@ function akhavanCodeOf(c: { name: string; customerCode?: string | null }) {
   return cleanCode(c.customerCode) || seedCodeByName.get(nameKey(c.name)) || ""
 }
 
-export function buildCreatePartyPayload(customer: {
-  name: string
-  phone?: string | null
-  address?: string | null
-}) {
-  const phoneType = Number(process.env.SEPIDAR_PHONE_TYPE || 1)
-  const addressType = Number(process.env.SEPIDAR_ADDRESS_TYPE || 1)
+// نام نمایشی مشتری seed، دقیقاً با همان قاعده‌ی صفحه‌ی ثبت سفارش (نسخه‌ی محلی؛ به customerCodes.ts وابسته نیست)
+function seedCustomerName(c: any) {
+  let name = ""
+  if (c.customerType === "حقوقی") {
+    name = (c.companyName || "").trim()
+    if (!name) name = `${c.lastName || ""} ${c.firstName || ""}`.trim()
+  } else {
+    name = `${c.lastName || ""} ${c.firstName || ""}`.trim()
+    if (!name) name = (c.companyName || "").trim()
+  }
+  if (!name) name = c.companyName || c.lastName || c.firstName || c.code || "بدون نام"
+  return name
+}
 
-  const phones = (customer.phone || "")
-    .split(/[،,;\/\s]+/)
-    .map(digits)
-    .filter((p) => p.length >= 7)
-    .map((p, i) => ({ type: phoneType, phone: p, isMain: i === 0 }))
+// ───────────── اطلاعات کامل مشتری (نام، نام خانوادگی، کد ملی، ...) ─────────────
+// مشتری ثبت‌شده از صفحه‌ی «مدیریت مشتریان» این اطلاعات را در ستون profile (JSON) دارد.
+// مشتری قدیمی که فقط از سفارش در دیتابیس ساخته شده، پروفایل ندارد و اطلاعاتش از فایل seed (با کد یا نام) خوانده می‌شود.
+const seedEntryByCode = new Map<string, any>()
+const seedEntryByName = new Map<string, any | null>() // نام مبهم (دو نفر هم‌نام) = null
+for (const c of customersSeedRaw as unknown as any[]) {
+  const code = cleanCode(c?.code)
+  if (code && !seedEntryByCode.has(code)) seedEntryByCode.set(code, c)
+  const key = nameKey(seedCustomerName(c))
+  if (!key) continue
+  seedEntryByName.set(key, seedEntryByName.has(key) ? null : c)
+}
 
-  const addresses = customer.address?.trim()
-    ? [{ type: addressType, address: customer.address.trim(), isMain: true }]
-    : []
-
-  return {
-    name: customer.name.trim(),
-    isCustomer: true,
-    ...(phones.length ? { phones } : {}),
-    ...(addresses.length ? { addresses } : {}),
+function parseProfile(raw: unknown): any {
+  if (!raw) return null
+  if (typeof raw === "object") return raw
+  try {
+    const p = JSON.parse(String(raw))
+    return p && typeof p === "object" ? p : null
+  } catch {
+    return null
   }
 }
 
-// ───────────── لیست طرف‌حساب‌ها (کش ۱۰ دقیقه‌ای) ─────────────
-// هم مشتری‌ها و هم طرف‌حساب‌هایی که «مشتری» نیستند خوانده می‌شوند، چون کد/شناسه‌ی یکتا
-// بین همه‌ی طرف‌حساب‌ها مشترک است و ممکن است تکراری از نوع دیگری باشد.
+// همان اعتبارسنجی صفحه‌ی مشتریان
+function isValidNationalCode(code: string): boolean {
+  if (!/^\d{10}$/.test(code)) return false
+  if (/^(\d)\1{9}$/.test(code)) return false
+  const check = parseInt(code[9])
+  let sum = 0
+  for (let i = 0; i < 9; i++) sum += parseInt(code[i]) * (10 - i)
+  const r = sum % 11
+  return (r < 2 && check === r) || (r >= 2 && check === 11 - r)
+}
+const isValidEconomicCode = (code: string) => /^\d{11}$|^\d{14}$/.test(code)
+const isValidCompanyNationalId = (code: string) => /^\d{11}$/.test(code)
+const isValidPostalCode = (code: string) => /^\d{10}$/.test(code)
+
+type PartyInfo = {
+  type: string
+  firstName: string
+  lastName: string
+  companyName: string
+  nationalCode: string
+  companyNationalId: string
+  economicCode: string
+  postalCode: string
+  phones: string[]
+  address1: string
+}
+
+// اطلاعات مشتری: اول پروفایل ذخیره‌شده، وگرنه ردیف seed (با کد و بعد با نام یکتا)
+function resolvePartyInfo(c: any): PartyInfo | null {
+  let src: any = parseProfile(c.profile)
+  if (!src?.customerType) {
+    const byCode = seedEntryByCode.get(cleanCode(c.customerCode))
+    const bySeedCode =
+      byCode && sharesNameToken(String(c.name || ""), seedCustomerName(byCode)) ? byCode : null
+    src = bySeedCode ?? seedEntryByName.get(nameKey(String(c.name || ""))) ?? null
+  }
+  if (!src) return null
+  const s = (v: unknown) => String(v ?? "").trim()
+  return {
+    type: s(src.customerType) || "حقیقی",
+    firstName: s(src.firstName),
+    lastName: s(src.lastName),
+    companyName: s(src.companyName),
+    nationalCode: digits(s(src.nationalCode)),
+    companyNationalId: digits(s(src.companyNationalId)),
+    economicCode: digits(s(src.economicCode)),
+    postalCode: digits(s(src.postalCode)),
+    phones: Array.isArray(src.phones) ? src.phones.map(s) : [],
+    address1: s(src.address1),
+  }
+}
+
+// بدنه‌ی CreateParty + توضیح مواردی که معتبر نبودند و ارسال نشدند
+function buildPartyPayloadWithNotes(customer: any) {
+  const phoneType = Number(process.env.SEPIDAR_PHONE_TYPE || 1)
+  const addressType = Number(process.env.SEPIDAR_ADDRESS_TYPE || 1)
+  // مقدار «نوع» برای مشتری حقوقی در سپیدار؛ تا وقتی در .env تنظیم نشده، فیلد نوع فرستاده نمی‌شود
+  const legalSubType = Number(process.env.SEPIDAR_LEGAL_SUBTYPE || 0)
+  const notes: string[] = []
+  const info = resolvePartyInfo(customer)
+  const fullName = String(customer.name || "").trim()
+
+  // تلفن‌ها: همه‌ی شماره‌های پروفایل + شماره‌ی ذخیره‌شده روی مشتری، بدون تکرار
+  const seen = new Set<string>()
+  const phones = [...(info?.phones ?? []), String(customer.phone || "")]
+    .flatMap((p) => p.split(/[،,;\/\s]+/))
+    .map(digits)
+    .filter((p) => p.length >= 7 && !seen.has(p) && (seen.add(p), true))
+    .map((p, i) => ({ type: phoneType, phone: p, isMain: i === 0 }))
+
+  const addressText = String(customer.address || "").trim() || info?.address1 || ""
+  const zip = info?.postalCode || ""
+  if (zip && !isValidPostalCode(zip)) notes.push(`کد پستی «${zip}» نامعتبر بود و ارسال نشد`)
+  const addresses = addressText
+    ? [
+        {
+          type: addressType,
+          address: addressText,
+          isMain: true,
+          ...(isValidPostalCode(zip) ? { zipCode: zip } : {}),
+        },
+      ]
+    : []
+
+  const legal = info?.type === "حقوقی"
+  let name = fullName
+  let lastName = ""
+  if (info) {
+    if (legal) {
+      name = info.companyName || fullName
+    } else if (info.firstName && info.lastName) {
+      // نام و نام خانوادگی جدا (در سپیدار «عنوان تفصیلی» خودش از ترکیب این دو ساخته می‌شود)
+      name = info.firstName
+      lastName = info.lastName
+    } else {
+      // فقط یک جزء داریم؛ مثل قبل یک‌جا در نام می‌رود
+      name = info.lastName || info.firstName || info.companyName || fullName
+    }
+  }
+
+  // کد ملی (حقیقی) یا شناسه‌ی ملی (حقوقی)
+  let identificationCode = ""
+  if (info) {
+    if (legal) {
+      const v = info.companyNationalId || info.nationalCode
+      if (v && isValidCompanyNationalId(v)) identificationCode = v
+      else if (v) notes.push(`شناسه‌ی ملی «${v}» نامعتبر بود و ارسال نشد`)
+    } else if (info.nationalCode) {
+      if (isValidNationalCode(info.nationalCode)) identificationCode = info.nationalCode
+      else notes.push(`کد ملی «${info.nationalCode}» نامعتبر بود و ارسال نشد`)
+    }
+  }
+
+  let economicCode = ""
+  if (info?.economicCode) {
+    if (isValidEconomicCode(info.economicCode)) economicCode = info.economicCode
+    else notes.push(`کد اقتصادی «${info.economicCode}» نامعتبر بود و ارسال نشد`)
+  }
+
+  if (legal && !legalSubType) {
+    notes.push("نوع «حقوقی» ارسال نشد (SEPIDAR_LEGAL_SUBTYPE در .env تنظیم نشده)؛ در سپیدار حقیقی ثبت شد")
+  }
+
+  const payload = {
+    name,
+    ...(lastName ? { lastName } : {}),
+    ...(legal && legalSubType ? { subType: legalSubType } : {}),
+    isCustomer: true,
+    ...(identificationCode ? { identificationCode } : {}),
+    ...(economicCode ? { economicCode } : {}),
+    ...(phones.length ? { phones } : {}),
+    ...(addresses.length ? { addresses } : {}),
+  }
+  return { payload, notes }
+}
+
+export function buildCreatePartyPayload(customer: any) {
+  return buildPartyPayloadWithNotes(customer).payload
+}
+
+// ───────────── لیست طرف‌حساب‌ها (کش پایدار + به‌روزرسانی افزایشی) ─────────────
+// خواندن کل لیست (~۵٬۶۰۰ طرف‌حساب = بیش از ۱۱۰ درخواست پشت‌سرهم) دقیقه‌ها طول می‌کشد، پس:
+//  - کش روی globalThis است؛ هر route نسخه‌ی جدا از ماژول می‌گیرد و با ذخیره‌ی فایل در حالت dev ماژول دوباره ساخته می‌شود
+//  - فقط بار اول (یا بعد از ری‌استارت) کل لیست خوانده می‌شود؛ بعد از آن فقط طرف‌حساب‌های جدیدتر از بزرگ‌ترین شناسه (۱–۲ درخواست)
+//  - خواندن کامل هر ۶ ساعت یک‌بار در پس‌زمینه انجام می‌شود و هیچ فاکتوری منتظرش نمی‌ماند
+//  - وجود طرف‌حسابِ لینک‌شده‌ی هر مشتری با یک درخواست هدفمند سنجیده می‌شود (verifyExistingLink)
+const PARTIES_PATH = "/api/sepidar/v1/Parties/GetAllParty"
 const MAX_PAGES = 400 // × ۵۰ ردیف = حداکثر ۲۰٬۰۰۰ طرف‌حساب
+const PARTIES_FRESH_MS = 2 * 60_000
+const PARTIES_FULL_REFRESH_MS = 6 * 60 * 60_000
 
 type PartyRow = any
 
-let partyCache: { at: number; list: PartyRow[] } | null = null
-let partyInflight: Promise<PartyRow[]> | null = null
+type PartyStore = {
+  list: PartyRow[] | null
+  at: number // آخرین به‌روزرسانی (کامل یا افزایشی)
+  fullAt: number // آخرین خواندن کامل
+  maxId: number
+  incrementalBroken: boolean // سپیدار AfterPartyId را نادیده گرفته؛ فقط خواندن کامل کار می‌کند
+  full: Promise<PartyRow[]> | null
+  inc: Promise<void> | null
+}
 
-async function loadParties(): Promise<PartyRow[]> {
-  if (partyCache && Date.now() - partyCache.at < 10 * 60_000) return partyCache.list
-  if (!partyInflight) {
-    partyInflight = (async () => {
-      const customers = await getAll(
-        "/api/sepidar/v1/Parties/GetAllParty",
-        { IsCustomer: true },
-        MAX_PAGES
-      )
+const store: PartyStore = ((globalThis as any).__sepidarPartyStore ??= {
+  list: null,
+  at: 0,
+  fullAt: 0,
+  maxId: 0,
+  incrementalBroken: false,
+  full: null,
+  inc: null,
+} as PartyStore)
+
+const partyNumId = (p: any) => {
+  const n = Number(pickId(p, PARTY_ID_KEYS))
+  return Number.isFinite(n) ? n : 0
+}
+
+// سپیدار فیلتر IsCustomer=false را گاهی نادیده می‌گیرد و همه‌ی طرف‌حساب‌ها را برمی‌گرداند.
+// پس بر اساس شناسه یکتا می‌کنیم و نوع (مشتری/غیرمشتری) را از خود فیلد isCustomer می‌خوانیم.
+function mergeRows(base: PartyRow[], customers: any[], others: any[]): PartyRow[] {
+  const byId = new Map<string, PartyRow>()
+  for (const p of base) byId.set(String(pickId(p, PARTY_ID_KEYS)), p)
+  const add = (p: any, fallbackSrc: "customer" | "other") => {
+    const flag = p?.isCustomer ?? p?.IsCustomer
+    const src = typeof flag === "boolean" ? (flag ? "customer" : "other") : fallbackSrc
+    const id = pickId(p, PARTY_ID_KEYS)
+    const key = id != null ? String(id) : `row-${byId.size}`
+    const row = { ...p, __src: src }
+    const prev = byId.get(key)
+    if (!prev || (prev.__src !== "customer" && src === "customer") || base.length) byId.set(key, row)
+  }
+  customers.forEach((p) => add(p, "customer"))
+  others.forEach((p) => add(p, "other"))
+  return Array.from(byId.values())
+}
+
+function setList(list: PartyRow[], full: boolean) {
+  store.list = list
+  store.at = Date.now()
+  if (full) store.fullAt = store.at
+  store.maxId = list.reduce((m, p) => Math.max(m, partyNumId(p)), 0)
+}
+
+async function readAllParties(): Promise<PartyRow[]> {
+  const customers = await getAll(PARTIES_PATH, { IsCustomer: true }, MAX_PAGES)
+  let others: any[] = []
+  try {
+    others = await getAll(PARTIES_PATH, { IsCustomer: false }, MAX_PAGES)
+  } catch (e) {
+    // اگر سپیدار این فیلتر را نپذیرفت، فقط لیست مشتری‌ها کافی است
+    console.error("Sepidar: خواندن طرف‌حساب‌های غیرمشتری ممکن نشد", e)
+  }
+  return mergeRows([], customers, others)
+}
+
+function fullLoad(): Promise<PartyRow[]> {
+  if (!store.full) {
+    store.full = readAllParties()
+      .then((list) => {
+        setList(list, true)
+        return list
+      })
+      .finally(() => {
+        store.full = null
+      })
+  }
+  return store.full
+}
+
+// فقط طرف‌حساب‌های جدیدتر از بزرگ‌ترین شناسه‌ی کش
+function incrementalLoad(): Promise<void> {
+  if (!store.inc) {
+    store.inc = (async () => {
+      const after = store.maxId
+      const customers = await getAll(PARTIES_PATH, { IsCustomer: true, AfterPartyId: after }, 10)
       let others: any[] = []
       try {
-        others = await getAll(
-          "/api/sepidar/v1/Parties/GetAllParty",
-          { IsCustomer: false },
-          MAX_PAGES
-        )
+        others = await getAll(PARTIES_PATH, { IsCustomer: false, AfterPartyId: after }, 10)
       } catch (e) {
-        // اگر سپیدار این فیلتر را نپذیرفت، فقط لیست مشتری‌ها کافی است
-        console.error("Sepidar: خواندن طرف‌حساب‌های غیرمشتری ممکن نشد", e)
+        console.error("Sepidar: خواندن افزایشیِ طرف‌حساب‌های غیرمشتری ممکن نشد", e)
       }
-
-      // سپیدار فیلتر IsCustomer=false را گاهی نادیده می‌گیرد و همه‌ی طرف‌حساب‌ها را برمی‌گرداند.
-      // پس بر اساس شناسه یکتا می‌کنیم و نوع (مشتری/غیرمشتری) را از خود فیلد isCustomer می‌خوانیم.
-      const byId = new Map<string, PartyRow>()
-      const add = (p: any, fallbackSrc: "customer" | "other") => {
-        const flag = p?.isCustomer ?? p?.IsCustomer
-        const src = typeof flag === "boolean" ? (flag ? "customer" : "other") : fallbackSrc
-        const id = pickId(p, PARTY_ID_KEYS)
-        const key = id != null ? String(id) : `row-${byId.size}`
-        const row = { ...p, __src: src }
-        const prev = byId.get(key)
-        if (!prev || (prev.__src !== "customer" && src === "customer")) byId.set(key, row)
+      // اگر ردیفی با شناسه‌ی کوچک‌تر برگشت، سپیدار AfterPartyId را نادیده گرفته: افزایشی کار نمی‌کند
+      const ignored = [...customers, ...others].some((p) => partyNumId(p) <= after)
+      if (ignored) {
+        store.incrementalBroken = true
+        console.warn("Sepidar: AfterPartyId پشتیبانی نشد؛ به‌روزرسانی افزایشی غیرفعال شد و فقط خواندن کامل پس‌زمینه انجام می‌شود")
       }
-      customers.forEach((p) => add(p, "customer"))
-      others.forEach((p) => add(p, "other"))
-
-      const list = Array.from(byId.values())
-      partyCache = { at: Date.now(), list }
-      return list
+      const fresh = (list: any[]) => list.filter((p) => partyNumId(p) > after)
+      setList(mergeRows(store.list ?? [], fresh(customers), fresh(others)), false)
     })().finally(() => {
-      partyInflight = null
+      store.inc = null
     })
   }
-  return partyInflight
+  return store.inc
+}
+
+async function loadParties(): Promise<PartyRow[]> {
+  // بار اول (یا بعد از ری‌استارت): تنها حالتی که منتظر خواندن کامل می‌مانیم
+  if (!store.list) return fullLoad()
+
+  // خواندن کامل دوره‌ای در پس‌زمینه؛ فاکتور منتظرش نمی‌ماند
+  const fullEvery = store.incrementalBroken ? 10 * 60_000 : PARTIES_FULL_REFRESH_MS
+  if (Date.now() - store.fullAt > fullEvery) {
+    fullLoad().catch((e) => console.error("Sepidar: خواندن کامل پس‌زمینه‌ی طرف‌حساب‌ها ممکن نشد", e))
+  }
+
+  if (!store.incrementalBroken && Date.now() - store.at > PARTIES_FRESH_MS) {
+    try {
+      await incrementalLoad()
+    } catch (e) {
+      console.error("Sepidar: به‌روزرسانی افزایشی طرف‌حساب‌ها ممکن نشد؛ لیست قبلی استفاده می‌شود", e)
+    }
+  }
+  return store.list!
+}
+
+// بعد از ساخت طرف‌حساب: دفعه‌ی بعد فقط ردیف‌های جدید خوانده می‌شود، نه کل لیست
+function markPartiesStale() {
+  store.at = 0
+}
+// فقط برای حالتی که واقعاً لیست کامل و تازه لازم است (مثلاً خطای «تکراری»)
+function dropPartyCache() {
+  store.list = null
+  store.at = 0
+}
+// برای گرم کردن کش هنگام بالا آمدن سرور (instrumentation.ts)
+export async function warmParties() {
+  await loadParties()
+}
+
+// یک طرف‌حساب را با شناسه از سپیدار می‌خواند: ردیف | null (نبود) | undefined (نتوانستیم بفهمیم)
+async function fetchPartyById(id: number | string): Promise<PartyRow | null | undefined> {
+  let answered = false
+  for (const filter of [{ IsCustomer: true }, {}]) {
+    try {
+      const page = await sepidarGet(PARTIES_PATH, {
+        ...filter,
+        AfterPartyId: Number(id) - 1,
+        Page: 1,
+        ItemCount: 5,
+      })
+      answered = true
+      const hit = extractList(page).find((p) => String(pickId(p, PARTY_ID_KEYS)) === String(id))
+      if (hit) {
+        const flag = hit?.isCustomer ?? hit?.IsCustomer
+        return { ...hit, __src: typeof flag === "boolean" ? (flag ? "customer" : "other") : "customer" }
+      }
+    } catch {
+      // فیلتر بعدی
+    }
+  }
+  return answered ? null : undefined
+}
+
+// «نبودنِ» جواب هدفمند فقط وقتی معتبر است که همین روش یک طرف‌حساب موجود را درست پیدا کند (یک‌بار در هر اجرا سنجیده می‌شود)
+async function targetedLookupTrusted(): Promise<boolean> {
+  const g = globalThis as any
+  if (typeof g.__sepidarTargetedTrusted === "boolean") return g.__sepidarTargetedTrusted
+  const sample = (store.list ?? []).find((p) => partyNumId(p) > 0 && p.__src === "customer")
+  if (!sample) return false
+  const row = await fetchPartyById(partyNumId(sample))
+  g.__sepidarTargetedTrusted = Boolean(row)
+  return g.__sepidarTargetedTrusted
+}
+
+function removeParty(id: number | string) {
+  if (!store.list) return
+  store.list = store.list.filter((p) => String(pickId(p, PARTY_ID_KEYS)) !== String(id))
+}
+
+function upsertParty(row: PartyRow) {
+  if (!store.list) return
+  const id = String(pickId(row, PARTY_ID_KEYS))
+  const i = store.list.findIndex((p) => String(pickId(p, PARTY_ID_KEYS)) === id)
+  if (i >= 0) store.list[i] = row
+  else store.list.push(row)
+  store.maxId = Math.max(store.maxId, partyNumId(row))
 }
 
 function pickBest(matches: PartyRow[], phone?: string | null): PartyRow {
@@ -174,7 +471,7 @@ async function readCreatedParty(id: number | string): Promise<PartyRow | null> {
   } catch (e) {
     console.error("Sepidar: خواندن هدفمند طرف‌حساب تازه‌ساخته‌شده ممکن نشد؛ لیست کامل خوانده می‌شود", e)
   }
-  partyCache = null
+  markPartiesStale()
   const list = await loadParties()
   return list.find((p) => String(pickId(p, PARTY_ID_KEYS)) === String(id)) ?? null
 }
@@ -271,7 +568,7 @@ export async function resetCustomerSepidarLink(customerId: string) {
   if (!cur) throw new Error("مشتری یافت نشد")
 
   const seedCode = seedCodeByName.get(nameKey(cur.name)) || null
-  partyCache = null
+  markPartiesStale()
 
   let restoredCode: string | null = seedCode
   try {
@@ -323,7 +620,17 @@ async function verifyExistingLink(customerId: string, c: any): Promise<EnsureRes
   if (isMockMode()) return current
 
   const parties = await loadParties()
-  const cur = parties.find((p) => String(pickId(p, PARTY_ID_KEYS)) === String(c.sepidarPartyRef))
+  let cur = parties.find((p) => String(pickId(p, PARTY_ID_KEYS)) === String(c.sepidarPartyRef))
+
+  // لیست کش ممکن است ساعت‌ها قدیمی باشد (حذف/ویرایش در سپیدار را نمی‌بیند)؛ پس همین یک طرف‌حساب را تازه می‌خوانیم
+  const fresh = await fetchPartyById(c.sepidarPartyRef)
+  if (fresh) {
+    cur = fresh
+    upsertParty(fresh)
+  } else if (fresh === null && (await targetedLookupTrusted())) {
+    cur = undefined // با روشی که اثبات شده کار می‌کند، طرف‌حساب نیست = حذف شده
+    removeParty(c.sepidarPartyRef) // وگرنه تطبیق بعدی با کد/نام دوباره به همین طرف‌حسابِ حذف‌شده وصل می‌شود
+  }
 
   // طرف‌حساب فعلی دیگر در سپیدار نیست؛ (فقط وقتی لیست سپیدار به‌طور معقول خوانده شده)
   if (!cur && parties.length > 100) {
@@ -416,7 +723,8 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
   if (found.match) return linkToCustomer(customerId, found.match, { trustSepidarCode: true })
 
   // ۲) در غیر این صورت می‌سازیم
-  const payload = buildCreatePartyPayload(c)
+  const built = buildPartyPayloadWithNotes(c)
+  const payload = built.payload
   let result: any
   try {
     result = await sepidarPost("/api/sepidar/v1/Parties/CreateParty", payload)
@@ -425,7 +733,7 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
 
     // سپیدار می‌گوید این طرف‌حساب (کد/شناسه‌ی یکتا) از قبل هست ولی با نام پیدایش نکردیم:
     // لیست را تازه می‌خوانیم و این بار با تطبیق نرم‌تر دنبالش می‌گردیم
-    partyCache = null
+    dropPartyCache()
     const retry = await findExistingParty(c.name, c.phone, { fuzzy: true })
     if (retry.match) return linkToCustomer(customerId, retry.match, { trustSepidarCode: true })
 
@@ -441,7 +749,7 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
         ` | پیام اصلی: ${e?.message}`
     )
   }
-  partyCache = null
+  markPartiesStale()
 
   let id = pickId(result, PARTY_ID_KEYS)
   if (!id) {
@@ -481,7 +789,13 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
     console.error("Sepidar: خواندن کد مشتری تازه‌ساخته‌شده ممکن نشد", e)
   }
 
-  return { partyRef: Number(id), created: true, linked: false, sepidarCode }
+  return {
+    partyRef: Number(id),
+    created: true,
+    linked: false,
+    sepidarCode,
+    warning: built.notes.length ? built.notes.join("؛ ") : undefined,
+  }
 }
 
 // برای هر مشتری فقط یک عملیات هم‌زمان: ارسال هم‌زمان چند پیش‌فاکتور یک مشتری

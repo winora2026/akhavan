@@ -14,9 +14,9 @@ const ITEMS_MAX_PAGES = 100
 const ITEMS_CAP = 5000
 const CACHE_MS = 30 * 60_000
 
-// شناسه‌ی حساب معین «حساب‌های دریافتنی» (کد ۱۱۱۲۰۱) در سپیدار؛ همه‌ی فاکتورهای فروش روی همین حساب می‌روند.
-// با SEPIDAR_SL_REF در .env قابل تغییر است.
-const RECEIVABLE_SL_REF = 420
+// شناسه‌ی حساب معین «حساب‌های دریافتنی» (کد ۱۱۱۲۰۱) در سپیدار؛ پیش‌فرض همه‌ی فاکتورهای فروش روی همین حساب می‌روند.
+// با SEPIDAR_SL_REF در .env قابل تغییر است و حسابدار هم می‌تواند هنگام ارسال حساب دیگری انتخاب کند.
+export const RECEIVABLE_SL_REF = 420
 
 function latinDigits(s: string) {
   return (s || "")
@@ -72,13 +72,15 @@ type ItemIndex = {
   byKey: Map<string, any[]>
 }
 
-let itemIndex: ItemIndex | null = null
-let itemIndexInflight: Promise<ItemIndex> | null = null
+// کش روی globalThis: هر route نسخه‌ی جدا از ماژول می‌گیرد و در حالت dev با هر ذخیره‌ی فایل دوباره ساخته می‌شود.
+// خواندن کل آیتم‌ها (تا ۱۰۰ درخواست پشت‌سرهم) فقط بار اول منتظر می‌ماند؛ بعد از آن فهرست قدیمی فوراً داده می‌شود
+// و تازه‌سازی در پس‌زمینه انجام می‌شود.
+const itemStore: { index: ItemIndex | null; inflight: Promise<ItemIndex> | null } =
+  ((globalThis as any).__sepidarItemStore ??= { index: null, inflight: null })
 
-async function loadItemIndex(force = false): Promise<ItemIndex> {
-  if (!force && itemIndex && Date.now() - itemIndex.at < CACHE_MS) return itemIndex
-  if (!itemIndexInflight) {
-    itemIndexInflight = (async () => {
+function reloadItems(): Promise<ItemIndex> {
+  if (!itemStore.inflight) {
+    itemStore.inflight = (async () => {
       const list = await getAll(ITEMS_PATH, {}, ITEMS_MAX_PAGES)
       const byCode = new Map<string, any>()
       const byKey = new Map<string, any[]>()
@@ -91,13 +93,27 @@ async function loadItemIndex(force = false): Promise<ItemIndex> {
         if (arr) arr.push(it)
         else byKey.set(k, [it])
       }
-      itemIndex = { at: Date.now(), list, byCode, byKey }
-      return itemIndex
+      const index: ItemIndex = { at: Date.now(), list, byCode, byKey }
+      itemStore.index = index
+      return index
     })().finally(() => {
-      itemIndexInflight = null
+      itemStore.inflight = null
     })
   }
-  return itemIndexInflight
+  return itemStore.inflight
+}
+
+async function loadItemIndex(force = false): Promise<ItemIndex> {
+  if (force || !itemStore.index) return reloadItems()
+  if (Date.now() - itemStore.index.at > CACHE_MS) {
+    reloadItems().catch((e) => console.error("Sepidar: تازه‌سازی پس‌زمینه‌ی آیتم‌ها ممکن نشد", e))
+  }
+  return itemStore.index
+}
+
+// برای گرم کردن کش هنگام بالا آمدن سرور (instrumentation.ts)
+export async function warmItems() {
+  await loadItemIndex()
 }
 
 // اگر کالا در ۵۰۰۰ ردیف اول نبود، یک بار با فیلتر Code می‌پرسیم.
@@ -213,6 +229,19 @@ export async function createItemResolver() {
           .map((it) => `کد ${codeOf(it)}`)
           .join("، ")}). کد کالا روی این سفارش ثبت نشده؛ در ویرایش سفارش کالا را دوباره از لیست انتخاب و ذخیره کنید، یا نگاشت را دستی در SepidarItemMap وارد کنید.`
       )
+    }
+
+    // شاید کالا تازه در سپیدار ساخته شده و در فهرست کش نیست: یک‌بار فهرست را تازه می‌خوانیم
+    if (Date.now() - index.at > 2 * 60_000) {
+      const fresh = await loadItemIndex(true)
+      const again = fresh.byKey.get(key)
+      if (again && again.length === 1) {
+        const id = itemIdOf(again[0])
+        if (id) {
+          await persist(productName, id)
+          return { itemRef: id, stockRef: null, via: "name" }
+        }
+      }
     }
 
     const near = suggest(index.list, productName)
@@ -351,7 +380,16 @@ type ProductGroup = {
   services: Map<string, ServiceGroup>
 }
 
-export async function buildCreateInvoicePayload(orderId: string) {
+/**
+ * ساخت بدنه‌ی فاکتور سپیدار.
+ * opts.slRef: شناسه‌ی حساب معین انتخاب‌شده توسط حسابدار؛ اگر داده نشود، پیش‌فرض «حساب‌های دریافتنی» است.
+ * ردیف‌هایی (کالا یا خدمت) که قیمتشان صفر است به سپیدار فرستاده نمی‌شوند (سپیدار برایشان خطا می‌دهد)
+ * و نامشان در skippedZeroPrice برگردانده می‌شود.
+ */
+export async function buildCreateInvoicePayload(
+  orderId: string,
+  opts: { slRef?: number | string | null } = {}
+) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
     include: {
@@ -410,6 +448,13 @@ export async function buildCreateInvoicePayload(orderId: string) {
   // (اجرتی: سریال ۹۰۰xxx، خریداری: سریال چهار رقمی)
   const orderNumberDigits = parseInt(latinDigits(String(order.orderNumber)).replace(/\D/g, ""), 10)
   const invoiceNumber = Number.isFinite(orderNumberDigits) && orderNumberDigits > 0 ? orderNumberDigits : null
+
+  // حساب معین: پیش‌فرض «حساب‌های دریافتنی»؛ اگر حسابدار هنگام ارسال حساب دیگری انتخاب کرده باشد همان
+  const requestedSl = Number(opts.slRef)
+  const slRef =
+    Number.isInteger(requestedSl) && requestedSl > 0
+      ? requestedSl
+      : Number(process.env.SEPIDAR_SL_REF) || RECEIVABLE_SL_REF
 
   // پیدا کردن آیتم سپیدار برای یک کالا یا خدمت
   let rowNo = 0
@@ -495,30 +540,41 @@ export async function buildCreateInvoicePayload(orderId: string) {
   }
 
   // ── مرحله ۲: ساخت ردیف‌ها؛ برای هر کالا اول ردیف خودش، بعد ردیف خدماتش ──
+  // ردیف‌های قیمت صفر (کالا یا خدمت) ساخته نمی‌شوند و حتی نگاشت آیتم سپیدارشان هم بررسی نمی‌شود.
   const items: InvoiceItem[] = []
+  const skippedZeroPrice: string[] = []
 
   for (const g of groups) {
-    const base = await resolveRef(g.name, g.code)
     const qty = round5(g.quantity)
+    const basePrice = Math.round(g.fee * qty)
 
-    items.push({
-      itemRef: base.itemRef,
-      quantity: qty,
-      secondaryQuantity: null,
-      fee: g.fee,
-      price: Math.round(g.fee * qty),
-      discount: 0,
-      tax: 0,
-      duty: 0,
-      tracingTitle: order.orderNumber,
-      stockRef: base.stockRef ?? settings.defaultStockRef ?? 1,
-      description: g.descriptions.join("، ") || null,
-    })
+    if (basePrice > 0) {
+      const base = await resolveRef(g.name, g.code)
+
+      items.push({
+        itemRef: base.itemRef,
+        quantity: qty,
+        secondaryQuantity: null,
+        fee: g.fee,
+        price: basePrice,
+        discount: 0,
+        tax: 0,
+        duty: 0,
+        tracingTitle: order.orderNumber,
+        stockRef: base.stockRef ?? settings.defaultStockRef ?? 1,
+        description: g.descriptions.join("، ") || null,
+      })
+    } else {
+      skippedZeroPrice.push(g.name)
+    }
 
     for (const sg of g.services.values()) {
       const amount = round5(sg.amount)
       const price = Math.round(sg.total)
-      if (amount <= 0 && price <= 0) continue
+      if (price <= 0) {
+        if (amount > 0) skippedZeroPrice.push(`${sg.title} ${g.name}`)
+        continue
+      }
 
       const svc = await resolveRef(sg.title, serviceCodeByName.get(nameKey(sg.title)) ?? null)
 
@@ -538,11 +594,15 @@ export async function buildCreateInvoicePayload(orderId: string) {
     }
   }
 
-  // تخفیف و ارزش افزوده‌ی کل فاکتور روی ردیف اول (مثل فاکتورهای رسمی سیستم قبلی در سپیدار)
-  if (items.length > 0) {
-    items[0].discount = totals.discount
-    items[0].tax = totals.vat
+  if (items.length === 0) {
+    throw new Error(
+      "همه‌ی ردیف‌های این فاکتور قیمت صفر دارند؛ چیزی برای ارسال به سپیدار باقی نمانده است."
+    )
   }
+
+  // تخفیف و ارزش افزوده‌ی کل فاکتور روی ردیف اول (مثل فاکتورهای رسمی سیستم قبلی در سپیدار)
+  items[0].discount = totals.discount
+  items[0].tax = totals.vat
 
   const payload = {
     customerPartyRef: partyRef || 1,
@@ -552,13 +612,14 @@ export async function buildCreateInvoicePayload(orderId: string) {
     number: invoiceNumber,
     date: tehranDateOnly(invoiceDate),
     currencyRef: settings.currencyRef || 1,
-    // حساب معین: همیشه «حساب‌های دریافتنی» (شناسه‌ی ۴۲۰ در سپیدار این شرکت)
-    slRef: Number(process.env.SEPIDAR_SL_REF) || RECEIVABLE_SL_REF,
+    // حساب معین: پیش‌فرض «حساب‌های دریافتنی» (شناسه‌ی ۴۲۰)؛ با انتخاب حسابدار قابل تغییر است
+    slRef,
     deliveryLocationRef: settings.deliveryLocationRef || 1,
     state: settings.state || 1,
     settlementType: settings.settlementType || 1,
     rate: settings.rate || 1,
-    description: `فاکتور اخوان ${order.orderNumber}${order.notes ? " | " + order.notes : ""}`,
+    // فقط توضیحات خود سفارش؛ عبارت «فاکتور اخوان شماره ...» دیگر اضافه نمی‌شود
+    description: String(order.notes || "").trim() || null,
     items,
     extraData: {
       stringColumn1: order.orderNumber,
@@ -567,5 +628,5 @@ export async function buildCreateInvoicePayload(orderId: string) {
     },
   }
 
-  return { order, payload, settings }
+  return { order, payload, settings, skippedZeroPrice }
 }
