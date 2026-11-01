@@ -1633,7 +1633,9 @@ export default function CuttingPlanningPage() {
       <div className="pointer-events-none fixed inset-0 bg-black/5 print:hidden" />
 
       {/* بخش اصلی: ارتفاعش به اندازه‌ی پنجره است تا فقط جدول اسکرول شود و عنوان‌ها ثابت بمانند */}
-      <div className="cutting-main relative z-10 max-w-[1600px] mx-auto h-[calc(100vh-2rem)] flex flex-col print:hidden">
+      <div className={`cutting-main relative z-10 max-w-[1600px] mx-auto flex flex-col print:hidden ${
+          view === "waste" ? "min-h-[calc(100vh-2rem)]" : "h-[calc(100vh-2rem)]"
+        }`}>
         <div className="mb-4 shrink-0 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
           <div>
             <h1 className="text-2xl font-bold text-blue-950">برنامه‌ریزی برش</h1>
@@ -2295,7 +2297,7 @@ export default function CuttingPlanningPage() {
           </div>
         </div>
 
-        <div className="flex-1 min-h-0 flex flex-col rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-2 shadow-lg border border-teal-500/20">
+        <div className="flex-1 min-h-[360px] flex flex-col rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-2 shadow-lg border border-teal-500/20">
           {wasteLoading ? (
             <p className="text-center text-blue-700 py-16 text-xl font-bold">
               در حال بارگذاری...

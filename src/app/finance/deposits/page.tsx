@@ -767,7 +767,7 @@ export default function CustomerDepositsPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-teal-200 bg-white/85 backdrop-blur p-3 mb-4 flex flex-wrap items-end gap-3">
+        <div className="relative z-30 rounded-2xl border border-teal-200 bg-white/85 backdrop-blur p-3 mb-4 flex flex-wrap items-end gap-3">
           <div className="flex-1 min-w-[220px]">
             <label className="mb-1 block text-sm font-bold">جستجو</label>
             <input
@@ -791,6 +791,8 @@ export default function CustomerDepositsPage() {
               calendarPosition="bottom-right"
               containerClassName="w-full"
               inputClass="w-full h-[42px] rounded-xl border px-3 text-base"
+              portal
+              zIndex={1000}
             />
           </div>
           <div className="w-[150px]">
@@ -806,6 +808,8 @@ export default function CustomerDepositsPage() {
               calendarPosition="bottom-right"
               containerClassName="w-full"
               inputClass="w-full h-[42px] rounded-xl border px-3 text-base"
+              portal
+              zIndex={1000}
             />
           </div>
           <div className="w-[170px]">
@@ -1100,6 +1104,8 @@ export default function CustomerDepositsPage() {
                   calendar={persian}
                   locale={persian_fa}
                   inputClass="w-full rounded-xl border px-3 py-2.5"
+                  portal
+                  zIndex={1100}
                 />
               </div>
 

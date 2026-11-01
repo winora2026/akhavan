@@ -63,10 +63,15 @@ const INVOICE_FOOTER_H = 210
 // ۱۲۰ پیکسلی بالای صفحه شروع می‌شود، پس در چاپ هم نباید ۲۳۰ پیکسل کامل رزرو شود؛ وگرنه ظرفیت هر صفحه
 // کم می‌شود و پیش‌فاکتورِ یک‌صفحه‌ای دو صفحه چاپ می‌شود. اگر محتوا زیر تصویر هدر رفت، این عدد را زیاد کنید.
 const INVOICE_PRINT_HEADER_SPACE = 130
-// حاشیه‌ی صفحه‌ی چاپ (میلی‌متر). ۰ یعنی تصویر هدر/فوتر تا لبه‌ی کاغذ می‌رود؛ ولی بیشتر پرینترها
-// (مثلاً Canon) حدود ۳ تا ۶ میلی‌متر از لبه‌ی کاغذ را نمی‌توانند چاپ کنند و محتوا بریده یا جابه‌جا
-// می‌شود. اگر روی پرینتری چاپ بریده/بهم‌ریخته بود این عدد را مثلاً ۵ بگذارید.
-const PRINT_PAGE_MARGIN_MM = 0
+// حالت‌های چاپ پیش‌فاکتور (از داخل پنجره‌ی پیش‌فاکتور قابل انتخاب است و در مرورگر یادآوری می‌شود):
+//  - a4     : A4 بدون حاشیه (تصویر هدر/فوتر تا لبه‌ی کاغذ) — مناسب چاپ به PDF و پرینترهای بدون حاشیه
+//  - a4safe : A4 با حاشیه‌ی امن — برای پرینترهایی که ۳ تا ۶ میلی‌متر لبه‌ی کاغذ را چاپ نمی‌کنند (بیشتر لیزری‌ها و Canon)
+//  - a5     : همان طرح A4 که کوچک می‌شود تا روی A5 قرار بگیرد — مناسب پیش‌فاکتورهای کم‌قلم
+type PrintMode = "a4" | "a4safe" | "a5"
+const PRINT_SAFE_MARGIN_MM = 6
+const PRINT_MODE_KEY = "invoicePrintMode"
+// تصویر هدر/فوتر پیش‌فاکتور (به‌صورت <img> گذاشته می‌شود تا حتی وقتی در پنجره‌ی چاپ «Background graphics» خاموش است چاپ شود)
+const INVOICE_BG_URL = "https://i.ibb.co/nqFvCvnR/DBBFE0-A3-2036-4200-B276-0-B652-BA49849.png"
 
 // لیست اولیه‌ی توضیحات (از فایل seed — همان لیست نرم‌افزار قبلی). توضیحات جدیدی که
 // کارشناس‌ها اضافه می‌کنند روی سرور ذخیره می‌شود (/api/descriptions) و با این لیست ادغام می‌شود.
@@ -271,6 +276,15 @@ const addBusinessDays = (start: Date, n: number) => {
   return result
 }
 
+// اولین مقدارِ غیرخالی (برای پیدا کردن شماره تماس مشتری از نام فیلدهای مختلف)
+const pickPhone = (...vals: any[]) => {
+  for (const v of vals) {
+    const t = String(v ?? "").trim()
+    if (t) return t
+  }
+  return ""
+}
+
 const customersList = (customersSeedRaw as any[]).map((c: any) => {
   let name = ""
 
@@ -291,6 +305,7 @@ const customersList = (customersSeedRaw as any[]).map((c: any) => {
     code: c.code || "",
     name: name,
     group: c.group || "همکار",
+    phone: pickPhone(c.mobile, c.phone, c.cellphone, c.mobileNumber, c.phoneNumber, c.tel, c.telephone),
     normalizedName: normalizeText(name),
     normalizedCode: normalizeText(c.code || ""),
   }
@@ -420,6 +435,11 @@ export default function NewOrderClient() {
   const [customerSearch, setCustomerSearch] = useState("")
   // کد مشتریِ انتخاب‌شده از لیست (برای نمایش کنار «نام مشتری»)
   const [selectedCustomerCode, setSelectedCustomerCode] = useState("")
+  // شماره تماس مشتری (برای نمایش روی پیش‌فاکتور)
+  const [customerPhone, setCustomerPhone] = useState("")
+  // شماره سفارشِ پیش‌نمایش (قبل از ذخیره)؛ شماره‌ی قطعی هنگام ذخیره توسط سرور تعیین می‌شود
+  const [previewOrderNumber, setPreviewOrderNumber] = useState("")
+  const [printMode, setPrintMode] = useState<PrintMode>("a4")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
   // ایندکس مشتریِ هایلایت‌شده در لیست (برای انتخاب با کیبورد)
   const [customerActiveIndex, setCustomerActiveIndex] = useState(0)
@@ -447,6 +467,7 @@ export default function NewOrderClient() {
             code,
             name,
             group: r.customerGroup || "همکار",
+            phone: pickPhone(r.mobile, r.phone, r.cellphone, r.mobileNumber, r.phoneNumber, r.tel, r.profile?.mobile, r.profile?.phone),
             normalizedName: nName,
             normalizedCode: nCode,
           })
@@ -692,6 +713,60 @@ export default function NewOrderClient() {
     })()
   }, [])
 
+  // ===== پیش‌نمایش شماره سفارش (قبل از ذخیره) =====
+  // با انتخاب/تغییر خط تولید، شماره‌ی بعدی در «اطلاعات سفارش» نشان داده می‌شود. اول از مسیر اختصاصی
+  // /api/orders/next-number (اگر در سرور ساخته شده باشد) خوانده می‌شود؛ وگرنه «بزرگ‌ترین شماره‌ی ثبت‌شده + ۱».
+  // شماره‌ی قطعی هنگام ذخیره توسط سرور تعیین می‌شود و جایگزین این پیش‌نمایش می‌شود.
+  useEffect(() => {
+    if (editId || embedPreview) return
+    let cancelled = false
+    ;(async () => {
+      let next = ""
+      try {
+        const r = await fetch(`/api/orders/next-number?productionLine=${encodeURIComponent(productionLine)}`)
+        if (r.ok) {
+          const d = await r.json()
+          const v = d?.nextOrderNumber ?? d?.orderNumber ?? d?.next
+          if (v != null && String(v).trim()) next = String(v)
+        }
+      } catch {}
+      if (!next) {
+        try {
+          const r = await fetch("/api/orders")
+          if (r.ok) {
+            const list = await r.json()
+            if (Array.isArray(list)) {
+              let max = 0
+              for (const o of list) {
+                const n = parseInt(String(o.orderNumber ?? "").replace(/[^\d]/g, ""), 10)
+                if (!isNaN(n) && n > max) max = n
+              }
+              if (max > 0) next = String(max + 1)
+            }
+          }
+        } catch {}
+      }
+      if (!cancelled) setPreviewOrderNumber(next)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [productionLine, editId, embedPreview])
+
+  // حالت چاپ انتخاب‌شده در مرورگر یادآوری می‌شود
+  useEffect(() => {
+    try {
+      const m = localStorage.getItem(PRINT_MODE_KEY)
+      if (m === "a4" || m === "a4safe" || m === "a5") setPrintMode(m)
+    } catch {}
+  }, [])
+  const changePrintMode = (m: PrintMode) => {
+    setPrintMode(m)
+    try {
+      localStorage.setItem(PRINT_MODE_KEY, m)
+    } catch {}
+  }
+
   // ===== پیش‌نویس خودکار سفارش =====
   // اعمال یک پیش‌نویسِ ذخیره‌شده روی state های فرم (هم برای «سفارش جدید» و هم برای «ویرایش سفارش»)
   const applyDraft = (d: any) => {
@@ -728,6 +803,7 @@ export default function NewOrderClient() {
     if (d.salesRep) setSalesRep(d.salesRep)
     if (d.invoiceMode) setInvoiceMode(d.invoiceMode)
     if (d.showInvoice) setShowInvoice(true)
+    if (d.customerPhone) setCustomerPhone(d.customerPhone)
   }
 
   // با باز شدن صفحه‌ی «سفارش جدید» (و فقط وقتی در حالت ویرایش سفارش موجود یا انتقال از «طراحی باکس»
@@ -816,6 +892,7 @@ export default function NewOrderClient() {
           salesRep,
           showInvoice,
           invoiceMode,
+          customerPhone,
         }
         localStorage.setItem(orderDraftKey(editId), JSON.stringify(draft))
       } catch (err) {
@@ -858,6 +935,7 @@ export default function NewOrderClient() {
     salesRep,
     showInvoice,
     invoiceMode,
+    customerPhone,
   ])
 
   // محاسبه‌ی خودکار تاریخ تحویل بر اساس تاریخ سفارش و گزینه‌ی انتخاب‌شده (۴/۷/۱۰/۱۵/۳۰ روز
@@ -899,6 +977,7 @@ export default function NewOrderClient() {
         setCustomerName(order.customer?.name || "")
         setCustomerSearch(order.customer?.name || "")
         setCustomerGroup(order.customer?.customerGroup || "همکار")
+        setCustomerPhone(pickPhone(order.customer?.mobile, order.customer?.phone, order.customer?.cellphone, order.customer?.mobileNumber))
         setPriority(order.priority || "عادی")
         if (order.salesRep) {
           setSalesRep(order.salesRep)
@@ -1122,6 +1201,15 @@ export default function NewOrderClient() {
     if (!n) return ""
     return [...dbCustomers, ...customersList].find((c) => c.normalizedName === n)?.code || ""
   }, [selectedCustomerCode, customerName, dbCustomers])
+
+  // شماره تماسی که روی پیش‌فاکتور می‌آید: اگر از لیست انتخاب شده یا از سفارش ذخیره‌شده خوانده شده همان؛
+  // وگرنه از روی تطابق دقیق نام پیدا می‌شود
+  const customerPhoneDisplay = useMemo(() => {
+    if (customerPhone) return customerPhone
+    const n = normalizeText(customerName)
+    if (!n) return ""
+    return [...dbCustomers, ...customersList].find((c) => c.normalizedName === n)?.phone || ""
+  }, [customerPhone, customerName, dbCustomers])
 
   // جستجوی کالا با تأخیر کوتاه (debounce) اجرا می‌شود تا حین تایپ سریع،
   // فیلترکردن ۷۵۰۰+ ردیف روی هر keystroke اجرا نشود و صفحه کند نشود
@@ -1419,10 +1507,11 @@ export default function NewOrderClient() {
     return svcUnitQuantityRef
   }
 
-  const selectCustomer = (c: { name: string; group: string; code: string }) => {
+  const selectCustomer = (c: { name: string; group: string; code: string; phone?: string }) => {
     setCustomerName(c.name)
     setCustomerSearch(c.name)
     setSelectedCustomerCode(c.code || "")
+    setCustomerPhone(c.phone || "")
     setCustomerGroup(c.group as any)
     setShowCustomerDropdown(false)
   }
@@ -2475,17 +2564,15 @@ export default function NewOrderClient() {
       >
         {/* هدر تصویری — موقع چاپ روی هر صفحه تکرار می‌شود (position: fixed) */}
         <div
-          className="invoice-header absolute top-0 left-0 right-0 z-0"
+          className="invoice-header absolute top-0 left-0 right-0 z-0 overflow-hidden"
           style={{
             height: `${INVOICE_HEADER_H}px`,
-            backgroundImage: "url('https://i.ibb.co/nqFvCvnR/DBBFE0-A3-2036-4200-B276-0-B652-BA49849.png')",
-            backgroundSize: "100% auto",
-            backgroundPosition: "top center",
-            backgroundRepeat: "no-repeat",
             WebkitPrintColorAdjust: "exact",
             printColorAdjust: "exact",
           } as React.CSSProperties}
-        />
+        >
+          <img src={INVOICE_BG_URL} alt="" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "auto", display: "block" }} />
+        </div>
 
         {/*
           جدول پوششی: فقط برای چاپ چندصفحه‌ای.
@@ -2515,22 +2602,21 @@ export default function NewOrderClient() {
             <h2 className="text-2xl font-bold text-teal-800 tracking-wide">پیش فاکتور</h2>
           </div>
 
-          {/* اطلاعات مشتری */}
-          <div className="flex justify-between text-sm mb-6 print:mb-3 leading-7 bg-teal-50/50 rounded-xl p-4 border border-teal-100">
+          {/* اطلاعات مشتری: سمت راست (کد، نام، شماره تماس) — سمت چپ (شماره سفارش، تاریخ، کارشناس فروش) */}
+          <div className="flex justify-between text-sm mb-6 print:mb-3 leading-7 bg-teal-50 rounded-xl p-4 border border-teal-100">
             <div>
-              <p>
-                <strong>نام مشتری:</strong> {customerName || "—"}
-                {customerCodeDisplay && (
-                  <span className="mr-3">
-                    <strong>کد مشتری:</strong> <bdi>{customerCodeDisplay}</bdi>
-                  </span>
-                )}
-              </p>
-              <p className="mt-1"><strong>کارشناس فروش:</strong> {salesRep || "—"}</p>
+              {customerCodeDisplay && (
+                <p><strong>کد مشتری:</strong> <bdi>{customerCodeDisplay}</bdi></p>
+              )}
+              <p><strong>نام مشتری:</strong> {customerName || "—"}</p>
+              {customerPhoneDisplay && (
+                <p><strong>شماره تماس:</strong> <bdi dir="ltr">{customerPhoneDisplay}</bdi></p>
+              )}
             </div>
             <div className="text-left">
               <p><strong>شماره سفارش:</strong> {orderNumber}</p>
               <p><strong>تاریخ سفارش:</strong> {orderDate?.format ? orderDate.format("YYYY/MM/DD") : "—"}</p>
+              <p><strong>کارشناس فروش:</strong> {salesRep || "—"}</p>
             </div>
           </div>
 
@@ -2941,17 +3027,15 @@ export default function NewOrderClient() {
 
         {/* فوتر تصویری — موقع چاپ روی هر صفحه تکرار می‌شود (position: fixed) */}
         <div
-          className="invoice-footer absolute bottom-0 left-0 right-0 z-10"
+          className="invoice-footer absolute bottom-0 left-0 right-0 z-10 overflow-hidden"
           style={{
             height: `${INVOICE_FOOTER_H}px`,
-            backgroundImage: "url('https://i.ibb.co/nqFvCvnR/DBBFE0-A3-2036-4200-B276-0-B652-BA49849.png')",
-            backgroundSize: "100% auto",
-            backgroundPosition: "bottom center",
-            backgroundRepeat: "no-repeat",
             WebkitPrintColorAdjust: "exact",
             printColorAdjust: "exact",
           } as React.CSSProperties}
-        />
+        >
+          <img src={INVOICE_BG_URL} alt="" style={{ position: "absolute", bottom: 0, left: 0, width: "100%", height: "auto", display: "block" }} />
+        </div>
       </div>
     )
   }
@@ -3027,6 +3111,7 @@ export default function NewOrderClient() {
                             setCustomerSearch(e.target.value)
                             setCustomerName(e.target.value)
                             setSelectedCustomerCode("")
+                            setCustomerPhone("")
                             setCustomerActiveIndex(0)
                             setShowCustomerDropdown(true)
                           }}
@@ -3094,10 +3179,16 @@ export default function NewOrderClient() {
                   </div>
 
                   <div className="md:col-span-1">
-                    <label className={labelCompactClass}>شماره سفارش</label>
+                    <label className={labelCompactClass}>
+                      شماره سفارش
+                      {orderNumber === "—" && previewOrderNumber && (
+                        <span className="mr-1 text-[10px] font-semibold text-amber-600">(پیش‌نمایش)</span>
+                      )}
+                    </label>
                     <input
                       type="text"
-                      value={orderNumber}
+                      value={orderNumber !== "—" ? orderNumber : previewOrderNumber || "—"}
+                      title={orderNumber === "—" && previewOrderNumber ? "شماره‌ی قطعی هنگام ذخیره تعیین می‌شود" : undefined}
                       readOnly
                       className="w-full rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-bold text-teal-800"
                     />
@@ -4800,6 +4891,16 @@ export default function NewOrderClient() {
                         </div>
                       </div>
                       <div className="flex gap-2">
+                        <select
+                          value={printMode}
+                          onChange={(e) => changePrintMode(e.target.value as PrintMode)}
+                          title="اندازه و حاشیه‌ی کاغذ هنگام چاپ (برای هر پرینتر یک‌بار انتخاب کنید)"
+                          className="rounded-lg bg-white/20 px-2 py-1.5 text-sm font-bold text-white focus:outline-none"
+                        >
+                          <option value="a4" className="text-black">چاپ A4</option>
+                          <option value="a4safe" className="text-black">A4 با حاشیه‌ی امن</option>
+                          <option value="a5" className="text-black">A5 (کم‌قلم)</option>
+                        </select>
                         <button onClick={() => window.print()} className="rounded-lg bg-white/20 px-3 py-1.5 text-sm font-bold">
                           چاپ
                         </button>
@@ -4927,10 +5028,21 @@ export default function NewOrderClient() {
         روی صفحه دیده نمی‌شود (hidden) و فقط هنگام چاپ نمایش داده می‌شود (print:block).
       */}
       {showInvoice && (
-        <div className="hidden print:block bg-white">
+        <div id="invoice-print-wrapper" className="hidden print:block bg-white">
           {renderInvoiceContent()}
         </div>
       )}
+
+      {/* اندازه و حاشیه‌ی صفحه‌ی چاپ بر اساس «حالت چاپ» انتخاب‌شده. A5 = همان طرح A4 با مقیاس ۰٫۷۰۷۱ */}
+      <style>{`
+        @media print {
+          @page {
+            size: ${printMode === "a5" ? "A5" : "A4"} portrait;
+            margin: ${printMode === "a4safe" ? PRINT_SAFE_MARGIN_MM : 0}mm;
+          }
+          ${printMode === "a5" ? "#invoice-print-wrapper { zoom: 0.70710678; }" : ""}
+        }
+      `}</style>
 
       <style jsx global>{`
         /* حذف دکمه‌های بالا/پایین (spinner) فیلدهای عددی — تا با کلیک یا
@@ -4945,10 +5057,6 @@ export default function NewOrderClient() {
         }
 
         @media print {
-          @page {
-            size: A4 portrait;
-            margin: ${PRINT_PAGE_MARGIN_MM}mm;
-          }
           html, body {
             background: white !important;
             height: auto !important;
