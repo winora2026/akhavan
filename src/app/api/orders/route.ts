@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { safeDate } from "@/lib/date"
 import { getSession } from "@/lib/auth"
-import { createProductionOrderFromSales } from "@/lib/createProductionOrder"
+import {
+  createProductionOrderFromSales,
+  syncProductionOrderFromSales,
+} from "@/lib/createProductionOrder"
 import { withTotals } from "@/lib/orderTotals"
 
 // ───────────── سریال شماره‌ی سفارش ─────────────
@@ -265,33 +268,35 @@ export async function PATCH(req: NextRequest) {
       })
 
       if (prod) {
-        const cutStarted = prod.items.some((item) =>
+        // اگر هر قطعه‌ای وارد برش یا هر ایستگاه دیگری شده باشد، برگشت ممکن نیست
+        const started = prod.items.some((item) =>
           item.stations.some(
             (s) =>
-              s.station?.name === "برش" &&
-              (s.status === "در حال انجام" || s.status === "تکمیل شده")
+              s.status === "در حال انجام" ||
+              s.status === "تکمیل شده" ||
+              (s.quantityOut || 0) > 0
           )
         )
-        if (cutStarted) {
+        if (started) {
           return NextResponse.json(
             {
               error:
-                "این سفارش وارد ایستگاه برش شده و قابل برگشت به پیش‌فاکتور نیست",
+                "این سفارش وارد ایستگاه برش (یا ایستگاه دیگر) شده و قابل برگشت به پیش‌فاکتور نیست",
             },
             { status: 400 }
           )
         }
 
-        await prisma.productionHistory.deleteMany({
-          where: { productionOrderId: prod.id },
+        // قطعات تولید پاک نمی‌شوند: تا ارسال مجدد نگه داشته می‌شوند (از صف‌ها پنهان‌اند)
+        // و بعد از ویرایش فقط قطعات جدید/تغییرکرده دوباره وارد صف برش می‌شوند.
+        await prisma.productionHistory.create({
+          data: {
+            productionOrderId: prod.id,
+            action: "برگشت به پیش‌فاکتور",
+            description:
+              "قطعات تولید برای ارسال مجدد نگه داشته شد و تا ارسال مجدد در صف‌ها نمایش داده نمی‌شود",
+          },
         })
-        await prisma.productionItemStation.deleteMany({
-          where: { productionItem: { productionOrderId: prod.id } },
-        })
-        await prisma.productionItem.deleteMany({
-          where: { productionOrderId: prod.id },
-        })
-        await prisma.productionOrder.delete({ where: { id: prod.id } })
       }
     }
 
@@ -339,6 +344,7 @@ export async function PATCH(req: NextRequest) {
 
     let productionOrder = null
     let productionError: string | null = null
+    let productionSync: any = null
 
     if (status === "فاکتور") {
       const existing = await prisma.productionOrder.findFirst({
@@ -353,6 +359,15 @@ export async function PATCH(req: NextRequest) {
           productionError = result.error
           console.error("production create failed:", result.error)
         }
+      } else {
+        // ارسال مجدد بعد از ویرایش: فقط قطعات جدید/ویرایش‌شده وارد صف می‌شوند
+        const sync = await syncProductionOrderFromSales(order.id)
+        if (sync.ok) {
+          productionSync = sync
+        } else {
+          productionError = sync.error
+          console.error("production sync failed:", sync.error)
+        }
       }
     }
 
@@ -360,6 +375,7 @@ export async function PATCH(req: NextRequest) {
       success: true,
       order: withTotals(order),
       productionOrder,
+      productionSync,
       productionError,
     })
   } catch (error: any) {

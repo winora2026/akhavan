@@ -111,6 +111,64 @@ export async function POST(req: Request) {
       stationName,
     } = body
 
+    // ثبت ضایعات از روی لیست قطعات یک سفارش (بدون بارکد، حتی برای قطعه‌ی خروج‌خورده)
+    // body.items = [{ productionItemId, quantity }]
+    if (Array.isArray(body.items) && body.items.length > 0) {
+      if (!reason || !String(reason).trim()) {
+        return NextResponse.json({ error: "علت ضایعات الزامی است" }, { status: 400 })
+      }
+      if (!department || !["تولید", "اداری"].includes(department)) {
+        return NextResponse.json(
+          { error: "بخش مسبب باید تولید یا اداری باشد" },
+          { status: 400 }
+        )
+      }
+      if (!responsiblePerson || !String(responsiblePerson).trim()) {
+        return NextResponse.json({ error: "شخص مسبب الزامی است" }, { status: 400 })
+      }
+      const note = `بخش: ${department} | شخص: ${String(responsiblePerson).trim()}`
+      const wasteIds: string[] = []
+      for (const row of body.items as { productionItemId: string; quantity?: number }[]) {
+        const it = await prisma.productionItem.findUnique({
+          where: { id: String(row.productionItemId) },
+        })
+        if (!it) continue
+        const qn = Number(row.quantity)
+        const q =
+          Number.isFinite(qn) && qn > 0
+            ? Math.min(Math.floor(qn), it.quantity || 1)
+            : it.quantity || 1
+        const waste = await prisma.waste.create({
+          data: {
+            productionItemId: it.id,
+            quantity: q,
+            reason: String(reason).trim(),
+            notes: note,
+            operatorId: operatorName ? String(operatorName) : null,
+          },
+        })
+        wasteIds.push(waste.id)
+        await prisma.productionHistory.create({
+          data: {
+            productionOrderId: it.productionOrderId,
+            productionItemId: it.id,
+            action: "ثبت ضایعات",
+            description: `بارکد ${it.barcode || "—"} | تعداد: ${q} | علت: ${String(reason).trim()} | ${note} | (ثبت از روی سفارش)`,
+            quantity: q,
+            operatorName: operatorName ? String(operatorName) : null,
+          },
+        })
+      }
+      if (wasteIds.length === 0) {
+        return NextResponse.json({ error: "قطعه‌ای یافت نشد" }, { status: 404 })
+      }
+      return NextResponse.json({
+        success: true,
+        message: `ضایعات ${wasteIds.length} قطعه ثبت شد`,
+        wasteIds,
+      })
+    }
+
     const raw = String(barcode || "").trim()
     if (!raw) {
       return NextResponse.json({ error: "بارکد الزامی است" }, { status: 400 })
@@ -217,6 +275,7 @@ export async function POST(req: Request) {
         ? "ضایعات ثبت شد. قطعه هنوز در صف برش است — برای برش مجدد ابتدا برش را رد کنید یا از چاپ مجدد استفاده کنید."
         : "ضایعات ثبت شد. از لیست زیر انتخاب کنید و برش مجدد بزنید.",
       wasteId: waste.id,
+      wasteIds: [waste.id],
       inCuttingQueue,
       productName: item.productName,
       barcode: item.barcode,

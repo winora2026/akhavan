@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { buildServicesText } from "@/lib/production/servicesText"
 import { isRentalOrderNumber } from "@/lib/rentalOrder"
+import { TAG_NEW, TAG_EDITED } from "@/lib/createProductionOrder"
 
 /** پیدا کردن OrderItem متناظر — اول با id، بعد با نام کالا */
 function resolveSalesItem(
@@ -116,6 +117,8 @@ export async function GET(req: Request) {
       where: {
         stationId: cutStation.id,
         status: { in: ["در انتظار", "در حال انجام"] },
+        // فاکتوری که برای ویرایش به پیش‌فاکتور برگشته، تا ارسال مجدد در صف نیست
+        productionItem: { productionOrder: { order: { status: "فاکتور" } } },
       },
       include: {
         productionItem: {
@@ -133,7 +136,9 @@ export async function GET(req: Request) {
     const labelOnlyCandidates = await prisma.productionItem.findMany({
       where: {
         status: { notIn: ["تکمیل شده", "تکمیل‌شده"] },
-        productionOrder: { order: { orderNumber: { startsWith: "9" } } },
+        productionOrder: {
+          order: { orderNumber: { startsWith: "9" }, status: "فاکتور" },
+        },
         stations: { none: { stationId: cutStation.id } },
       },
       include: itemIncludeWithStations,
@@ -146,6 +151,27 @@ export async function GET(req: Request) {
       const first = it.stations?.[0]
       return !!first && isStationOpen(first.status)
     })
+
+    // برچسب «جدید / ویرایش‌شده» برای قطعاتی که در ارسال مجدد فاکتور اضافه یا عوض شده‌اند
+    const allIds = [
+      ...rows.map((r) => r.productionItemId),
+      ...labelOnlyItems.map((i: any) => i.id),
+    ]
+    const tagRows = allIds.length
+      ? await prisma.productionHistory.findMany({
+          where: {
+            productionItemId: { in: allIds },
+            action: { in: [TAG_NEW, TAG_EDITED] },
+          },
+          select: { productionItemId: true, action: true },
+          orderBy: { createdAt: "asc" },
+        })
+      : []
+    const changeTagOf = new Map<string, "جدید" | "ویرایش‌شده">()
+    for (const t of tagRows) {
+      if (t.productionItemId)
+        changeTagOf.set(t.productionItemId, t.action === TAG_NEW ? "جدید" : "ویرایش‌شده")
+    }
 
     const rawDebug: any[] = []
 
@@ -194,6 +220,11 @@ export async function GET(req: Request) {
         itemStationStatus: meta.itemStationStatus,
         sequence: meta.sequence,
         labelOnly: meta.labelOnly,
+        // فقط تا وقتی لیبل چاپ نشده نمایش داده می‌شود
+        changeTag:
+          (item.labelStatus || "چاپ‌نشده") === "چاپ‌نشده"
+            ? changeTagOf.get(item.id) || null
+            : null,
         // سفارش اجرتی (سریال ۹۰۰xxx) — صفحه‌ی برنامه‌ریزی برش آن را در تب «اجرتی» نشان می‌دهد
         isRental: isRentalOrderNumber(salesOrder?.orderNumber),
         productionItemId: item.id,

@@ -192,6 +192,8 @@ export async function GET(req: Request) {
       where: {
         stationId,
         status: { in: ["در انتظار", "در حال انجام"] },
+        // فاکتوری که برای ویرایش به پیش‌فاکتور برگشته، تا ارسال مجدد در کارتابل نیست
+        productionItem: { productionOrder: { order: { status: "فاکتور" } } },
       },
       include: {
         station: true,

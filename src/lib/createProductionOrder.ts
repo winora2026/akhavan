@@ -286,6 +286,104 @@ function findStationId(
   return null
 }
 
+// ───────────── امضای قطعه (برای تشخیص قطعات جدید/ویرایش‌شده در ارسال مجدد) ─────────────
+// امضای هر قطعه‌ی فروش در فیلد thickness قطعه‌ی تولید با پیشوند SIG_PREFIX نگه داشته می‌شود
+// (این فیلد جای دیگری استفاده نمی‌شود؛ نیازی به تغییر دیتابیس نیست).
+const SIG_PREFIX = "sig:"
+export const TAG_NEW = "ارسال مجدد: قطعه‌ی جدید"
+export const TAG_EDITED = "ارسال مجدد: قطعه‌ی ویرایش‌شده"
+
+function parseServices(sd: any): any[] {
+  if (!sd) return []
+  try {
+    const p = typeof sd === "string" ? JSON.parse(sd) : sd
+    return Array.isArray(p) ? p : []
+  } catch {
+    return []
+  }
+}
+
+/** هرچه روی برگه‌ی برش/لیبل/خدمات اثر دارد در امضا هست؛ قیمت‌ها نیست */
+export function itemSignature(si: any): string {
+  const svc = parseServices(si?.servicesData)
+    .map((s: any) =>
+      [
+        norm(String(s?.title || s?.name || "")),
+        String(s?.unit ?? ""),
+        String(s?.count ?? ""),
+        String(s?.unitQuantity ?? ""),
+        String(s?.lengthCount ?? ""),
+        String(s?.widthCount ?? ""),
+        norm(String(s?.note ?? "")),
+      ].join("|")
+    )
+    .sort()
+  return JSON.stringify({
+    n: norm(si?.productName || ""),
+    l: Number(si?.length || 0),
+    w: Number(si?.width || 0),
+    q: Number(si?.quantity || 1),
+    s: svc,
+    d: norm(si?.notes || ""),
+    p: String(si?.pieceNumber ?? ""),
+    i: String(si?.installationCode ?? ""),
+  })
+}
+
+async function createPieceWithRoute(
+  productionOrderId: string,
+  salesItem: any,
+  allStations: { id: string; name: string }[],
+  isRental: boolean,
+  tag: string | null
+) {
+  const barcode = await getNextBarcode()
+  const prodItem = await prisma.productionItem.create({
+    data: {
+      productionOrderId,
+      orderItemId: salesItem.id,
+      productName: salesItem.productName,
+      length: salesItem.length,
+      width: salesItem.width,
+      quantity: salesItem.quantity,
+      meterage: salesItem.meterage,
+      status: "در انتظار",
+      barcode,
+      thickness: SIG_PREFIX + itemSignature(salesItem),
+    },
+  })
+
+  const includeCut = !isRental || hasCuttingWage(salesItem)
+  const routeStationNames = buildRouteStationNames(salesItem, includeCut)
+  let sequence = 1
+  for (const stationName of routeStationNames) {
+    const stationId = findStationId(allStations, stationName)
+    if (!stationId) continue
+    await prisma.productionItemStation.create({
+      data: {
+        productionItemId: prodItem.id,
+        stationId,
+        sequence,
+        status: "در انتظار",
+        quantityIn: prodItem.quantity,
+      },
+    })
+    sequence++
+  }
+
+  if (tag) {
+    await prisma.productionHistory.create({
+      data: {
+        productionOrderId,
+        productionItemId: prodItem.id,
+        action: tag,
+        description: `${salesItem.productName} | بارکد ${barcode}`,
+      },
+    })
+  }
+  return prodItem
+}
+
 export type CreateProductionResult =
   | { ok: true; data: any }
   | { ok: false; status: number; error: string }
@@ -358,47 +456,7 @@ export async function createProductionOrderFromSales(
   })
 
   for (const item of order.items) {
-    const barcode = await getNextBarcode()
-    await prisma.productionItem.create({
-      data: {
-        productionOrderId: productionOrder.id,
-        orderItemId: item.id,
-        productName: item.productName,
-        length: item.length,
-        width: item.width,
-        quantity: item.quantity,
-        meterage: item.meterage,
-        status: "در انتظار",
-        barcode,
-      },
-    })
-  }
-
-  const productionItems = await prisma.productionItem.findMany({
-    where: { productionOrderId: productionOrder.id },
-  })
-
-  for (const prodItem of productionItems) {
-    const salesItem = order.items.find((i) => i.id === prodItem.orderItemId)
-    if (!salesItem) continue
-
-    const includeCut = !isRental || hasCuttingWage(salesItem)
-    const routeStationNames = buildRouteStationNames(salesItem, includeCut)
-    let sequence = 1
-    for (const stationName of routeStationNames) {
-      const stationId = findStationId(allStations, stationName)
-      if (!stationId) continue
-      await prisma.productionItemStation.create({
-        data: {
-          productionItemId: prodItem.id,
-          stationId,
-          sequence,
-          status: "در انتظار",
-          quantityIn: prodItem.quantity,
-        },
-      })
-      sequence++
-    }
+    await createPieceWithRoute(productionOrder.id, item, allStations, isRental, null)
   }
 
   await prisma.productionHistory.create({
@@ -425,4 +483,235 @@ export async function createProductionOrderFromSales(
   })
 
   return { ok: true, data: result }
+}
+
+export type SyncProductionResult =
+  | {
+      ok: true
+      created: boolean
+      added: number
+      edited: number
+      removed: number
+      unchanged: number
+      kept: number
+      notes: string[]
+    }
+  | { ok: false; status: number; error: string }
+
+/**
+ * ارسال مجدد فاکتور ویرایش‌شده به تولید.
+ * قطعاتی که تغییری نکرده‌اند دست نمی‌خورند (همان بارکد، همان وضعیت لیبل/برگه).
+ * قطعه‌ی جدید → قطعه‌ی تولید جدید با بارکد جدید (برچسب «جدید»)
+ * قطعه‌ی ویرایش‌شده → قطعه‌ی قبلی حذف و قطعه‌ی تازه با بارکد جدید (برچسب «ویرایش‌شده»)
+ * قطعه‌ی حذف‌شده از فاکتور → از تولید حذف می‌شود (اگر هنوز هیچ ایستگاهی را رد نکرده باشد)
+ */
+export async function syncProductionOrderFromSales(
+  orderId: string
+): Promise<SyncProductionResult> {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: { items: true, customer: true },
+  })
+  if (!order) return { ok: false, status: 404, error: "سفارش یافت نشد" }
+
+  const prod = await prisma.productionOrder.findFirst({
+    where: { orderId: order.id },
+    include: {
+      items: { include: { stations: { include: { station: true } } } },
+    },
+  })
+  if (!prod) {
+    const r: any = await createProductionOrderFromSales(order.id)
+    if (!r.ok) return { ok: false, status: r.status, error: r.error }
+    return {
+      ok: true,
+      created: true,
+      added: order.items.length,
+      edited: 0,
+      removed: 0,
+      unchanged: 0,
+      kept: 0,
+      notes: [],
+    }
+  }
+
+  const allStations = await prisma.productionStation.findMany()
+  const isRental = isRentalOrderNumber(order.orderNumber)
+  const notes: string[] = []
+
+  // قطعه‌های برش مجدد (فرزند) جدا هستند و دست نمی‌خورند
+  const oldItems = prod.items.filter((p: any) => !p.parentItemId)
+  const usedOld = new Set<string>()
+  const usedNew = new Set<string>()
+  const unchangedPairs: { oldId: string; newId: string; hadSig: boolean; sig: string }[] = []
+
+  const oldSig = (p: any): string | null =>
+    typeof p.thickness === "string" && p.thickness.startsWith(SIG_PREFIX)
+      ? p.thickness.slice(SIG_PREFIX.length)
+      : null
+
+  // قطعه‌ی قدیمی بدون امضا: با نام + ابعاد + تعداد + همان مسیر ایستگاه‌ها مقایسه می‌شود
+  const legacyEqual = (p: any, si: any) => {
+    if (norm(p.productName || "") !== norm(si.productName || "")) return false
+    if (Number(p.length || 0) !== Number(si.length || 0)) return false
+    if (Number(p.width || 0) !== Number(si.width || 0)) return false
+    if (Number(p.quantity || 1) !== Number(si.quantity || 1)) return false
+    const includeCut = !isRental || hasCuttingWage(si)
+    const want = buildRouteStationNames(si, includeCut)
+      .map((n) => findStationId(allStations, n))
+      .filter(Boolean)
+      .join(",")
+    const have = [...p.stations]
+      .sort((a: any, b: any) => a.sequence - b.sequence)
+      .map((s: any) => s.stationId)
+      .join(",")
+    return want === have
+  }
+
+  // ۱) بدون تغییر: امضای یکسان
+  for (const p of oldItems) {
+    const sig = oldSig(p)
+    if (!sig) continue
+    const si = order.items.find(
+      (x) => !usedNew.has(x.id) && itemSignature(x) === sig
+    )
+    if (si) {
+      usedOld.add(p.id)
+      usedNew.add(si.id)
+      unchangedPairs.push({ oldId: p.id, newId: si.id, hadSig: true, sig })
+    }
+  }
+  // ۲) قطعات قدیمیِ بدون امضا
+  for (const p of oldItems) {
+    if (usedOld.has(p.id) || oldSig(p)) continue
+    const si = order.items.find((x) => !usedNew.has(x.id) && legacyEqual(p, x))
+    if (si) {
+      usedOld.add(p.id)
+      usedNew.add(si.id)
+      unchangedPairs.push({ oldId: p.id, newId: si.id, hadSig: false, sig: itemSignature(si) })
+    }
+  }
+
+  // آیا قطعه‌ی تولید هنوز دست‌نخورده است (می‌شود حذف/جایگزین کرد)؟
+  const isUntouched = (p: any) =>
+    p.stations.every(
+      (s: any) => s.status === "در انتظار" && !(s.quantityOut || 0)
+    )
+
+  let added = 0
+  let edited = 0
+  let removed = 0
+  let kept = 0
+
+  const remainingOld = oldItems.filter((p) => !usedOld.has(p.id))
+  const remainingNew = order.items.filter((x) => !usedNew.has(x.id))
+
+  // ۳) ویرایش‌شده: هم‌نام (و در صورت امکان هم‌ترتیب)
+  const editedPairs: { old: any; si: any }[] = []
+  const relinkOnly: { oldId: string; newId: string }[] = []
+  for (const p of remainingOld) {
+    const si = remainingNew.find(
+      (x) =>
+        !usedNew.has(x.id) &&
+        norm(x.productName || "") === norm(p.productName || "")
+    )
+    if (si) {
+      usedNew.add(si.id)
+      editedPairs.push({ old: p, si })
+    }
+  }
+  const editedOldIds = new Set(editedPairs.map((e) => e.old.id))
+
+  for (const { old, si } of editedPairs) {
+    if (!isUntouched(old)) {
+      kept++
+      notes.push(
+        `«${old.productName}» (بارکد ${old.barcode || "—"}) ویرایش شده ولی قبلاً وارد ایستگاه شده؛ همان قطعه‌ی قبلی نگه داشته شد و باید دستی بررسی شود`
+      )
+      // قطعه‌ی جدیدی ساخته نمی‌شود (تا دوبار تولید نشود)؛ فقط به قلم جدید وصل می‌شود
+      relinkOnly.push({ oldId: old.id, newId: si.id })
+      continue
+    }
+    await deletePieceCompletely(old.id)
+    await createPieceWithRoute(prod.id, si, allStations, isRental, TAG_EDITED)
+    edited++
+  }
+
+  // ۴) حذف‌شده از فاکتور
+  for (const p of remainingOld) {
+    if (editedOldIds.has(p.id)) continue
+    if (!isUntouched(p)) {
+      kept++
+      notes.push(
+        `«${p.productName}» (بارکد ${p.barcode || "—"}) از فاکتور حذف شده ولی قبلاً وارد ایستگاه شده؛ در تولید نگه داشته شد`
+      )
+      continue
+    }
+    await deletePieceCompletely(p.id)
+    removed++
+  }
+
+  // ۵) جدید
+  for (const si of order.items) {
+    if (usedNew.has(si.id)) continue
+    await createPieceWithRoute(prod.id, si, allStations, isRental, TAG_NEW)
+    added++
+  }
+
+  // ۶) بدون تغییر: فقط به قلم جدید فاکتور وصل و (در صورت نبودن) امضا ثبت شود
+  for (const u of unchangedPairs) {
+    await prisma.productionItem.update({
+      where: { id: u.oldId },
+      data: {
+        orderItemId: u.newId,
+        ...(u.hadSig ? {} : { thickness: SIG_PREFIX + u.sig }),
+      },
+    })
+  }
+  for (const r of relinkOnly) {
+    await prisma.productionItem.update({
+      where: { id: r.oldId },
+      data: { orderItemId: r.newId },
+    })
+  }
+  // فرزندهای برش مجدد به قلم جدید والدشان وصل می‌شوند
+  for (const u of unchangedPairs) {
+    await prisma.productionItem.updateMany({
+      where: { parentItemId: u.oldId },
+      data: { orderItemId: u.newId },
+    })
+  }
+
+  await prisma.productionOrder.update({
+    where: { id: prod.id },
+    data: { priority: order.priority || "عادی", notes: order.notes },
+  })
+
+  await prisma.productionHistory.create({
+    data: {
+      productionOrderId: prod.id,
+      action: "ارسال مجدد فاکتور ویرایش‌شده",
+      description: `جدید: ${added} | ویرایش‌شده: ${edited} | حذف‌شده: ${removed} | بدون تغییر: ${unchangedPairs.length}${
+        kept ? ` | نیازمند بررسی: ${kept}` : ""
+      }`,
+    },
+  })
+
+  return {
+    ok: true,
+    created: false,
+    added,
+    edited,
+    removed,
+    unchanged: unchangedPairs.length,
+    kept,
+    notes,
+  }
+}
+
+async function deletePieceCompletely(productionItemId: string) {
+  await prisma.productionHistory.deleteMany({ where: { productionItemId } })
+  await prisma.productionItemStation.deleteMany({ where: { productionItemId } })
+  await prisma.waste.deleteMany({ where: { productionItemId } })
+  await prisma.productionItem.delete({ where: { id: productionItemId } })
 }

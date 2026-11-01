@@ -39,6 +39,34 @@ type CuttingItem = {
   labelOnly?: boolean
   // قطعه‌ی سفارش اجرتی (سریال ۹۰۰xxx): در تب «اجرتی» نمایش داده می‌شود
   isRental?: boolean
+  // قطعه‌ای که در ارسال مجدد فاکتور ویرایش‌شده اضافه یا عوض شده (تا چاپ لیبل)
+  changeTag?: "جدید" | "ویرایش‌شده" | null
+}
+
+type OrderPiece = {
+  productionItemId: string
+  productName: string
+  barcode?: string | null
+  length: number | null
+  width: number | null
+  quantity: number
+  recutNumber: number
+  labelStatus: string
+  inCuttingQueue: boolean
+  currentStation: string
+  exited: boolean
+  exitNumber: number | null
+  wasteCount: number
+  wasteQty: number
+  pendingWasteIds: string[]
+}
+
+type OrderPiecesGroup = {
+  productionOrderId: string
+  orderNumber?: string
+  customerName?: string
+  orderStatus?: string
+  pieces: OrderPiece[]
 }
 
 type WasteRow = {
@@ -76,6 +104,11 @@ type SortKey =
 
 type ViewKey = "queue" | "rental" | "waste"
 type ReportPaper = "A4" | "A5" | "A5L"
+
+// وضعیت ثبت چاپ لیبل‌های پیش‌نمایش:
+// idle = پیش‌نمایشی باز نیست | pending = پیش‌نمایش، هنوز چاپ نشده | saving = در حال ثبت
+// done = بعد از بسته شدن پنجره‌ی چاپ ثبت شد | error = ثبت ناموفق بود
+type LabelCommitState = "idle" | "pending" | "saving" | "done" | "error"
 
 // ───────────── اندازه لیبل: ۹ سانتی‌متر عرض × ۶ سانتی‌متر ارتفاع (افقی) ─────────────
 const LABEL_W_MM = 90
@@ -428,6 +461,11 @@ export default function CuttingPlanningPage() {
   const [showLabelPreview, setShowLabelPreview] = useState(false)
   const [showReportPreview, setShowReportPreview] = useState(false)
 
+  // ثبت چاپ لیبل‌ها: فقط بعد از بسته شدن پنجره‌ی چاپ ثبت می‌شود، نه با دیدن پیش‌نمایش
+  const [labelCommitState, setLabelCommitState] =
+    useState<LabelCommitState>("idle")
+  const labelCommitIdsRef = useRef<string[]>([])
+
   // اندازه‌ی کاغذ برگه‌ی برنامه‌ریزی: A4 عمودی / A5 عمودی / A5 افقی
   const [reportPaper, setReportPaper] = useState<ReportPaper>("A4")
 
@@ -457,6 +495,15 @@ export default function CuttingPlanningPage() {
   const [wasteRegReason, setWasteRegReason] = useState("")
   const [wasteRegDept, setWasteRegDept] = useState<"تولید" | "اداری">("تولید")
   const [wasteRegPerson, setWasteRegPerson] = useState("")
+  // فقط قطعات جدید/ویرایش‌شده‌ی ارسال مجدد
+  const [changeOnly, setChangeOnly] = useState(false)
+  // جستجوی سفارش در تب ضایعات (بدون بارکد)
+  const [showOrderSearch, setShowOrderSearch] = useState(true)
+  const [orderQ, setOrderQ] = useState("")
+  const [orderSearching, setOrderSearching] = useState(false)
+  const [orderResults, setOrderResults] = useState<OrderPiecesGroup[] | null>(null)
+  const [piecePick, setPiecePick] = useState<Record<string, number>>({})
+  const [pieceAutoRecut, setPieceAutoRecut] = useState(true)
 
   useEffect(() => {
     fetchData()
@@ -487,6 +534,12 @@ export default function CuttingPlanningPage() {
     setSelectedIds([])
   }
 
+  // بستن پیش‌نمایش لیبل (بدون چاپ چیزی ثبت نمی‌شود)
+  const closeLabelPreview = () => {
+    setShowLabelPreview(false)
+    setLabelCommitState("idle")
+  }
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return
@@ -496,6 +549,7 @@ export default function CuttingPlanningPage() {
       }
       if (showLabelPreview) {
         setShowLabelPreview(false)
+        setLabelCommitState("idle")
         return
       }
       if (showReportPreview) {
@@ -506,6 +560,65 @@ export default function CuttingPlanningPage() {
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [showReprintModal, showLabelPreview, showReportPreview])
+
+  // ثبت چاپ لیبل‌ها بعد از بسته شدن پنجره‌ی چاپ مرورگر (چه با دکمه‌ی «چاپ» و چه با Ctrl+P)
+  const commitLabelPrint = async () => {
+    const ids = labelCommitIdsRef.current
+    if (ids.length === 0) return
+    setLabelCommitState("saving")
+    try {
+      const res = await fetch("/api/production/cutting/labels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productionItemIds: ids, action: "mark-printed" }),
+      })
+      if (!res.ok) throw new Error("خطا در ثبت چاپ")
+      setLabelCommitState("done")
+      await fetchData()
+    } catch (e) {
+      console.error(e)
+      setLabelCommitState("error")
+    }
+  }
+
+  // اگر پنجره‌ی چاپ لغو شده یا لیبل واقعاً چاپ نشده، ثبت چاپ برمی‌گردد
+  const undoLabelCommit = async () => {
+    if (
+      !confirm(
+        "ثبت چاپ این لیبل‌ها لغو شود؟ (فقط وقتی انجام بده که لیبل‌ها واقعاً چاپ نشده‌اند)"
+      )
+    )
+      return
+    const ids = labelCommitIdsRef.current
+    try {
+      setLabelCommitState("saving")
+      const res = await fetch("/api/production/cutting/labels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productionItemIds: ids,
+          action: "unmark-printed",
+        }),
+      })
+      if (!res.ok) throw new Error("خطا در لغو ثبت چاپ")
+      setLabelCommitState("pending")
+      await fetchData()
+    } catch (e) {
+      console.error(e)
+      alert("لغو ثبت چاپ انجام نشد")
+      setLabelCommitState("done")
+    }
+  }
+
+  useEffect(() => {
+    if (!showLabelPreview || labelCommitState !== "pending") return
+    const onAfterPrint = () => {
+      void commitLabelPrint()
+    }
+    window.addEventListener("afterprint", onAfterPrint)
+    return () => window.removeEventListener("afterprint", onAfterPrint)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showLabelPreview, labelCommitState])
 
   const loadJsBarcode = (onReady: () => void) => {
     // @ts-ignore
@@ -629,6 +742,9 @@ export default function CuttingPlanningPage() {
     if (labelStatus !== "همه") {
       list = list.filter((i) => i.labelStatus === labelStatus)
     }
+    if (changeOnly) {
+      list = list.filter((i) => !!i.changeTag)
+    }
     if (priority !== "همه") {
       list = list.filter((i) => (i.priority || "عادی") === priority)
     }
@@ -701,12 +817,18 @@ export default function CuttingPlanningPage() {
     view,
     productName,
     labelStatus,
+    changeOnly,
     priority,
     search,
     sortKey,
     sortDir,
     matchProduct,
   ])
+
+  const changedCount = useMemo(
+    () => items.filter((i) => !!i.changeTag).length,
+    [items]
+  )
 
   // قطعات «فقط لیبل» (اجرتیِ بدون اجرت برش) وارد برگه‌ی برنامه‌ریزی نمی‌شوند
   const reportRows = useMemo(
@@ -880,6 +1002,115 @@ export default function CuttingPlanningPage() {
 
   // همه فیلترها سمت کلاینت انجام می‌شود؛ سرور همیشه لیست کامل را برمی‌گرداند
 
+  const searchOrderPieces = async () => {
+    const q = orderQ.trim()
+    if (q.length < 2) {
+      alert("حداقل ۲ حرف از شماره سفارش، نام مشتری یا بارکد را بنویسید")
+      return
+    }
+    try {
+      setOrderSearching(true)
+      const res = await fetch(
+        `/api/production/cutting/order-pieces?q=${encodeURIComponent(q)}`,
+        { cache: "no-store" }
+      )
+      const data = await res.json()
+      if (!res.ok) {
+        alert(data.error || "خطا در جستجو")
+        return
+      }
+      setOrderResults(data.orders || [])
+      setPiecePick({})
+    } catch (e) {
+      console.error(e)
+      alert("خطا در ارتباط با سرور")
+    } finally {
+      setOrderSearching(false)
+    }
+  }
+
+  const togglePiecePick = (pc: OrderPiece) => {
+    setPiecePick((prev) => {
+      const next = { ...prev }
+      if (next[pc.productionItemId]) delete next[pc.productionItemId]
+      else next[pc.productionItemId] = pc.quantity || 1
+      return next
+    })
+  }
+
+  const submitPieceWaste = async () => {
+    const picked = Object.entries(piecePick).filter(([, q]) => Number(q) > 0)
+    if (picked.length === 0) {
+      alert("حداقل یک قطعه را انتخاب کنید")
+      return
+    }
+    if (!wasteRegReason.trim()) {
+      alert("علت ضایعات الزامی است (در فرم «ثبت ضایعات با بارکد» بالا بنویسید)")
+      return
+    }
+    if (!wasteRegPerson.trim()) {
+      alert("شخص مسبب الزامی است (در فرم بالا بنویسید)")
+      return
+    }
+    if (
+      !confirm(
+        pieceAutoRecut
+          ? `ضایعات ${picked.length} قطعه ثبت و همان لحظه به صف برش (با بارکد جدید) برگردانده شود؟`
+          : `ضایعات ${picked.length} قطعه ثبت شود؟`
+      )
+    )
+      return
+    try {
+      setActionLoading(true)
+      const res = await fetch("/api/production/cutting/waste", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: picked.map(([productionItemId, quantity]) => ({
+            productionItemId,
+            quantity: Number(quantity),
+          })),
+          reason: wasteRegReason.trim(),
+          department: wasteRegDept,
+          responsiblePerson: wasteRegPerson.trim(),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        alert(data.error || "خطا در ثبت ضایعات")
+        return
+      }
+      let msg = data.message || "ضایعات ثبت شد"
+      if (pieceAutoRecut && Array.isArray(data.wasteIds) && data.wasteIds.length) {
+        const r2 = await fetch("/api/production/cutting/recut", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wasteIds: data.wasteIds }),
+        })
+        const d2 = await r2.json()
+        if (r2.ok) {
+          msg += "\n" + (d2.message || "برش مجدد ثبت شد")
+          if (Array.isArray(d2.skipped) && d2.skipped.length) {
+            msg += "\n" + d2.skipped.map((s: any) => `• ${s.why}`).join("\n")
+          }
+        } else {
+          msg += "\nبرش مجدد انجام نشد: " + (d2.error || "")
+          if (Array.isArray(d2.skipped) && d2.skipped.length) {
+            msg += "\n" + d2.skipped.map((s: any) => `• ${s.why}`).join("\n")
+          }
+        }
+      }
+      alert(msg)
+      setPiecePick({})
+      await Promise.all([fetchWastes(), fetchData(), searchOrderPieces()])
+    } catch (e) {
+      console.error(e)
+      alert("خطا در ارتباط با سرور")
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
   const submitRegisterWaste = async () => {
     if (!wasteBarcode.trim()) {
       alert("بارکد را وارد کنید")
@@ -953,6 +1184,7 @@ export default function CuttingPlanningPage() {
     else setSelectedIds(filtered.map((i) => i.productionItemId))
   }
 
+  // فقط پیش‌نمایش لیبل‌ها را می‌گیرد؛ وضعیت قطعات تا وقتی واقعاً چاپ نشده تغییر نمی‌کند
   const printLabels = async () => {
     if (selectedIds.length === 0) {
       alert("حداقل یک مورد را انتخاب کنید")
@@ -973,17 +1205,20 @@ export default function CuttingPlanningPage() {
         alert(data.error || "خطا در چاپ")
         return
       }
-      setLabels(
-        (data.labels || []).map((l: any) => ({
-          ...l,
-          servicesText:
-            l.servicesText ||
-            items.find((i: any) => i.productionItemId === l.productionItemId)?.servicesText ||
-            "",
-        }))
+      const newLabels = (data.labels || []).map((l: any) => ({
+        ...l,
+        servicesText:
+          l.servicesText ||
+          items.find((i: any) => i.productionItemId === l.productionItemId)?.servicesText ||
+          "",
+      }))
+      setLabels(newLabels)
+      // قطعاتی که اگر این پیش‌نمایش چاپ شود «چاپ‌شده» ثبت می‌شوند
+      labelCommitIdsRef.current = Array.from(
+        new Set<string>(newLabels.map((l: any) => String(l.productionItemId)))
       )
+      setLabelCommitState("pending")
       setShowLabelPreview(true)
-      await fetchData()
     } catch (error) {
       console.error(error)
       alert("خطا در ارتباط با سرور")
@@ -1174,11 +1409,8 @@ export default function CuttingPlanningPage() {
         print-color-adjust: exact !important;
         background: #fff !important;
       }
-      /* صفحه روی صفحه‌نمایش هم‌اندازه‌ی پنجره است؛ در چاپ نباید محتوا را ببرد */
-      .print-root {
-        height: auto !important;
-        overflow: visible !important;
-      }
+      /* بخش اصلی صفحه (جدول، فیلترها و ...) در چاپ هیچ‌وقت نمایش داده نمی‌شود */
+      .cutting-main { display: none !important; }
       ${
         showLabelPreview
           ? `
@@ -1388,7 +1620,7 @@ export default function CuttingPlanningPage() {
 
   return (
     <div
-      className="print-root h-screen overflow-hidden p-4 bg-cover bg-center bg-fixed print:h-auto print:overflow-visible"
+      className="print-root min-h-screen p-4 bg-cover bg-center bg-fixed"
       style={{
         backgroundImage:
           "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
@@ -1400,7 +1632,8 @@ export default function CuttingPlanningPage() {
 
       <div className="pointer-events-none fixed inset-0 bg-black/5 print:hidden" />
 
-      <div className="relative z-10 max-w-[1600px] mx-auto h-full flex flex-col print:hidden">
+      {/* بخش اصلی: ارتفاعش به اندازه‌ی پنجره است تا فقط جدول اسکرول شود و عنوان‌ها ثابت بمانند */}
+      <div className="cutting-main relative z-10 max-w-[1600px] mx-auto h-[calc(100vh-2rem)] flex flex-col print:hidden">
         <div className="mb-4 shrink-0 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
           <div>
             <h1 className="text-2xl font-bold text-blue-950">برنامه‌ریزی برش</h1>
@@ -1592,6 +1825,34 @@ export default function CuttingPlanningPage() {
           >
             اجازه چاپ مجدد
           </button>
+          {changedCount > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => setChangeOnly((v) => !v)}
+                className={`rounded-xl px-5 py-2.5 font-bold border ${
+                  changeOnly
+                    ? "bg-rose-600 text-white border-rose-700"
+                    : "bg-white/60 text-rose-700 border-rose-300 hover:bg-rose-50"
+                }`}
+                title="قطعاتی که بعد از ویرایش فاکتور اضافه یا عوض شده‌اند"
+              >
+                {changeOnly ? "نمایش همه" : `فقط جدید/ویرایش‌شده (${changedCount})`}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedIds(
+                    filtered.filter((i) => !!i.changeTag).map((i) => i.productionItemId)
+                  )
+                }
+                className="rounded-xl border border-rose-300 bg-white/60 px-5 py-2.5 font-bold text-rose-700 hover:bg-rose-50"
+                title="فقط قطعات جدید/ویرایش‌شده‌ی لیست فعلی را انتخاب می‌کند (برای چاپ برگه و لیبل)"
+              >
+                انتخاب جدید/ویرایش‌شده‌ها
+              </button>
+            </>
+          )}
           <div className="rounded-xl bg-teal-500/20 border border-teal-500/30 px-4 py-2.5 text-blue-900 font-bold">
             تعداد: {filtered.length}
           </div>
@@ -1699,6 +1960,18 @@ export default function CuttingPlanningPage() {
                     </td>
                     <td className="p-3 font-bold">
                       {item.productName}
+                      {item.changeTag && (
+                        <span
+                          className={`mr-2 rounded-full px-2 py-0.5 text-xs font-bold ${
+                            item.changeTag === "جدید"
+                              ? "bg-rose-100 text-rose-800"
+                              : "bg-amber-100 text-amber-800"
+                          }`}
+                          title="این قطعه در ارسال مجدد فاکتور ویرایش‌شده اضافه یا عوض شده است"
+                        >
+                          {item.changeTag}
+                        </span>
+                      )}
                       {item.labelOnly && (
                         <span className="mr-2 rounded-full bg-purple-100 px-2 py-0.5 text-xs font-bold text-purple-800">
                           فقط لیبل
@@ -1817,6 +2090,180 @@ export default function CuttingPlanningPage() {
               {actionLoading ? "..." : "ثبت ضایعات"}
             </button>
           </div>
+        </div>
+
+        <div className="mb-4 shrink-0 rounded-2xl border border-sky-200 bg-sky-50/90 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-base font-bold text-sky-900">
+              جستجوی سفارش (بدون بارکد)
+              <span className="block text-xs font-semibold text-sky-800 mt-1">
+                شماره سفارش یا نام مشتری را بزنید؛ همه‌ی قطعات آن سفارش — حتی برش‌خورده یا خروج‌خورده — می‌آید.
+                قطعه را انتخاب کنید، علت و شخص مسبب را در فرم بالا بنویسید و ثبت کنید.
+              </span>
+            </h3>
+            <button
+              type="button"
+              onClick={() => setShowOrderSearch((v) => !v)}
+              className="rounded-lg border border-sky-300 bg-white px-3 py-1 text-xs font-bold text-sky-800"
+            >
+              {showOrderSearch ? "بستن" : "باز کردن"}
+            </button>
+          </div>
+          {showOrderSearch && (
+            <>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <input
+                  value={orderQ}
+                  onChange={(e) => setOrderQ(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") searchOrderPieces()
+                  }}
+                  className="w-full max-w-md rounded-xl border border-sky-300 px-3 py-2 text-sm font-bold"
+                  placeholder="شماره سفارش / نام مشتری / بارکد"
+                />
+                <button
+                  type="button"
+                  onClick={searchOrderPieces}
+                  disabled={orderSearching}
+                  className="rounded-xl bg-sky-600 hover:bg-sky-700 px-5 py-2 text-sm font-bold text-white disabled:opacity-50"
+                >
+                  {orderSearching ? "در حال جستجو..." : "جستجو"}
+                </button>
+                <label className="flex items-center gap-1.5 text-sm font-bold text-sky-900">
+                  <input
+                    type="checkbox"
+                    checked={pieceAutoRecut}
+                    onChange={(e) => setPieceAutoRecut(e.target.checked)}
+                  />
+                  بعد از ثبت ضایعات، همان لحظه به صف برش برگردد
+                </label>
+                <button
+                  type="button"
+                  onClick={submitPieceWaste}
+                  disabled={actionLoading || Object.keys(piecePick).length === 0}
+                  className="rounded-xl bg-orange-500 hover:bg-orange-600 px-5 py-2 text-sm font-bold text-white disabled:opacity-50"
+                >
+                  ثبت ضایعات قطعات انتخاب‌شده ({Object.keys(piecePick).length})
+                </button>
+              </div>
+
+              {orderResults && orderResults.length === 0 && (
+                <p className="mt-3 text-sm font-bold text-sky-900">سفارشی پیدا نشد</p>
+              )}
+              {orderResults && orderResults.length > 0 && (
+                <div className="mt-3 max-h-[38vh] space-y-3 overflow-auto">
+                  {orderResults.map((g) => (
+                    <div
+                      key={g.productionOrderId}
+                      className="rounded-xl border border-sky-200 bg-white"
+                    >
+                      <div className="flex flex-wrap gap-4 border-b border-sky-100 bg-sky-100/70 px-3 py-1.5 text-sm font-bold text-sky-950">
+                        <span>سفارش {g.orderNumber || "—"}</span>
+                        <span>{g.customerName || "—"}</span>
+                        {g.orderStatus && g.orderStatus !== "فاکتور" && (
+                          <span className="rounded-full bg-amber-100 px-2 text-xs text-amber-800">
+                            {g.orderStatus}
+                          </span>
+                        )}
+                      </div>
+                      <table className="w-full text-sm">
+                        <thead className="bg-sky-50 text-sky-900">
+                          <tr>
+                            <th className="p-1.5">انتخاب</th>
+                            <th className="p-1.5">تعداد ضایعات</th>
+                            <th className="p-1.5">کالا</th>
+                            <th className="p-1.5">ابعاد</th>
+                            <th className="p-1.5">تعداد</th>
+                            <th className="p-1.5">بارکد</th>
+                            <th className="p-1.5">وضعیت</th>
+                            <th className="p-1.5">سابقه ضایعات</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {g.pieces.map((pc) => {
+                            const picked = piecePick[pc.productionItemId] != null
+                            return (
+                              <tr
+                                key={pc.productionItemId}
+                                className={`border-t border-sky-100 ${
+                                  picked ? "bg-orange-50" : ""
+                                } ${pc.inCuttingQueue ? "opacity-60" : ""}`}
+                              >
+                                <td className="p-1.5 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={picked}
+                                    disabled={pc.inCuttingQueue}
+                                    onChange={() => togglePiecePick(pc)}
+                                  />
+                                </td>
+                                <td className="p-1.5 text-center">
+                                  {picked ? (
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      max={pc.quantity || 1}
+                                      value={piecePick[pc.productionItemId]}
+                                      onChange={(e) =>
+                                        setPiecePick((prev) => ({
+                                          ...prev,
+                                          [pc.productionItemId]: Math.max(
+                                            1,
+                                            Math.min(
+                                              pc.quantity || 1,
+                                              Number(e.target.value) || 1
+                                            )
+                                          ),
+                                        }))
+                                      }
+                                      className="w-16 rounded-lg border border-orange-300 px-2 py-0.5 text-center font-bold"
+                                    />
+                                  ) : (
+                                    "—"
+                                  )}
+                                </td>
+                                <td className="p-1.5 font-bold">
+                                  {pc.productName}
+                                  {pc.recutNumber > 0 && (
+                                    <span className="mr-2 rounded-full bg-orange-100 px-2 py-0.5 text-xs text-orange-800">
+                                      برش مجدد {pc.recutNumber}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="p-1.5 text-center">
+                                  {pc.length ?? "—"} × {pc.width ?? "—"}
+                                </td>
+                                <td className="p-1.5 text-center font-bold">{pc.quantity}</td>
+                                <td className="p-1.5 text-center font-mono text-xs" dir="ltr">
+                                  {pc.barcode || "—"}
+                                </td>
+                                <td className="p-1.5 text-center text-xs font-bold">
+                                  {pc.inCuttingQueue
+                                    ? "هنوز در صف برش (برای تعویض لیبل از «اجازه چاپ مجدد» استفاده کنید)"
+                                    : pc.exited
+                                      ? `خروج خورده${pc.exitNumber ? ` (خروج ${pc.exitNumber})` : ""}`
+                                      : `در ${pc.currentStation}`}
+                                </td>
+                                <td className="p-1.5 text-center text-xs">
+                                  {pc.wasteCount > 0
+                                    ? `${pc.wasteCount} بار (${pc.wasteQty} عدد)${
+                                        pc.pendingWasteIds.length
+                                          ? " — منتظر برش مجدد"
+                                          : ""
+                                      }`
+                                    : "—"}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         <div className="mb-4 shrink-0 flex flex-wrap items-center gap-2">
@@ -2104,13 +2551,56 @@ export default function CuttingPlanningPage() {
                   چاپ
                 </button>
                 <button
-                  onClick={() => setShowLabelPreview(false)}
+                  onClick={closeLabelPreview}
                   className="rounded-xl border border-gray-300 px-5 py-2.5 font-bold text-gray-700"
                 >
                   بستن
                 </button>
               </div>
             </div>
+
+            {/* وضعیت ثبت چاپ: فقط روی صفحه دیده می‌شود، در چاپ نیست */}
+            {labelCommitState !== "idle" && (
+              <div
+                className={`mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border px-4 py-2.5 text-sm font-bold print:hidden ${
+                  labelCommitState === "done"
+                    ? "border-green-300 bg-green-50 text-green-900"
+                    : labelCommitState === "error"
+                      ? "border-red-300 bg-red-50 text-red-900"
+                      : labelCommitState === "saving"
+                        ? "border-blue-300 bg-blue-50 text-blue-900"
+                        : "border-amber-300 bg-amber-50 text-amber-900"
+                }`}
+              >
+                <span>
+                  {labelCommitState === "pending" &&
+                    "این فقط پیش‌نمایش است. وضعیت لیبل‌ها بعد از چاپ (بسته شدن پنجره‌ی چاپ) «چاپ‌شده» ثبت می‌شود؛ اگر فقط ببینی و ببندی، چیزی ثبت نمی‌شود."}
+                  {labelCommitState === "saving" && "در حال ثبت..."}
+                  {labelCommitState === "done" &&
+                    "چاپ لیبل‌ها ثبت شد. اگر پنجره‌ی چاپ را لغو کردی و لیبل چاپ نشد، ثبت را لغو کن."}
+                  {labelCommitState === "error" &&
+                    "ثبت چاپ ناموفق بود. دوباره تلاش کن."}
+                </span>
+                {labelCommitState === "done" && (
+                  <button
+                    type="button"
+                    onClick={undoLabelCommit}
+                    className="rounded-lg border border-green-400 bg-white px-3 py-1.5 text-xs font-bold text-green-900 hover:bg-green-100"
+                  >
+                    چاپ نشد، ثبت را لغو کن
+                  </button>
+                )}
+                {labelCommitState === "error" && (
+                  <button
+                    type="button"
+                    onClick={() => void commitLabelPrint()}
+                    className="rounded-lg border border-red-400 bg-white px-3 py-1.5 text-xs font-bold text-red-900 hover:bg-red-100"
+                  >
+                    ثبت دوباره
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="label-print-root flex flex-wrap gap-4 print:block">
               {labels.map((label, idx) => {

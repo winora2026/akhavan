@@ -6,6 +6,18 @@ import { buildServicesText } from "@/lib/production/servicesText"
 // ۴ عدد و کمتر مثل قبل برای هر عدد یک لیبل جدا چاپ می‌شود
 const BULK_LABEL_THRESHOLD = 4
 
+// «لغو ثبت چاپ» فقط برای قطعاتی که در این مدت چاپ ثبت شده‌اند مجاز است (جلوگیری از دستکاری سابقه‌ی قدیمی)
+const UNDO_WINDOW_MS = 2 * 60 * 60 * 1000
+
+// قطعه‌ای که اجازه‌ی چاپ لیبل دارد (هنوز چاپ نشده یا اجازه‌ی چاپ مجدد گرفته)
+const isPrintable = (i: {
+  labelStatus: string | null
+  labelReprintAllowed: boolean | null
+}) =>
+  i.labelStatus === "چاپ‌نشده" ||
+  i.labelStatus === "مجاز چاپ مجدد" ||
+  !!i.labelReprintAllowed
+
 /**
  * پیدا کردن قلم فروش (OrderItem) متناظر با قطعه‌ی تولید.
  * اول با شناسه؛ اگر پیدا نشد (مثلاً سفارش بعد از ساخت تولید ویرایش شده و شناسه‌ی اقلام عوض شده)
@@ -59,7 +71,7 @@ export async function POST(req: Request) {
       responsiblePerson,
       operatorName,
     } = body
-    // action: "print" | "allow-reprint"
+    // action: "print" (پیش‌نمایش، بدون تغییر وضعیت) | "mark-printed" | "unmark-printed" | "allow-reprint"
 
     if (!Array.isArray(productionItemIds) || productionItemIds.length === 0) {
       return NextResponse.json(
@@ -150,6 +162,87 @@ export async function POST(req: Request) {
       })
     }
 
+    // ───────── ثبت اینکه لیبل‌ها واقعاً چاپ شدند (بعد از بسته شدن پنجره‌ی چاپ) ─────────
+    if (action === "mark-printed") {
+      const items = await prisma.productionItem.findMany({
+        where: { id: { in: productionItemIds } },
+      })
+      // فقط قطعاتی که هنوز «چاپ‌نشده/مجاز چاپ مجدد» هستند؛ تکرار درخواست چیزی را دوباره ثبت نمی‌کند
+      const toMark = items.filter(isPrintable)
+
+      for (const item of toMark) {
+        await prisma.productionItem.update({
+          where: { id: item.id },
+          data: {
+            labelStatus: "چاپ‌شده",
+            labelPrintCount: { increment: 1 },
+            labelPrintedAt: new Date(),
+            labelReprintAllowed: false,
+          },
+        })
+
+        await prisma.productionHistory.create({
+          data: {
+            productionOrderId: item.productionOrderId,
+            productionItemId: item.id,
+            action: "چاپ لیبل",
+            description: `چاپ لیبل (دفعه ${(item.labelPrintCount || 0) + 1})`,
+            operatorName: operatorName ? String(operatorName) : null,
+          },
+        })
+      }
+
+      return NextResponse.json({
+        message: "چاپ لیبل‌ها ثبت شد",
+        marked: toMark.length,
+      })
+    }
+
+    // ───────── لغو ثبت چاپ (وقتی پنجره‌ی چاپ لغو شده و لیبل واقعاً چاپ نشده) ─────────
+    if (action === "unmark-printed") {
+      const items = await prisma.productionItem.findMany({
+        where: { id: { in: productionItemIds } },
+      })
+      const now = Date.now()
+      const toUndo = items.filter(
+        (i) =>
+          i.labelStatus === "چاپ‌شده" &&
+          i.labelPrintedAt &&
+          now - new Date(i.labelPrintedAt).getTime() <= UNDO_WINDOW_MS
+      )
+
+      for (const item of toUndo) {
+        const newCount = Math.max(0, (item.labelPrintCount || 1) - 1)
+        const hadBefore = newCount > 0
+        await prisma.productionItem.update({
+          where: { id: item.id },
+          data: {
+            labelPrintCount: newCount,
+            // اگر قبلاً هم چاپ شده بود، اجازه‌ی چاپ مجدد برمی‌گردد؛ وگرنه «چاپ‌نشده»
+            labelStatus: hadBefore ? "مجاز چاپ مجدد" : "چاپ‌نشده",
+            labelReprintAllowed: hadBefore,
+            ...(hadBefore ? {} : { labelPrintedAt: null }),
+          },
+        })
+
+        await prisma.productionHistory.create({
+          data: {
+            productionOrderId: item.productionOrderId,
+            productionItemId: item.id,
+            action: "لغو ثبت چاپ لیبل",
+            description: "ثبت چاپ لیبل لغو شد (چاپ انجام نشد)",
+            operatorName: operatorName ? String(operatorName) : null,
+          },
+        })
+      }
+
+      return NextResponse.json({
+        message: "ثبت چاپ لغو شد",
+        undone: toUndo.length,
+      })
+    }
+
+    // ───────── پیش‌نمایش لیبل‌ها: هیچ وضعیتی تغییر نمی‌کند ─────────
     if (action === "print") {
       const items = await prisma.productionItem.findMany({
         where: { id: { in: productionItemIds } },
@@ -167,12 +260,7 @@ export async function POST(req: Request) {
         },
       })
 
-      const printable = items.filter(
-        (i) =>
-          i.labelStatus === "چاپ‌نشده" ||
-          i.labelStatus === "مجاز چاپ مجدد" ||
-          i.labelReprintAllowed
-      )
+      const printable = items.filter(isPrintable)
 
       if (printable.length === 0) {
         return NextResponse.json(
@@ -182,27 +270,6 @@ export async function POST(req: Request) {
           },
           { status: 400 }
         )
-      }
-
-      for (const item of printable) {
-        await prisma.productionItem.update({
-          where: { id: item.id },
-          data: {
-            labelStatus: "چاپ‌شده",
-            labelPrintCount: { increment: 1 },
-            labelPrintedAt: new Date(),
-            labelReprintAllowed: false,
-          },
-        })
-
-        await prisma.productionHistory.create({
-          data: {
-            productionOrderId: item.productionOrderId,
-            productionItemId: item.id,
-            action: "چاپ لیبل",
-            description: `چاپ لیبل (دفعه ${(item.labelPrintCount || 0) + 1})`,
-          },
-        })
       }
 
       const labels: any[] = []
@@ -257,7 +324,7 @@ export async function POST(req: Request) {
         }
       }
 
-      return NextResponse.json({ message: "لیبل‌ها ثبت شد", labels })
+      return NextResponse.json({ message: "پیش‌نمایش لیبل‌ها", labels })
     }
 
     return NextResponse.json({ error: "عملیات نامعتبر" }, { status: 400 })

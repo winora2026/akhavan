@@ -804,7 +804,9 @@ export default function InvoicesPage() {
       setOrders((prev) => prev.filter((o) => o.id !== revertItem.id))
       setSelectedIds((prev) => prev.filter((id) => id !== revertItem.id))
       setRevertItem(null)
-      alert("فاکتور به پیش‌فاکتور برگشت و از صف تولید حذف شد")
+      alert(
+        "فاکتور به پیش‌فاکتور برگشت. قطعات تولید نگه داشته شد و تا ارسال مجدد در صف‌ها نیست؛ بعد از ویرایش و تبدیل دوباره به فاکتور فقط قطعات جدید/تغییرکرده وارد صف برش می‌شوند."
+      )
     } catch (e: any) {
       alert(e.message || "خطا")
     } finally {
@@ -1414,8 +1416,9 @@ export default function InvoicesPage() {
                 </strong>
               </p>
               <p className="text-sm text-gray-600 mt-3">
-                فقط اگر هنوز وارد ایستگاه برش نشده باشد، سفارش تولید حذف و وضعیت
-                به پیش‌فاکتور برمی‌گردد تا بتوانید ویرایش کنید.
+                فقط اگر هنوز وارد ایستگاه برش نشده باشد، وضعیت به پیش‌فاکتور
+                برمی‌گردد تا بتوانید ویرایش کنید. قطعات تولید پاک نمی‌شوند و بعد
+                از ارسال مجدد فقط قطعات جدید یا تغییرکرده وارد صف برش می‌شوند.
               </p>
             </div>
             <div className="flex gap-3 justify-end">
