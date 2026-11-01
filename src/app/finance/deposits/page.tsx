@@ -157,6 +157,24 @@ const FILTERS_KEY = "customerDepositsFilters"
 // تاریخ امروز (هر بار تازه محاسبه می‌شود؛ تا بعد از نیمه‌شب هم تاریخ کهنه نماند)
 const makeToday = () => new DateObject({ calendar: persian, locale: persian_fa })
 
+const DAY_MS = 24 * 60 * 60 * 1000
+const startOfLocalDay = (d: Date) => {
+  const x = new Date(d)
+  x.setHours(0, 0, 0, 0)
+  return x
+}
+const endOfLocalDay = (d: Date) => {
+  const x = new Date(d)
+  x.setHours(23, 59, 59, 999)
+  return x
+}
+const isTodayDate = (d: any) => {
+  if (!d?.toDate) return false
+  const a = d.toDate()
+  const b = new Date()
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+}
+
 export default function CustomerDepositsPage() {
   const [rows, setRows] = useState<Deposit[]>([])
   const [accounts, setAccounts] = useState<BankAccount[]>([])
@@ -322,22 +340,30 @@ export default function CustomerDepositsPage() {
   const loadWith = async (f: any, t: any, st: string, silent = false) => {
     if (!silent) setLoading(true)
     try {
+      // بازه‌ی دقیقِ روزِ محلی (ایران): از ابتدای روز «از» تا انتهای روز «تا»
+      const localFrom = f?.toDate ? startOfLocalDay(f.toDate()) : null
+      const localTo = t?.toDate ? endOfLocalDay(t.toDate()) : null
+      // سرور (که مرز روز را احتمالاً با ساعت UTC حساب می‌کند) یک روز عقب و جلوتر را هم بفرستد تا هیچ واریزی جا نیفتد؛
+      // فیلتر دقیقِ روز بعد از دریافت، همین‌جا در مرورگر انجام می‌شود (تا واریزی‌های روز قبل/بعد قاطی نشوند)
       const params = new URLSearchParams()
-      if (f?.toDate) {
-        const d = f.toDate()
-        d.setHours(0, 0, 0, 0)
-        params.set("from", d.toISOString())
-      }
-      if (t?.toDate) {
-        const d = t.toDate()
-        d.setHours(23, 59, 59, 999)
-        params.set("to", d.toISOString())
-      }
+      if (localFrom) params.set("from", new Date(localFrom.getTime() - DAY_MS).toISOString())
+      if (localTo) params.set("to", new Date(localTo.getTime() + DAY_MS).toISOString())
       if (st !== "همه") params.set("status", st)
       const res = await fetch(`/api/finance/deposits?${params}`)
       const data = await res.json()
       if (silent && !res.ok) return
-      setRows(Array.isArray(data) ? data : [])
+      const list: Deposit[] = Array.isArray(data) ? data : []
+      setRows(
+        list.filter((r) => {
+          const d = new Date(r.depositDate)
+          if (!isNaN(d.getTime())) {
+            if (localFrom && d < localFrom) return false
+            if (localTo && d > localTo) return false
+          }
+          if (st !== "همه" && r.status !== st) return false
+          return true
+        })
+      )
     } catch {
       if (!silent) setRows([])
     } finally {
@@ -758,7 +784,7 @@ export default function CustomerDepositsPage() {
               value={fromDate}
               onChange={(v) => {
                 setFromDate(v)
-                setDayMode("range")
+                setDayMode(isTodayDate(v) && isTodayDate(toDate) ? "today" : "range")
               }}
               calendar={persian}
               locale={persian_fa}
@@ -773,7 +799,7 @@ export default function CustomerDepositsPage() {
               value={toDate}
               onChange={(v) => {
                 setToDate(v)
-                setDayMode("range")
+                setDayMode(isTodayDate(fromDate) && isTodayDate(v) ? "today" : "range")
               }}
               calendar={persian}
               locale={persian_fa}
