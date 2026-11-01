@@ -23,6 +23,7 @@ const TITLE_MAP: Record<string, string> = {
   "/finance/deposits": "واریزی‌های مشتریان",
   "/finance/convert": "کانورت فاکتورها",
   "/finance/reconcile": "مغایرت‌گیری",
+  "/sms-report": "گزارش پیامک‌ها",
 }
 
 const STORAGE_KEY = "akhavan_open_tabs"

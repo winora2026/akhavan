@@ -43,6 +43,11 @@ function isReadyWh(name: string) {
 function isLoading(name: string) {
   return norm(name).includes("بارگیری")
 }
+/** تراش ۱ و تراش ۲ (نه تراش الگویی) */
+function isBevelPair(name: string) {
+  const c = norm(name).replace(/\s+/g, "")
+  return c.startsWith("تراش") && !c.includes("الگویی")
+}
 
 const canon = (s: string) => norm(s).replace(/\s+/g, "")
 
@@ -78,8 +83,13 @@ function unitLabel(unit: string): string | null {
 /**
  * مقدار کار یک قطعه در ایستگاه فعلی بر اساس واحدِ خدماتی که به همین ایستگاه می‌رسند.
  * مقدار هر خدمت = تعداد × تعداد واحد (همان فرمول ثبت سفارش)؛ برای باقی‌مانده‌ی قطعه‌های نیمه‌رد‌شده
- * به نسبت تعداد باقی‌مانده کم می‌شود. اگر خدمتی به این ایستگاه نرسد (مثلاً برش یا انبارها)،
- * همان متر مربع قطعه برگردانده می‌شود.
+ * به نسبت تعداد باقی‌مانده کم می‌شود.
+ * خروجی:
+ *  - measures: جمع به تفکیک واحد (متر مربع / متر طول / عدد)
+ *  - serviceMeasures: مقدار هر خدمت جدا (مثلاً «تراش ۱» و «تراش ۱/۵» هرکدام یک خط)
+ *  - stationServices: فقط عنوان خدماتی که به همین ایستگاه می‌رسند (برای ستون «سختی کار»)
+ * اگر هیچ خدمتی به این ایستگاه نرسد (برش، انبارها، ...)، همان متر مربع قطعه برگردانده می‌شود
+ * و stationServices خالی است (یعنی تمام خدمات نمایش داده شود).
  */
 function computeMeasures(
   servicesData: any,
@@ -87,35 +97,59 @@ function computeMeasures(
   itemMeterage: number | null,
   itemQuantity: number,
   remainingQty: number
-): { label: string; qty: number }[] {
+): {
+  measures: { label: string; qty: number }[]
+  serviceMeasures: { title: string; label: string; qty: number }[]
+  stationServices: string[]
+} {
   const factor = itemQuantity > 0 ? remainingQty / itemQuantity : 1
   const sums = new Map<string, number>()
+  const perService = new Map<string, { title: string; label: string; qty: number }>()
+  const stationServices: string[] = []
   try {
     const parsed =
       typeof servicesData === "string" ? JSON.parse(servicesData) : servicesData
     if (Array.isArray(parsed)) {
       for (const s of parsed) {
-        const title = String(s?.title || s?.name || "")
+        const title = String(s?.title || s?.name || "").trim()
         const mapped = title ? mapServiceToStation(title) : null
         if (!mapped || !stationIsMapped(stationName, mapped)) continue
+        if (!stationServices.includes(title)) stationServices.push(title)
         const label = unitLabel(String(s?.unit || ""))
         if (!label) continue
         const count = parseFloat(String(s?.count ?? "")) || 1
         const uq = String(s?.unitQuantity ?? "").trim()
         const unitQty = uq === "" ? (s?.unit === "عددی" ? 1 : 0) : parseFloat(uq) || 0
         const total = count * unitQty * factor
-        if (total > 0) sums.set(label, (sums.get(label) || 0) + total)
+        if (total > 0) {
+          sums.set(label, (sums.get(label) || 0) + total)
+          const k = `${title}||${label}`
+          const cur = perService.get(k)
+          if (cur) cur.qty += total
+          else perService.set(k, { title, label, qty: total })
+        }
       }
     }
   } catch {}
   if (sums.size === 0) {
     const m = (Number(itemMeterage) || 0) * factor
-    return m > 0 ? [{ label: "متر مربع", qty: Number(m.toFixed(4)) }] : []
+    return {
+      measures: m > 0 ? [{ label: "متر مربع", qty: Number(m.toFixed(4)) }] : [],
+      serviceMeasures: [],
+      stationServices,
+    }
   }
-  return Array.from(sums.entries()).map(([label, qty]) => ({
-    label,
-    qty: Number(qty.toFixed(4)),
-  }))
+  return {
+    measures: Array.from(sums.entries()).map(([label, qty]) => ({
+      label,
+      qty: Number(qty.toFixed(4)),
+    })),
+    serviceMeasures: Array.from(perService.values()).map((x) => ({
+      ...x,
+      qty: Number(x.qty.toFixed(4)),
+    })),
+    stationServices,
+  }
 }
 
 /** یادداشت رد گروهی از انبار نیمه‌ساخته (باید با scan/route.ts یکی باشد) */
@@ -225,6 +259,18 @@ export async function GET(req: Request) {
       // برش: همیشه در صف تا رد شود
       if (isCut(station.name)) return true
 
+      // تراش ۱ / تراش ۲: اگر دستگاه جفت کار را تکمیل کرده، این دستگاه دیگر نباید آن را ببیند
+      // (برای داده‌های قدیمی که هنوز «انجام در ایستگاه دیگر» نخورده‌اند)
+      if (isBevelPair(station.name) && row.status === "در انتظار") {
+        const pairDone = all.some(
+          (s) =>
+            s.id !== row.id &&
+            isBevelPair(s.station.name) &&
+            s.status === "تکمیل شده"
+        )
+        if (pairDone) return false
+      }
+
       // بقیه: اگر قطعه ایستگاه برش دارد، فقط بعد از تکمیل برش نمایش داده می‌شود.
       // قطعه‌ی بدون ایستگاه برش (سفارش اجرتیِ بدون «اجرت برش») از همان ابتدا
       // در کارتابل ایستگاه‌های خودش (مثلاً دیاموند) دیده می‌شود.
@@ -261,6 +307,10 @@ export async function GET(req: Request) {
       )
     )
     const doneByOrder = new Map<string, number>()
+    // رد شده‌ها به تفکیک «سفارش + نام کالا» (هر کالا در کارتابل یک ردیف است)
+    const doneByProduct = new Map<string, number>()
+    const prodKey = (orderId: string, productName: string) =>
+      `${orderId}||${norm(productName || "")}`
     if (orderIds.length > 0) {
       const doneAll = await prisma.productionItemStation.findMany({
         where: {
@@ -270,13 +320,18 @@ export async function GET(req: Request) {
         },
         select: {
           productionItem: {
-            select: { productionOrder: { select: { id: true } } },
+            select: {
+              productName: true,
+              productionOrder: { select: { id: true } },
+            },
           },
         },
       })
       for (const d of doneAll) {
         const oid = d.productionItem.productionOrder.id
         doneByOrder.set(oid, (doneByOrder.get(oid) || 0) + 1)
+        const pk = prodKey(oid, d.productionItem.productName)
+        doneByProduct.set(pk, (doneByProduct.get(pk) || 0) + 1)
       }
     }
 
@@ -308,6 +363,13 @@ export async function GET(req: Request) {
       const order = item.productionOrder
       const salesOrder = order.order
       const salesItem = matchSalesItem(item, salesOrder)
+      const calc = computeMeasures(
+        (salesItem as any)?.servicesData ?? null,
+        station.name,
+        item.meterage,
+        item.quantity || 1,
+        row.quantityIn ?? item.quantity ?? 1
+      )
 
       return {
         id: row.id,
@@ -331,13 +393,11 @@ export async function GET(req: Request) {
           barcode: item.barcode,
           notes: item.notes || (salesItem as any)?.notes || null,
           // مقدار کار این ایستگاه بر اساس واحد خدمات (مترمربع / مترطول / عدد)
-          measures: computeMeasures(
-            (salesItem as any)?.servicesData ?? null,
-            station.name,
-            item.meterage,
-            item.quantity || 1,
-            row.quantityIn ?? item.quantity ?? 1
-          ),
+          measures: calc.measures,
+          // مقدار هر خدمت به تفکیک (تراش ۱، تراش ۱/۵، ...)
+          serviceMeasures: calc.serviceMeasures,
+          // فقط خدماتی که مربوط به همین ایستگاه است؛ خالی = همه‌ی خدمات نمایش داده شود
+          stationServicesText: calc.stationServices.join("\n"),
           // روند کاری قطعه: همه‌ی ایستگاه‌های مسیر به‌ترتیب (برای دیدن در کارتابل انبارها)
           route: (item.stations || [])
             .slice()
@@ -369,6 +429,8 @@ export async function GET(req: Request) {
             productionNumber: order.productionNumber,
             priority: order.priority,
             stationDoneItems: doneByOrder.get(order.id) || 0,
+            productDoneItems:
+              doneByProduct.get(prodKey(order.id, item.productName)) || 0,
             order: {
               orderNumber: salesOrder?.orderNumber,
               customer: { name: salesOrder?.customer?.name || "—" },

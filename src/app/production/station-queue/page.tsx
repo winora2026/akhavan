@@ -31,6 +31,10 @@ type QueueItem = {
     servicesText?: string
     /** مقدار کار این ایستگاه به تفکیک واحد خدمت (متر مربع / متر طول / عدد) */
     measures?: { label: string; qty: number }[]
+    /** مقدار هر خدمت جدا (تراش ۱ / تراش ۱/۵ / ...) */
+    serviceMeasures?: { title: string; label: string; qty: number }[]
+    /** فقط خدمات مربوط به همین ایستگاه (هر خدمت یک خط)؛ خالی = همه‌ی خدمات */
+    stationServicesText?: string
     /** روند کاری قطعه: همه‌ی ایستگاه‌های مسیر به‌ترتیب */
     route?: {
       id: string
@@ -52,6 +56,8 @@ type QueueItem = {
       priority: string
       /** تعداد قلم‌های رد شده‌ی این سفارش در همین ایستگاه */
       stationDoneItems?: number
+      /** تعداد قلم‌های رد شده‌ی همین کالا از این سفارش در همین ایستگاه */
+      productDoneItems?: number
       order: {
         orderNumber?: string
         customer: { name: string }
@@ -73,8 +79,10 @@ type OrderGroup = {
   itemCount: number
   totalQty: number
   totalMeterage: number
-  /** مقدار کار سفارش در این ایستگاه به تفکیک واحد */
+  /** مقدار کار این کالا در این ایستگاه به تفکیک واحد */
   measures: { label: string; qty: number }[]
+  /** مقدار هر خدمت جدا (مثلاً تراش ۱ و تراش ۱/۵) */
+  serviceMeasures: { title: string; label: string; qty: number }[]
   /** قلم‌های رد شده‌ی همین سفارش در این ایستگاه */
   doneItems: number
   /** قلم باقی‌مانده + قلم رد شده */
@@ -161,6 +169,51 @@ function fmtMeasures(ms?: { label: string; qty: number }[] | null, fallback?: nu
   if (fallback != null && Number(fallback) > 0)
     return `${Number(Number(fallback).toFixed(3))} متر مربع`
   return "—"
+}
+
+type ServiceMeasure = { title: string; label: string; qty: number }
+
+/** جمع مقدار هر خدمت (به تفکیک عنوان و واحد) روی چند قلم */
+function sumServiceMeasures(list: (ServiceMeasure[] | null | undefined)[]) {
+  const map = new Map<string, ServiceMeasure>()
+  for (const ms of list)
+    for (const m of ms || []) {
+      const k = `${m.title}||${m.label}`
+      const cur = map.get(k)
+      if (cur) cur.qty += Number(m.qty || 0)
+      else map.set(k, { title: m.title, label: m.label, qty: Number(m.qty || 0) })
+    }
+  return Array.from(map.values())
+}
+
+/** خدمات قابل نمایش در ستون «سختی کار» همین ایستگاه */
+function stationServiceLines(pi: { servicesText?: string; stationServicesText?: string }) {
+  const own = servicesLines(pi.stationServicesText)
+  return own.length > 0 ? own : servicesLines(pi.servicesText)
+}
+
+/** مقدار کار به تفکیک خدمت، هر خدمت در یک خط */
+function MeasureLines({
+  services,
+  measures,
+  fallback,
+}: {
+  services?: ServiceMeasure[] | null
+  measures?: { label: string; qty: number }[] | null
+  fallback?: number | null
+}) {
+  if (services && services.length > 0)
+    return (
+      <>
+        {services.map((m, i) => (
+          <div key={i} className="whitespace-nowrap">
+            <span className="font-bold">{m.title}:</span>{" "}
+            {Number(Number(m.qty).toFixed(3))} {m.label}
+          </div>
+        ))}
+      </>
+    )
+  return <>{fmtMeasures(measures, fallback)}</>
 }
 
 /** جمع چند آرایه‌ی measures بر اساس واحد */
@@ -866,7 +919,7 @@ export default function StationQueuePage() {
     return result
   }, [queue, productFilter, search])
 
-  /** گروه‌بندی بر اساس شماره سفارش: هر سفارش یک ردیف؛ با کلیک وارد اقلامش می‌شویم */
+  /** گروه‌بندی بر اساس «سفارش + نام کالا»: هر کالای هر مشتری یک ردیف؛ با کلیک وارد اقلامش می‌شویم */
   const orderGroups = useMemo<OrderGroup[]>(() => {
     const map = new Map<
       string,
@@ -883,6 +936,7 @@ export default function StationQueuePage() {
         totalQty: number
         totalMeterage: number
         measureLists: ({ label: string; qty: number }[] | undefined)[]
+        serviceMeasureLists: (ServiceMeasure[] | undefined)[]
         doneItems: number
         rows: QueueItem[]
       }
@@ -890,10 +944,11 @@ export default function StationQueuePage() {
     for (const row of filtered) {
       const pi = row.productionItem
       const orderNumber = pi.productionOrder.order?.orderNumber || "—"
-      let g = map.get(orderNumber)
+      const gKey = `${orderNumber}||${norm(pi.productName || "")}`
+      let g = map.get(gKey)
       if (!g) {
         g = {
-          key: orderNumber,
+          key: gKey,
           orderNumber,
           customerName: pi.productionOrder.order?.customer?.name || "—",
           priority: pi.productionOrder.priority || "عادی",
@@ -905,10 +960,14 @@ export default function StationQueuePage() {
           totalQty: 0,
           totalMeterage: 0,
           measureLists: [],
-          doneItems: pi.productionOrder.stationDoneItems ?? 0,
+          serviceMeasureLists: [],
+          doneItems:
+            pi.productionOrder.productDoneItems ??
+            pi.productionOrder.stationDoneItems ??
+            0,
           rows: [],
         }
-        map.set(orderNumber, g)
+        map.set(gKey, g)
       }
       g.rows.push(row)
       g.itemCount += 1
@@ -921,8 +980,9 @@ export default function StationQueuePage() {
             ? [{ label: "متر مربع", qty: Number(pi.meterage) }]
             : []
       )
+      g.serviceMeasureLists.push(pi.serviceMeasures)
       g.products.add(pi.productName)
-      for (const s of servicesLines(pi.servicesText)) g.services.add(s)
+      for (const s of stationServiceLines(pi)) g.services.add(s)
     }
     return Array.from(map.values()).map((g) => {
       const names = Array.from(g.products)
@@ -942,6 +1002,7 @@ export default function StationQueuePage() {
         totalQty: g.totalQty,
         totalMeterage: sumMeasures(g.measureLists).reduce((s, m) => s + m.qty, 0),
         measures: sumMeasures(g.measureLists),
+        serviceMeasures: sumServiceMeasures(g.serviceMeasureLists),
         doneItems: g.doneItems,
         totalItems: g.rows.length + g.doneItems,
         rows: g.rows,
@@ -1012,7 +1073,7 @@ export default function StationQueuePage() {
             0
           )
         case "services":
-          return p.servicesText || ""
+          return stationServiceLines(p).join(" ")
         case "notes":
           return p.notes || ""
         case "status":
@@ -1790,7 +1851,7 @@ export default function StationQueuePage() {
                   </button>
                 </div>
                 <div className="md:col-span-2 text-center font-bold py-1 text-sm">
-                  {orderGroups.length} سفارش / {filtered.length} قلم
+                  {orderGroups.length} ردیف کالا / {filtered.length} قلم
                 </div>
               </div>
             </div>
@@ -1809,10 +1870,10 @@ export default function StationQueuePage() {
                           onClick={() => setOpenOrderKey(null)}
                           className="rounded-lg border border-teal-500 bg-white px-3 py-1 text-sm font-bold text-teal-800 hover:bg-teal-100"
                         >
-                          → بازگشت به لیست سفارش‌ها
+                          → بازگشت به لیست
                         </button>
                         <span className="text-base font-black text-blue-950">
-                          سفارش {openGroup.orderNumber}
+                          سفارش {openGroup.orderNumber} — {openGroup.productSummary}
                         </span>
                         <span className="font-bold text-blue-900">
                           {openGroup.customerName}
@@ -1935,15 +1996,15 @@ export default function StationQueuePage() {
                               {row.quantityOut ?? 0}
                             </td>
                             <td className="border border-gray-400 px-2 py-1 text-center">
-                              {fmtMeasures(
-                                row.productionItem.measures,
-                                row.productionItem.meterage
-                              )}
+                              <MeasureLines
+                                services={row.productionItem.serviceMeasures}
+                                measures={row.productionItem.measures}
+                                fallback={row.productionItem.meterage}
+                              />
                             </td>
                             <td className="border border-gray-400 px-2 py-1 font-bold">
-                              {servicesLines(row.productionItem.servicesText).length >
-                              0
-                                ? servicesLines(row.productionItem.servicesText).map(
+                              {stationServiceLines(row.productionItem).length > 0
+                                ? stationServiceLines(row.productionItem).map(
                                     (sv, i) => <div key={i}>{sv}</div>
                                   )
                                 : "—"}
@@ -2017,7 +2078,7 @@ export default function StationQueuePage() {
                 ) : (
                   <div className="py-12 text-center">
                     <p className="mb-4 text-lg font-bold text-teal-800">
-                      همه‌ی اقلام سفارش {openOrderKey} در این ایستگاه رد شد (یا با فیلتر فعلی
+                      همه‌ی اقلام این کالا از سفارش {openOrderKey.split("||")[0]} در این ایستگاه رد شد (یا با فیلتر فعلی
                       نمایش داده نمی‌شود)
                     </p>
                     <button
@@ -2096,7 +2157,10 @@ export default function StationQueuePage() {
                             {g.totalQty}
                           </td>
                           <td className="border border-gray-400 px-2 py-1 text-center">
-                            {fmtMeasures(g.measures)}
+                            <MeasureLines
+                              services={g.serviceMeasures}
+                              measures={g.measures}
+                            />
                           </td>
                           <td className="border border-gray-400 px-2 py-1 text-center">
                             {formatFaDate(g.orderDate)}

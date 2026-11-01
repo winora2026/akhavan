@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import DatePicker, { DateObject } from "react-multi-date-picker"
 import persian from "react-date-object/calendars/persian"
@@ -154,6 +154,9 @@ const digitsOnly = (v?: string | null) => String(v || "").replace(/\D/g, "")
 // فیلترها در sessionStorage ذخیره می‌شوند تا با رفتن به صفحه‌ی دیگر و برگشتن، از اول نشود
 const FILTERS_KEY = "customerDepositsFilters"
 
+// تاریخ امروز (هر بار تازه محاسبه می‌شود؛ تا بعد از نیمه‌شب هم تاریخ کهنه نماند)
+const makeToday = () => new DateObject({ calendar: persian, locale: persian_fa })
+
 export default function CustomerDepositsPage() {
   const [rows, setRows] = useState<Deposit[]>([])
   const [accounts, setAccounts] = useState<BankAccount[]>([])
@@ -162,15 +165,23 @@ export default function CustomerDepositsPage() {
   const [saving, setSaving] = useState(false)
   const [me, setMe] = useState<{ displayName: string; role: string } | null>(null)
 
-  const today = useMemo(
-    () => new DateObject({ calendar: persian, locale: persian_fa }),
-    []
-  )
+  const today = useMemo(() => makeToday(), [])
   const [fromDate, setFromDate] = useState<any>(today)
   const [toDate, setToDate] = useState<any>(today)
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState("همه")
   const [filtersReady, setFiltersReady] = useState(false)
+  // "today": فقط امروز و با تغییر روز خودکار روی روز جدید می‌رود | "range": بازه‌ی انتخابی کاربر (می‌ماند)
+  const [dayMode, setDayMode] = useState<"today" | "range">("today")
+  // آخرین مقدارِ فیلترها برای تایمر به‌روزرسانی خودکار (تا تایمر مقادیر کهنه نخواند)
+  const latestRef = useRef<{ fromDate: any; toDate: any; statusFilter: string; dayMode: "today" | "range" }>({
+    fromDate: today,
+    toDate: today,
+    statusFilter: "همه",
+    dayMode: "today",
+  })
+  latestRef.current = { fromDate, toDate, statusFilter, dayMode }
+  const dayKeyRef = useRef(new Date().toDateString())
 
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -232,6 +243,7 @@ export default function CustomerDepositsPage() {
         FILTERS_KEY,
         JSON.stringify({
           dayStamp: new Date().toDateString(),
+          dayMode,
           search,
           statusFilter,
           fromDate: fromDate?.toDate ? fromDate.toDate().toISOString() : null,
@@ -239,7 +251,7 @@ export default function CustomerDepositsPage() {
         })
       )
     } catch {}
-  }, [filtersReady, search, statusFilter, fromDate, toDate])
+  }, [filtersReady, dayMode, search, statusFilter, fromDate, toDate])
 
   // بستن لیست مشتری با کلیک بیرون
   useEffect(() => {
@@ -305,9 +317,10 @@ export default function CustomerDepositsPage() {
     })()
   }, [])
 
-  // بارگذاری واریزی‌ها: بازه‌ی تاریخ از ابتدای روز «از» تا انتهای روز «تا»؛ جستجوی متنی سمت مرورگر انجام می‌شود
-  const loadWith = async (f: any, t: any, st: string) => {
-    setLoading(true)
+  // بارگذاری واریزی‌ها: بازه‌ی تاریخ از ابتدای روز «از» تا انتهای روز «تا»؛ جستجوی متنی سمت مرورگر انجام می‌شود.
+  // silent=true (به‌روزرسانی خودکار): بدون نمایش «در حال بارگذاری» و بدون خالی‌شدن لیست در صورت خطا
+  const loadWith = async (f: any, t: any, st: string, silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const params = new URLSearchParams()
       if (f?.toDate) {
@@ -323,34 +336,43 @@ export default function CustomerDepositsPage() {
       if (st !== "همه") params.set("status", st)
       const res = await fetch(`/api/finance/deposits?${params}`)
       const data = await res.json()
+      if (silent && !res.ok) return
       setRows(Array.isArray(data) ? data : [])
     } catch {
-      setRows([])
+      if (!silent) setRows([])
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
   const load = () => loadWith(fromDate, toDate, statusFilter)
 
-  // با باز شدن صفحه: فیلترهای قبلی (اگر هست) برگردانده می‌شوند. تاریخ‌های ذخیره‌شده فقط در همان روز معتبرند
-  // (تا فردا با تاریخ دیروز باز نشود).
+  // با باز شدن صفحه: فیلترهای قبلی (اگر هست) برگردانده می‌شوند.
+  // حالت «امروز» همیشه با تاریخِ همین لحظه باز می‌شود؛ بازه‌ی انتخابیِ کاربر فقط در همان روز نگه داشته می‌شود
+  // (تا فردا با بازه‌ی دیروز باز نشود).
   useEffect(() => {
-    let f: any = today
-    let t: any = today
+    let f: any = makeToday()
+    let t: any = makeToday()
     let st = "همه"
     let q = ""
+    let mode: "today" | "range" = "today"
     try {
       const raw = sessionStorage.getItem(FILTERS_KEY)
       if (raw) {
         const s = JSON.parse(raw)
         if (typeof s.search === "string") q = s.search
         if (typeof s.statusFilter === "string") st = s.statusFilter
-        if (s.dayStamp === new Date().toDateString() && "fromDate" in s && "toDate" in s) {
+        if (
+          s.dayMode === "range" &&
+          s.dayStamp === new Date().toDateString() &&
+          "fromDate" in s &&
+          "toDate" in s
+        ) {
           const toDO = (iso: string) =>
             new DateObject({ date: new Date(iso), calendar: persian, locale: persian_fa })
           f = s.fromDate ? toDO(s.fromDate) : null
           t = s.toDate ? toDO(s.toDate) : null
+          mode = "range"
         }
       }
     } catch {}
@@ -358,14 +380,54 @@ export default function CustomerDepositsPage() {
     setStatusFilter(st)
     setFromDate(f)
     setToDate(t)
+    setDayMode(mode)
     setFiltersReady(true)
     loadWith(f, t, st)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // به‌روزرسانی خودکار: هر ۶۰ ثانیه (و وقتی دوباره به تب برمی‌گردید) لیست بدون رفرش و بدون چشمک‌زدن
+  // دوباره خوانده می‌شود. در حالت «امروز»، با رد شدن از نیمه‌شب تاریخ‌ها خودکار روی روز جدید می‌روند؛
+  // در حالت «بازه‌ی انتخابی» همان بازه می‌ماند.
+  useEffect(() => {
+    const tick = () => {
+      if (document.hidden) return
+      const cur = latestRef.current
+      let f = cur.fromDate
+      let t = cur.toDate
+      const nowKey = new Date().toDateString()
+      if (cur.dayMode === "today" && nowKey !== dayKeyRef.current) {
+        f = makeToday()
+        t = makeToday()
+        setFromDate(f)
+        setToDate(t)
+      }
+      dayKeyRef.current = nowKey
+      loadWith(f, t, cur.statusFilter, true)
+    }
+    const timer = setInterval(tick, 60_000)
+    document.addEventListener("visibilitychange", tick)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener("visibilitychange", tick)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // بازگشت به «فقط امروز»
+  const showToday = () => {
+    const f = makeToday()
+    const t = makeToday()
+    setFromDate(f)
+    setToDate(t)
+    setDayMode("today")
+    loadWith(f, t, statusFilter)
+  }
+
   const showAllDates = () => {
     setFromDate(null)
     setToDate(null)
+    setDayMode("range")
     loadWith(null, null, statusFilter)
   }
 
@@ -393,7 +455,7 @@ export default function CustomerDepositsPage() {
     setSelectedCustomer(null)
     setCustomerSearch("")
     setBankAccountId("")
-    setDepositDate(today)
+    setDepositDate(makeToday())
   }
 
   const openCreate = () => {
@@ -694,7 +756,10 @@ export default function CustomerDepositsPage() {
             <label className="mb-1 block text-sm font-bold">از تاریخ</label>
             <DatePicker
               value={fromDate}
-              onChange={setFromDate}
+              onChange={(v) => {
+                setFromDate(v)
+                setDayMode("range")
+              }}
               calendar={persian}
               locale={persian_fa}
               calendarPosition="bottom-right"
@@ -706,7 +771,10 @@ export default function CustomerDepositsPage() {
             <label className="mb-1 block text-sm font-bold">تا تاریخ</label>
             <DatePicker
               value={toDate}
-              onChange={setToDate}
+              onChange={(v) => {
+                setToDate(v)
+                setDayMode("range")
+              }}
               calendar={persian}
               locale={persian_fa}
               calendarPosition="bottom-right"
@@ -731,6 +799,17 @@ export default function CustomerDepositsPage() {
             className="h-[42px] rounded-xl bg-blue-900 text-white text-base font-bold px-5 whitespace-nowrap"
           >
             اعمال فیلتر
+          </button>
+          <button
+            onClick={showToday}
+            title="فقط واریزی‌های امروز (با تغییر روز خودکار به روز جدید می‌رود)"
+            className={`h-[42px] rounded-xl border text-base font-bold px-5 whitespace-nowrap ${
+              dayMode === "today"
+                ? "bg-teal-600 border-teal-600 text-white"
+                : "bg-white border-blue-900 text-blue-900 hover:bg-blue-50"
+            }`}
+          >
+            امروز
           </button>
           <button
             onClick={showAllDates}
@@ -758,12 +837,13 @@ export default function CustomerDepositsPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl border overflow-auto bg-white/90 backdrop-blur shadow-sm">
+        {/* جدول: خودش اسکرول دارد (max-h) تا سرستون‌ها بالای آن فریز بمانند */}
+        <div className="rounded-2xl border overflow-auto max-h-[65vh] bg-white/90 backdrop-blur shadow-sm">
           {loading ? (
             <p className="p-8 text-center text-lg">در حال بارگذاری...</p>
           ) : (
             <table className="min-w-full text-base">
-              <thead className="bg-teal-700 text-white">
+              <thead className="bg-teal-700 text-white sticky top-0 z-10">
                 <tr>
                   <th className="p-3 text-center">#</th>
                   <th className="p-3">تاریخ</th>
