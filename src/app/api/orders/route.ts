@@ -7,6 +7,7 @@ import {
   syncProductionOrderFromSales,
 } from "@/lib/createProductionOrder"
 import { withTotals } from "@/lib/orderTotals"
+import { notifyOrderRegistered } from "@/lib/orderRegisteredSms"
 
 // ───────────── سریال شماره‌ی سفارش ─────────────
 // دو سریال جدا داریم و شماره‌ی سفارش همان شماره‌ی فاکتور سپیدار می‌شود:
@@ -254,6 +255,12 @@ export async function PATCH(req: NextRequest) {
       )
     }
 
+    // وضعیت قبلی: پیامک خودکار «ثبت سفارش» فقط وقتی بررسی می‌شود که سفارش از غیرفاکتور به فاکتور تبدیل شده باشد
+    const before = await prisma.order.findUnique({
+      where: { id },
+      select: { status: true },
+    })
+
     // برگرداندن فاکتور به پیش‌فاکتور فقط اگر برش شروع نشده باشد
     if (status === "پیش‌فاکتور") {
       const prod = await prisma.productionOrder.findFirst({
@@ -350,6 +357,14 @@ export async function PATCH(req: NextRequest) {
           console.error("production sync failed:", sync.error)
         }
       }
+    }
+
+    // پیامک خودکار «ثبت سفارش» (فقط وقتی ORDER_SMS_ENABLED=true باشد).
+    // اگر برای این فاکتور قبلاً پیامک رفته باشد (مثلاً بعد از برگشت به پیش‌فاکتور و ارسال مجدد)،
+    // تابع خودش رد می‌کند و پیامک تکراری نمی‌رود؛ اگر قبلاً ناموفق بوده، دوباره تلاش می‌کند.
+    // منتظر نتیجه‌اش نمی‌مانیم تا تبدیل به فاکتور کند نشود؛ تابع هیچ‌وقت ارور نمی‌دهد.
+    if (status === "فاکتور" && before?.status !== "فاکتور") {
+      void notifyOrderRegistered(order.id)
     }
 
     return NextResponse.json({
