@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { buildServicesText } from "@/lib/production/servicesText"
 import { isRentalOrderNumber } from "@/lib/rentalOrder"
-import { TAG_NEW, TAG_EDITED } from "@/lib/createProductionOrder"
+import { TAG_NEW, TAG_EDITED, TAG_RELABEL } from "@/lib/createProductionOrder"
 
 /** پیدا کردن OrderItem متناظر — اول با id، بعد با نام کالا */
 function resolveSalesItem(
@@ -152,25 +152,60 @@ export async function GET(req: Request) {
       return !!first && isStationOpen(first.status)
     })
 
-    // برچسب «جدید / ویرایش‌شده» برای قطعاتی که در ارسال مجدد فاکتور اضافه یا عوض شده‌اند
+    // ۳) قطعاتی که برششان گذشته ولی بعد از ویرایش فاکتور (تغییر خدمات) لیبلشان باید دوباره چاپ شود:
+    //    فقط لیبل (بدون برگه‌ی برنامه‌ریزی) و با همان بارکد قبلی
+    const queueIds = new Set(rows.map((r) => r.productionItemId))
+    const relabelCandidates = await prisma.productionItem.findMany({
+      where: {
+        labelStatus: "مجاز چاپ مجدد",
+        productionOrder: { order: { status: "فاکتور" } },
+        history: { some: { action: TAG_RELABEL } },
+      },
+      include: itemInclude,
+      orderBy: { createdAt: "asc" },
+    })
+    const labelOnlyIds = new Set(labelOnlyItems.map((i: any) => i.id))
+    const relabelItems = relabelCandidates.filter(
+      (i: any) => !queueIds.has(i.id) && !labelOnlyIds.has(i.id)
+    )
+
+    // برچسب «جدید / ویرایش‌شده / اصلاح لیبل» برای قطعاتی که در ارسال مجدد فاکتور اضافه یا عوض شده‌اند
     const allIds = [
       ...rows.map((r) => r.productionItemId),
       ...labelOnlyItems.map((i: any) => i.id),
+      ...relabelItems.map((i: any) => i.id),
     ]
     const tagRows = allIds.length
       ? await prisma.productionHistory.findMany({
           where: {
             productionItemId: { in: allIds },
-            action: { in: [TAG_NEW, TAG_EDITED] },
+            action: { in: [TAG_NEW, TAG_EDITED, TAG_RELABEL] },
           },
           select: { productionItemId: true, action: true },
           orderBy: { createdAt: "asc" },
         })
       : []
-    const changeTagOf = new Map<string, "جدید" | "ویرایش‌شده">()
+    const changeTagOf = new Map<string, "جدید" | "ویرایش‌شده" | "اصلاح لیبل">()
     for (const t of tagRows) {
       if (t.productionItemId)
-        changeTagOf.set(t.productionItemId, t.action === TAG_NEW ? "جدید" : "ویرایش‌شده")
+        changeTagOf.set(
+          t.productionItemId,
+          t.action === TAG_NEW
+            ? "جدید"
+            : t.action === TAG_EDITED
+              ? "ویرایش‌شده"
+              : "اصلاح لیبل"
+        )
+    }
+    // برچسب آخرین تغییر؛ «جدید/ویرایش‌شده» تا چاپ لیبل، «اصلاح لیبل» تا چاپ مجدد لیبل نمایش داده می‌شود
+    const tagFor = (item: any) => {
+      const t = changeTagOf.get(item.id)
+      if (!t) return null
+      if (t === "اصلاح لیبل")
+        return item.labelStatus === "مجاز چاپ مجدد" || item.labelReprintAllowed
+          ? t
+          : null
+      return (item.labelStatus || "چاپ‌نشده") === "چاپ‌نشده" ? t : null
     }
 
     const rawDebug: any[] = []
@@ -220,11 +255,7 @@ export async function GET(req: Request) {
         itemStationStatus: meta.itemStationStatus,
         sequence: meta.sequence,
         labelOnly: meta.labelOnly,
-        // فقط تا وقتی لیبل چاپ نشده نمایش داده می‌شود
-        changeTag:
-          (item.labelStatus || "چاپ‌نشده") === "چاپ‌نشده"
-            ? changeTagOf.get(item.id) || null
-            : null,
+        changeTag: tagFor(item),
         // سفارش اجرتی (سریال ۹۰۰xxx) — صفحه‌ی برنامه‌ریزی برش آن را در تب «اجرتی» نشان می‌دهد
         isRental: isRentalOrderNumber(salesOrder?.orderNumber),
         productionItemId: item.id,
@@ -274,7 +305,16 @@ export async function GET(req: Request) {
       })
     )
 
-    const result = [...cutRows, ...labelOnlyRows]
+    const relabelRows = relabelItems.map((item: any) =>
+      toRow(item, {
+        itemStationId: `relabel-${item.id}`,
+        itemStationStatus: "اصلاح لیبل",
+        sequence: 0,
+        labelOnly: true,
+      })
+    )
+
+    const result = [...cutRows, ...labelOnlyRows, ...relabelRows]
 
     const allNames = result.map((r) => r.productName)
     const productNames = Array.from(new Set(allNames)).sort()

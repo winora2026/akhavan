@@ -268,25 +268,6 @@ export async function PATCH(req: NextRequest) {
       })
 
       if (prod) {
-        // اگر هر قطعه‌ای وارد برش یا هر ایستگاه دیگری شده باشد، برگشت ممکن نیست
-        const started = prod.items.some((item) =>
-          item.stations.some(
-            (s) =>
-              s.status === "در حال انجام" ||
-              s.status === "تکمیل شده" ||
-              (s.quantityOut || 0) > 0
-          )
-        )
-        if (started) {
-          return NextResponse.json(
-            {
-              error:
-                "این سفارش وارد ایستگاه برش (یا ایستگاه دیگر) شده و قابل برگشت به پیش‌فاکتور نیست",
-            },
-            { status: 400 }
-          )
-        }
-
         // قطعات تولید پاک نمی‌شوند: تا ارسال مجدد نگه داشته می‌شوند (از صف‌ها پنهان‌اند)
         // و بعد از ویرایش فقط قطعات جدید/تغییرکرده دوباره وارد صف برش می‌شوند.
         await prisma.productionHistory.create({
@@ -294,7 +275,7 @@ export async function PATCH(req: NextRequest) {
             productionOrderId: prod.id,
             action: "برگشت به پیش‌فاکتور",
             description:
-              "قطعات تولید برای ارسال مجدد نگه داشته شد و تا ارسال مجدد در صف‌ها نمایش داده نمی‌شود",
+              "قطعات تولید (با هر وضعیتی) برای ارسال مجدد نگه داشته شد و تا ارسال مجدد در صف‌ها نمایش داده نمی‌شود",
           },
         })
       }
