@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
+import DatePicker, { DateObject } from "react-multi-date-picker"
+import persian from "react-date-object/calendars/persian"
+import persian_fa from "react-date-object/locales/persian_fa"
 
 type Report = {
   range?: { StartDate: string; EndDate: string; days: number }
@@ -42,12 +45,49 @@ const TABS: { key: TabKey; label: string; desc: string }[] = [
   },
 ]
 
+const BG =
+  "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')"
+
 function formatRial(n: number) {
   return Math.round(n || 0).toLocaleString("fa-IR")
 }
 
+function defaultFrom() {
+  return new DateObject({ calendar: persian, locale: persian_fa }).subtract(
+    45,
+    "days"
+  )
+}
+
+function defaultTo() {
+  return new DateObject({ calendar: persian, locale: persian_fa })
+}
+
+function toIsoDayStart(d: DateObject | null) {
+  if (!d) return null
+  const x = d.toDate()
+  x.setHours(0, 0, 0, 0)
+  return x.toISOString()
+}
+
+function toIsoDayEnd(d: DateObject | null) {
+  if (!d) return null
+  const x = d.toDate()
+  x.setHours(23, 59, 59, 999)
+  return x.toISOString()
+}
+
+function daysBetween(from: DateObject | null, to: DateObject | null) {
+  if (!from || !to) return 45
+  const a = from.toDate().getTime()
+  const b = to.toDate().getTime()
+  const diff = Math.max(1, Math.round((b - a) / (24 * 60 * 60 * 1000)) + 1)
+  return Math.min(400, diff)
+}
+
 export default function FinanceReconcilePage() {
-  const [days, setDays] = useState(45)
+  const [fromDate, setFromDate] = useState<DateObject | null>(null)
+  const [toDate, setToDate] = useState<DateObject | null>(null)
   const [loading, setLoading] = useState(false)
   const [applying, setApplying] = useState(false)
   const [report, setReport] = useState<Report | null>(null)
@@ -56,6 +96,11 @@ export default function FinanceReconcilePage() {
   const [me, setMe] = useState<{ role: string } | null>(null)
 
   const canRun = me?.role === "finance" || me?.role === "admin"
+
+  useEffect(() => {
+    setFromDate(defaultFrom())
+    setToDate(defaultTo())
+  }, [])
 
   useEffect(() => {
     ;(async () => {
@@ -69,15 +114,30 @@ export default function FinanceReconcilePage() {
     })()
   }, [])
 
+  const rangeQuery = () => {
+    const from = toIsoDayStart(fromDate)
+    const to = toIsoDayEnd(toDate)
+    const days = daysBetween(fromDate, toDate)
+    const q = new URLSearchParams()
+    q.set("days", String(days))
+    if (from) q.set("from", from)
+    if (to) q.set("to", to)
+    return q.toString()
+  }
+
   const runReport = async () => {
     if (!canRun) {
       alert("فقط مالی/مدیر")
       return
     }
+    if (!fromDate || !toDate) {
+      alert("بازه تاریخ را انتخاب کنید")
+      return
+    }
     setLoading(true)
     setError("")
     try {
-      const res = await fetch(`/api/finance/reconcile?days=${days}`)
+      const res = await fetch(`/api/finance/reconcile?${rangeQuery()}`)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "خطا")
       setReport(data)
@@ -102,7 +162,13 @@ export default function FinanceReconcilePage() {
       const res = await fetch("/api/finance/reconcile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ days, apply: true, force }),
+        body: JSON.stringify({
+          days: daysBetween(fromDate, toDate),
+          from: toIsoDayStart(fromDate),
+          to: toIsoDayEnd(toDate),
+          apply: true,
+          force,
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "خطا")
@@ -110,11 +176,7 @@ export default function FinanceReconcilePage() {
       if (data.refused) {
         alert(data.refused)
       } else {
-        alert(
-          data.applied
-            ? "اصلاح وضعیت‌ها اعمال شد"
-            : "چیزی اعمال نشد"
-        )
+        alert(data.applied ? "اصلاح وضعیت‌ها اعمال شد" : "چیزی اعمال نشد")
       }
     } catch (e: any) {
       setError(e.message || "خطا")
@@ -141,54 +203,74 @@ export default function FinanceReconcilePage() {
 
   return (
     <div
-      className="min-h-screen p-4 md:p-6 bg-slate-50"
+      className="min-h-screen p-4 md:p-6 bg-cover bg-center bg-fixed"
       dir="rtl"
-      style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}
+      style={{
+        fontFamily: "Vazirmatn, Tahoma, sans-serif",
+        backgroundImage: BG,
+      }}
     >
-      <div className="max-w-[1400px] mx-auto">
+      <div className="pointer-events-none fixed inset-0 bg-black/25" />
+
+      <div className="relative z-10 max-w-[1400px] mx-auto">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
           <div>
             <h1 className="text-3xl font-black text-blue-950">
               گزارش مغایرت‌گیری
             </h1>
-            <p className="text-base text-blue-800 mt-1">
+            <p className="text-base text-blue-900 mt-1 font-semibold">
               مقایسه فاکتورهای اخوان با سپیدار (شماره، طرف‌حساب، مبلغ)
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Link
               href="/"
-              className="rounded-xl border px-4 py-2.5 font-bold"
+              className="rounded-xl border border-white/40 bg-white/80 px-4 py-2.5 font-bold"
             >
               داشبورد
             </Link>
             <Link
               href="/finance/convert"
-              className="rounded-xl border px-4 py-2.5 font-bold"
+              className="rounded-xl border border-white/40 bg-white/80 px-4 py-2.5 font-bold"
             >
               کانورت
             </Link>
             <Link
               href="/finance/deposits"
-              className="rounded-xl border px-4 py-2.5 font-bold"
+              className="rounded-xl border border-white/40 bg-white/80 px-4 py-2.5 font-bold"
             >
               واریزی‌ها
             </Link>
           </div>
         </div>
 
-        <div className="rounded-2xl border bg-white p-4 mb-4 flex flex-wrap items-end gap-3">
+        <div className="rounded-2xl border border-teal-500/25 bg-white/90 backdrop-blur-xl p-4 mb-4 flex flex-wrap items-end gap-3 shadow">
           <div>
-            <label className="text-sm font-bold block mb-1">
-              بازه بررسی (روز اخیر)
+            <label className="text-sm font-bold block mb-1 text-blue-900">
+              از تاریخ
             </label>
-            <input
-              type="number"
-              min={1}
-              max={400}
-              className="w-28 rounded-xl border px-3 py-2.5 text-base"
-              value={days}
-              onChange={(e) => setDays(Number(e.target.value) || 45)}
+            <DatePicker
+              value={fromDate}
+              onChange={(d) => setFromDate(d as DateObject)}
+              calendar={persian}
+              locale={persian_fa}
+              calendarPosition="bottom-right"
+              inputClass="w-40 rounded-xl border border-teal-400 px-3 py-2.5 text-base font-bold"
+              containerClassName="w-auto"
+            />
+          </div>
+          <div>
+            <label className="text-sm font-bold block mb-1 text-blue-900">
+              تا تاریخ
+            </label>
+            <DatePicker
+              value={toDate}
+              onChange={(d) => setToDate(d as DateObject)}
+              calendar={persian}
+              locale={persian_fa}
+              calendarPosition="bottom-right"
+              inputClass="w-40 rounded-xl border border-teal-400 px-3 py-2.5 text-base font-bold"
+              containerClassName="w-auto"
             />
           </div>
           <button
@@ -202,6 +284,7 @@ export default function FinanceReconcilePage() {
             onClick={() => applyFix(false)}
             disabled={applying || !report || !canRun}
             className="rounded-xl bg-teal-600 text-white font-bold px-5 py-2.5 disabled:opacity-50"
+            title="اگر تعداد حذف‌شده زیاد باشد ممکن است رد شود"
           >
             {applying ? "..." : "اعمال اصلاح وضعیت"}
           </button>
@@ -209,6 +292,7 @@ export default function FinanceReconcilePage() {
             onClick={() => applyFix(true)}
             disabled={applying || !report || !canRun}
             className="rounded-xl bg-amber-600 text-white font-bold px-5 py-2.5 disabled:opacity-50"
+            title="حتی با تعداد زیاد مغایرت، اصلاح را اجباری اعمال می‌کند"
           >
             اعمال با force
           </button>
@@ -229,24 +313,30 @@ export default function FinanceReconcilePage() {
         {report && (
           <>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-4">
-              <div className="rounded-xl bg-white border p-3 text-center">
+              <div className="rounded-xl bg-white/90 border border-teal-500/20 p-3 text-center">
                 <p className="text-xs font-bold text-gray-600">خوانده از سپیدار</p>
-                <p className="text-xl font-black">{report.sepidarInvoicesRead ?? 0}</p>
+                <p className="text-xl font-black">
+                  {report.sepidarInvoicesRead ?? 0}
+                </p>
               </div>
-              <div className="rounded-xl bg-white border p-3 text-center">
+              <div className="rounded-xl bg-white/90 border border-teal-500/20 p-3 text-center">
                 <p className="text-xs font-bold text-gray-600">بررسی اخوان</p>
-                <p className="text-xl font-black">{report.akhavanInvoicesChecked ?? 0}</p>
+                <p className="text-xl font-black">
+                  {report.akhavanInvoicesChecked ?? 0}
+                </p>
               </div>
-              <div className="rounded-xl bg-white border p-3 text-center">
+              <div className="rounded-xl bg-white/90 border border-teal-500/20 p-3 text-center">
                 <p className="text-xs font-bold text-gray-600">SUCCESS بررسی‌شده</p>
                 <p className="text-xl font-black">{report.sentChecked ?? 0}</p>
               </div>
-              <div className="rounded-xl bg-green-50 border p-3 text-center">
+              <div className="rounded-xl bg-green-50/95 border border-green-200 p-3 text-center">
                 <p className="text-xs font-bold text-gray-600">تطبیق سالم</p>
-                <p className="text-xl font-black text-green-700">{report.matchedOk ?? 0}</p>
+                <p className="text-xl font-black text-green-700">
+                  {report.matchedOk ?? 0}
+                </p>
               </div>
-              <div className="rounded-xl bg-white border p-3 text-center col-span-2">
-                <p className="text-xs font-bold text-gray-600">بازه</p>
+              <div className="rounded-xl bg-white/90 border border-teal-500/20 p-3 text-center col-span-2">
+                <p className="text-xs font-bold text-gray-600">بازه API</p>
                 <p className="text-sm font-bold" dir="ltr">
                   {report.range?.StartDate} → {report.range?.EndDate}
                 </p>
@@ -262,7 +352,7 @@ export default function FinanceReconcilePage() {
                   className={`rounded-xl px-4 py-2 font-bold border ${
                     tab === t.key
                       ? "bg-teal-600 text-white border-teal-700"
-                      : "bg-white text-blue-900 border-teal-200"
+                      : "bg-white/90 text-blue-900 border-teal-200"
                   }`}
                 >
                   {t.label}{" "}
@@ -271,11 +361,11 @@ export default function FinanceReconcilePage() {
               ))}
             </div>
 
-            <p className="text-sm text-blue-800 mb-2">
+            <p className="text-sm text-blue-900 mb-2 font-semibold">
               {TABS.find((t) => t.key === tab)?.desc}
             </p>
 
-            <div className="rounded-2xl border overflow-auto bg-white shadow-sm">
+            <div className="rounded-2xl border border-teal-500/25 overflow-auto bg-white/95 shadow-sm backdrop-blur">
               <table className="min-w-full text-base">
                 <thead className="bg-teal-700 text-white">
                   <tr>
@@ -347,9 +437,7 @@ export default function FinanceReconcilePage() {
                           </td>
                           <td
                             className={`p-3 text-center font-black ${
-                              Math.abs(r.diff || 0) > 1
-                                ? "text-red-700"
-                                : ""
+                              Math.abs(r.diff || 0) > 1 ? "text-red-700" : ""
                             }`}
                             dir="ltr"
                           >
@@ -373,16 +461,15 @@ export default function FinanceReconcilePage() {
               </table>
             </div>
 
-            <p className="text-sm text-gray-600 mt-3">
-              تاریخ و کالا در نسخه بعدی اضافه می‌شود. حداکثر ۲۰۰ ردیف در هر دسته
-              نمایش داده می‌شود.
+            <p className="text-sm text-blue-950/80 mt-3 font-semibold">
+              حداکثر ۲۰۰ ردیف در هر دسته نمایش داده می‌شود.
             </p>
           </>
         )}
 
         {!report && !loading && !error && (
-          <p className="text-center text-gray-500 py-12 text-lg">
-            بازه را انتخاب و «اجرای گزارش» را بزنید
+          <p className="text-center text-blue-950 font-bold py-12 text-lg bg-white/70 rounded-2xl border border-white/40">
+            بازه تاریخ را انتخاب و «اجرای گزارش» را بزنید
           </p>
         )}
       </div>

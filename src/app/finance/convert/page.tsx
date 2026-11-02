@@ -5,6 +5,7 @@ import Link from "next/link"
 import DatePicker, { DateObject } from "react-multi-date-picker"
 import persian from "react-date-object/calendars/persian"
 import persian_fa from "react-date-object/locales/persian_fa"
+import gregorian from "react-date-object/calendars/gregorian"
 // ⚠ مسیر را مطابق محل این فایل تنظیم کنید (همان فایل لیست مشتریان که ثبت سفارش و فاکتورها هم می‌خوانند)
 import customersSeedRaw from "../../customers/customers-seed.json"
 
@@ -60,7 +61,10 @@ const seedCodeByName = (() => {
 })()
 
 // اگر در دیتابیس کد واقعی ثبت شده همان؛ وگرنه (خالی یا کد خودکارِ C-عدد) از لیست قدیمی به‌اسم پیدا می‌شود
-function resolveCustomerCode(name: string | null | undefined, dbCode?: string | null): string {
+function resolveCustomerCode(
+  name: string | null | undefined,
+  dbCode?: string | null
+): string {
   const c = String(dbCode || "").trim()
   if (c && !/^C-\d{8,}$/.test(c)) return c
   return seedCodeByName.get(normalizeText(name)) || ""
@@ -80,6 +84,34 @@ function formatFaDate(iso?: string | null) {
     }).format("YYYY/MM/DD")
   } catch {
     return "—"
+  }
+}
+
+/** ابتدای همان روز تقویمی انتخاب‌شده، به‌وقت تهران */
+function dayStartIsoTehran(dObj: any): string | null {
+  if (!dObj) return null
+  try {
+    const g = new DateObject(dObj).convert(gregorian)
+    const y = g.year
+    const m = String(g.month.number).padStart(2, "0")
+    const day = String(g.day).padStart(2, "0")
+    return new Date(`${y}-${m}-${day}T00:00:00+03:30`).toISOString()
+  } catch {
+    return null
+  }
+}
+
+/** انتهای همان روز تقویمی انتخاب‌شده، به‌وقت تهران */
+function dayEndIsoTehran(dObj: any): string | null {
+  if (!dObj) return null
+  try {
+    const g = new DateObject(dObj).convert(gregorian)
+    const y = g.year
+    const m = String(g.month.number).padStart(2, "0")
+    const day = String(g.day).padStart(2, "0")
+    return new Date(`${y}-${m}-${day}T23:59:59.999+03:30`).toISOString()
+  } catch {
+    return null
   }
 }
 
@@ -144,27 +176,29 @@ export default function FinanceConvertPage() {
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
   const [syncing, setSyncing] = useState(false)
-  const [me, setMe] = useState<{ role: string; displayName: string } | null>(null)
+  const [me, setMe] = useState<{ role: string; displayName: string } | null>(
+    null
+  )
   const [filtersReady, setFiltersReady] = useState(false)
 
   const canSync = me?.role === "finance" || me?.role === "admin"
 
-  // بارگذاری لیست: بازه‌ی تاریخ از ابتدای روز «از» تا انتهای روز «تا»؛ جستجوی متنی سمت مرورگر انجام می‌شود
-  const loadWith = async (f: any, t: any, fNo: string, tNo: string, st: string) => {
+  // بارگذاری لیست: بازه‌ی تاریخ از ابتدای روز «از» تا انتهای روز «تا» (به‌وقت تهران)
+  const loadWith = async (
+    f: any,
+    t: any,
+    fNo: string,
+    tNo: string,
+    st: string
+  ) => {
     setLoading(true)
     setSelected([])
     try {
       const params = new URLSearchParams()
-      if (f?.toDate) {
-        const d = f.toDate()
-        d.setHours(0, 0, 0, 0)
-        params.set("from", d.toISOString())
-      }
-      if (t?.toDate) {
-        const d = t.toDate()
-        d.setHours(23, 59, 59, 999)
-        params.set("to", d.toISOString())
-      }
+      const fromIso = dayStartIsoTehran(f)
+      const toIso = dayEndIsoTehran(t)
+      if (fromIso) params.set("from", fromIso)
+      if (toIso) params.set("to", toIso)
       if (fNo.trim()) params.set("fromNo", fNo.trim())
       if (tNo.trim()) params.set("toNo", tNo.trim())
       if (st !== "همه") params.set("syncStatus", st)
@@ -210,9 +244,17 @@ export default function FinanceConvertPage() {
         if (typeof s.fromNo === "string") fNo = s.fromNo
         if (typeof s.toNo === "string") tNo = s.toNo
         if (typeof s.syncStatus === "string") st = s.syncStatus
-        if (s.dayStamp === new Date().toDateString() && "fromDate" in s && "toDate" in s) {
+        if (
+          s.dayStamp === new Date().toDateString() &&
+          "fromDate" in s &&
+          "toDate" in s
+        ) {
           const toDO = (iso: string) =>
-            new DateObject({ date: new Date(iso), calendar: persian, locale: persian_fa })
+            new DateObject({
+              date: new Date(iso),
+              calendar: persian,
+              locale: persian_fa,
+            })
           f = s.fromDate ? toDO(s.fromDate) : null
           t = s.toDate ? toDO(s.toDate) : null
         }
@@ -256,7 +298,9 @@ export default function FinanceConvertPage() {
     return rows.filter((r) => {
       const code = resolveCustomerCode(r.customerName, r.customerCode)
       const haystack = normalizeText(
-        [r.customerName, code, r.orderNumber, r.sepidarInvoiceId].filter(Boolean).join(" ")
+        [r.customerName, code, r.orderNumber, r.sepidarInvoiceId]
+          .filter(Boolean)
+          .join(" ")
       )
       return tokens.every((t) => haystack.includes(t))
     })
@@ -268,10 +312,12 @@ export default function FinanceConvertPage() {
     () => selected.filter((id) => visibleIds.includes(id)),
     [selected, visibleIds]
   )
-  const allSelected = visibleIds.length > 0 && selectedVisible.length === visibleIds.length
+  const allSelected =
+    visibleIds.length > 0 && selectedVisible.length === visibleIds.length
 
   const toggleAll = () => {
-    if (allSelected) setSelected((prev) => prev.filter((id) => !visibleIds.includes(id)))
+    if (allSelected)
+      setSelected((prev) => prev.filter((id) => !visibleIds.includes(id)))
     else setSelected((prev) => Array.from(new Set([...prev, ...visibleIds])))
   }
 
@@ -345,9 +391,13 @@ export default function FinanceConvertPage() {
       <div className="pointer-events-none fixed inset-0 bg-black/5" />
 
       <div className="relative z-10 max-w-[1400px] mx-auto">
-        <div className={`${glassCard} flex flex-wrap items-center justify-between gap-3 mb-4 p-4`}>
+        <div
+          className={`${glassCard} flex flex-wrap items-center justify-between gap-3 mb-4 p-4`}
+        >
           <div>
-            <h1 className="text-3xl font-black text-blue-950">کانورت فاکتورها</h1>
+            <h1 className="text-3xl font-black text-blue-950">
+              کانورت فاکتورها
+            </h1>
             <p className="text-base font-semibold text-blue-900 mt-1">
               ارسال دستی فاکتورهای اخوان به سپیدار | فیلتر تاریخ و بازه شماره
             </p>
@@ -375,7 +425,9 @@ export default function FinanceConvertPage() {
         </div>
 
         {/* فیلتر */}
-        <div className={`${glassCard} p-4 mb-4 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3`}>
+        <div
+          className={`${glassCard} p-4 mb-4 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3`}
+        >
           <div className="relative z-30">
             <label className={labelClass}>از تاریخ</label>
             <DatePicker
@@ -459,7 +511,9 @@ export default function FinanceConvertPage() {
                   onClick={() => syncSelected(false)}
                   className="rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold px-5 py-2.5 disabled:opacity-50 transition"
                 >
-                  {syncing ? "در حال ارسال..." : `ارسال انتخاب‌شده‌ها (${selectedVisible.length})`}
+                  {syncing
+                    ? "در حال ارسال..."
+                    : `ارسال انتخاب‌شده‌ها (${selectedVisible.length})`}
                 </button>
                 <button
                   disabled={syncing || !selectedVisible.length}
@@ -471,7 +525,8 @@ export default function FinanceConvertPage() {
               </>
             )}
             <span className="text-xs font-semibold text-blue-700 mr-2">
-              جستجوی نام/کد فقط بین فاکتورهای بازه‌ی تاریخ و شماره‌ی انتخاب‌شده است.
+              جستجوی نام/کد فقط بین فاکتورهای بازه‌ی تاریخ و شماره‌ی انتخاب‌شده
+              است.
             </span>
           </div>
         </div>
@@ -479,14 +534,20 @@ export default function FinanceConvertPage() {
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
           <div className={`${glassCard} p-4 text-center`}>
             <p className="text-sm font-bold text-blue-900">تعداد در فیلتر</p>
-            <p className="text-2xl font-black text-blue-950">{visibleRows.length}</p>
+            <p className="text-2xl font-black text-blue-950">
+              {visibleRows.length}
+            </p>
           </div>
           <div className={`${glassCard} p-4 text-center`}>
             <p className="text-sm font-bold text-blue-900">انتخاب‌شده</p>
-            <p className="text-2xl font-black text-teal-700">{selectedVisible.length}</p>
+            <p className="text-2xl font-black text-teal-700">
+              {selectedVisible.length}
+            </p>
           </div>
           <div className={`${glassCard} p-4 text-center`}>
-            <p className="text-sm font-bold text-blue-900">جمع مبلغ انتخابی (ریال)</p>
+            <p className="text-sm font-bold text-blue-900">
+              جمع مبلغ انتخابی (ریال)
+            </p>
             <p className="text-xl font-black text-green-700" dir="ltr">
               {formatRial(totalSelected)}
             </p>
@@ -495,7 +556,9 @@ export default function FinanceConvertPage() {
 
         <div className={`${glassCard} p-2 overflow-auto`}>
           {loading ? (
-            <p className="p-8 text-center text-lg font-bold text-blue-700">در حال بارگذاری...</p>
+            <p className="p-8 text-center text-lg font-bold text-blue-700">
+              در حال بارگذاری...
+            </p>
           ) : (
             <table className="min-w-full text-base text-blue-900 border-collapse">
               <thead className="bg-teal-700 text-white">
@@ -525,7 +588,10 @@ export default function FinanceConvertPage() {
                     className="border-b border-teal-500/10 bg-white/30 hover:bg-teal-400/20 cursor-pointer transition-colors"
                     onClick={() => toggleOne(r.id)}
                   >
-                    <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                    <td
+                      className="p-3 text-center"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <input
                         type="checkbox"
                         checked={selected.includes(r.id)}
@@ -539,14 +605,20 @@ export default function FinanceConvertPage() {
                     <td className="p-3 text-center whitespace-nowrap">
                       {formatFaDate(r.invoicedAt || r.orderDate)}
                     </td>
-                    <td className="p-3 text-center text-sm font-mono font-semibold text-teal-700" dir="ltr">
-                      {resolveCustomerCode(r.customerName, r.customerCode) || "—"}
+                    <td
+                      className="p-3 text-center text-sm font-mono font-semibold text-teal-700"
+                      dir="ltr"
+                    >
+                      {resolveCustomerCode(r.customerName, r.customerCode) ||
+                        "—"}
                     </td>
                     <td className="p-3 font-bold">{r.customerName}</td>
                     <td className="p-3 text-center font-black" dir="ltr">
                       {formatRial(r.totalAmount)}
                     </td>
-                    <td className="p-3 text-center">{syncBadge(r.sepidarSyncStatus)}</td>
+                    <td className="p-3 text-center">
+                      {syncBadge(r.sepidarSyncStatus)}
+                    </td>
                     <td className="p-3 text-center text-sm" dir="ltr">
                       {r.sepidarInvoiceId || "—"}
                     </td>
@@ -557,7 +629,10 @@ export default function FinanceConvertPage() {
                 ))}
                 {visibleRows.length === 0 && (
                   <tr>
-                    <td colSpan={10} className="p-8 text-center text-blue-700 font-bold">
+                    <td
+                      colSpan={10}
+                      className="p-8 text-center text-blue-700 font-bold"
+                    >
                       فاکتوری در این فیلتر نیست
                     </td>
                   </tr>

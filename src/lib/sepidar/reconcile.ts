@@ -10,7 +10,6 @@ function toLatinDigits(s: string) {
     .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
 }
 
-// شماره‌ی فاکتور در سپیدار = شماره‌ی سفارش اخوان
 function invoiceNumberOf(orderNumber: string) {
   const n = parseInt(toLatinDigits(String(orderNumber)).replace(/\D/g, ""), 10)
   return Number.isFinite(n) && n > 0 ? n : null
@@ -25,25 +24,57 @@ function tehranDay(d: Date) {
   }).format(d)
 }
 
+function parseBoundary(iso: string | undefined | null, endOfDay: boolean): Date | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return null
+  if (endOfDay) d.setHours(23, 59, 59, 999)
+  else d.setHours(0, 0, 0, 0)
+  return d
+}
+
 const numOf = (inv: any) => Number(inv?.Number ?? inv?.number)
 const partyOf = (inv: any) => Number(inv?.CustomerPartyRef ?? inv?.customerPartyRef)
 const idOf = (inv: any) => inv?.InvoiceId ?? inv?.invoiceId ?? inv?.Id ?? inv?.id ?? null
 const netOf = (inv: any) => Number(inv?.NetPrice ?? inv?.netPrice)
 
 /**
- * تطبیق وضعیت ارسال سفارش‌های اخوان با فاکتورهای واقعی سپیدار (بر اساس شماره‌ی فاکتور).
- * apply=false فقط گزارش می‌دهد و چیزی را تغییر نمی‌دهد.
- * فقط سفارش‌های «فاکتور» که تاریخشان داخل بازه‌ی days روز اخیر است بررسی می‌شوند.
+ * apply=false فقط گزارش؛ apply=true اصلاح وضعیت در اخوان
+ * from/to: بازه دقیق (ISO). اگر نبود، days روز اخیر تا الان.
  */
 export async function reconcileSepidarInvoices(opts: {
   apply: boolean
   days?: number
   force?: boolean
+  from?: string | null
+  to?: string | null
 }) {
-  const days = Math.min(Math.max(Math.floor(opts.days ?? 45), 1), 400)
   const now = new Date()
-  const startDate = new Date(now.getTime() - days * 86_400_000)
-  const endDate = new Date(now.getTime() + 2 * 86_400_000)
+  let startDate = parseBoundary(opts.from, false)
+  let endDate = parseBoundary(opts.to, true)
+
+  if (!startDate || !endDate) {
+    const days = Math.min(Math.max(Math.floor(opts.days ?? 45), 1), 400)
+    startDate = new Date(now.getTime() - days * 86_400_000)
+    startDate.setHours(0, 0, 0, 0)
+    endDate = new Date(now.getTime() + 2 * 86_400_000)
+    endDate.setHours(23, 59, 59, 999)
+  }
+
+  if (endDate < startDate) {
+    const t = startDate
+    startDate = endDate
+    endDate = t
+  }
+
+  const spanDays = Math.min(
+    400,
+    Math.max(
+      1,
+      Math.round((endDate.getTime() - startDate.getTime()) / 86_400_000) + 1
+    )
+  )
+
   const StartDate = `${tehranDay(startDate)}T00:00:00`
   const EndDate = `${tehranDay(endDate)}T23:59:59`
 
@@ -51,19 +82,22 @@ export async function reconcileSepidarInvoices(opts: {
     where: {
       status: "فاکتور",
       OR: [
-        { invoicedAt: { gte: startDate } },
-        { invoicedAt: null, orderDate: { gte: startDate } },
+        { invoicedAt: { gte: startDate, lte: endDate } },
+        {
+          invoicedAt: null,
+          orderDate: { gte: startDate, lte: endDate },
+        },
       ],
     },
     include: { customer: true, items: true },
   })
 
-  const sentCount = orders.filter((o: any) => o.sepidarSyncStatus === "SUCCESS").length
+  const sentCount = orders.filter(
+    (o: any) => o.sepidarSyncStatus === "SUCCESS"
+  ).length
 
-  // فاکتورهای سپیدار در همین بازه
   const sepidarRows = await getAll(INVOICES_PATH, { StartDate, EndDate }, 200)
 
-  // اگر هیچ فاکتوری خوانده نشد، احتمالاً اتصال یا دسترسی مشکل دارد؛ هیچ‌چیز را تغییر نمی‌دهیم
   if (sepidarRows.length === 0 && sentCount > 0) {
     throw new Error(
       "هیچ فاکتوری از سپیدار خوانده نشد؛ برای احتیاط چیزی بررسی یا تغییر نکرد. اتصال و دسترسی سپیدار را چک کنید."
@@ -95,17 +129,19 @@ export async function reconcileSepidarInvoices(opts: {
     const myParty: number | null = o.customer?.sepidarPartyRef ?? null
     const inv = (myParty && list.find((i) => partyOf(i) === myParty)) || null
     const status: string | null = o.sepidarSyncStatus ?? null
-    const base = { orderNumber: o.orderNumber, customer: o.customer?.name ?? null, status }
+    const base = {
+      orderNumber: o.orderNumber,
+      customer: o.customer?.name ?? null,
+      status,
+    }
 
     if (status === "SUCCESS") {
       if (list.length === 0) {
-        // در اخوان «ارسال‌شده» است ولی در سپیدار نیست (حذف شده)
         missingInSepidar.push({ ...base, expectedNumber: num })
         toReset.push(o.id)
         continue
       }
       if (!inv) {
-        // شماره در سپیدار هست ولی روی طرف‌حساب دیگری (یا مشتری اخوان لینک ندارد)
         wrongParty.push({
           ...base,
           sepidarInvoiceId: idOf(list[0]),
@@ -126,15 +162,15 @@ export async function reconcileSepidarInvoices(opts: {
         })
       }
     } else if (inv) {
-      // در اخوان «ارسال‌نشده/خطا/در حال ارسال» است ولی فاکتورش با همان شماره و همان طرف‌حساب در سپیدار هست
       markableAsSent.push({ ...base, sepidarInvoiceId: idOf(inv) })
       toMark.push({ id: o.id, invoiceId: idOf(inv) })
     }
   }
 
-  // اگر تعداد زیادی «حذف‌شده» پیدا شود، احتمال خواندن ناقص لیست سپیدار هست؛ بدون force ریست نمی‌کنیم
   const suspicious =
-    missingInSepidar.length >= 5 && sentCount > 0 && missingInSepidar.length / sentCount > 0.5
+    missingInSepidar.length >= 5 &&
+    sentCount > 0 &&
+    missingInSepidar.length / sentCount > 0.5
 
   let applied = false
   let refused: string | null = null
@@ -161,7 +197,8 @@ export async function reconcileSepidarInvoices(opts: {
           where: { id: m.id },
           data: {
             sepidarSyncStatus: "SUCCESS",
-            sepidarInvoiceId: m.invoiceId != null ? String(m.invoiceId) : null,
+            sepidarInvoiceId:
+              m.invoiceId != null ? String(m.invoiceId) : null,
             sepidarSyncedAt: new Date(),
             sepidarSyncError: null,
           },
@@ -172,16 +209,28 @@ export async function reconcileSepidarInvoices(opts: {
   }
 
   return {
-    range: { StartDate, EndDate, days },
+    range: { StartDate, EndDate, days: spanDays },
     sepidarInvoicesRead: sepidarRows.length,
     akhavanInvoicesChecked: orders.length,
     sentChecked: sentCount,
     matchedOk,
     applied,
     refused,
-    missingInSepidar: { count: missingInSepidar.length, rows: missingInSepidar.slice(0, 200) },
-    markableAsSent: { count: markableAsSent.length, rows: markableAsSent.slice(0, 200) },
-    wrongParty: { count: wrongParty.length, rows: wrongParty.slice(0, 200) },
-    priceDiff: { count: priceDiff.length, rows: priceDiff.slice(0, 200) },
+    missingInSepidar: {
+      count: missingInSepidar.length,
+      rows: missingInSepidar.slice(0, 200),
+    },
+    markableAsSent: {
+      count: markableAsSent.length,
+      rows: markableAsSent.slice(0, 200),
+    },
+    wrongParty: {
+      count: wrongParty.length,
+      rows: wrongParty.slice(0, 200),
+    },
+    priceDiff: {
+      count: priceDiff.length,
+      rows: priceDiff.slice(0, 200),
+    },
   }
 }

@@ -13,11 +13,11 @@ export async function GET(req: NextRequest) {
     }
 
     const { searchParams } = new URL(req.url)
+    const from = searchParams.get("from")
+    const to = searchParams.get("to")
     const days = Number(searchParams.get("days") || 45)
     const apply = searchParams.get("apply") === "1"
-    const force = searchParams.get("force") === "1"
 
-    // GET همیشه فقط گزارش (امن‌تر)
     if (apply) {
       return NextResponse.json(
         { error: "برای اعمال تغییرات از POST استفاده کنید" },
@@ -29,6 +29,8 @@ export async function GET(req: NextRequest) {
       apply: false,
       days,
       force: false,
+      from,
+      to,
     })
 
     return NextResponse.json(report)
@@ -52,6 +54,8 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json().catch(() => ({}))
+    const from = body.from as string | undefined
+    const to = body.to as string | undefined
     const days = Number(body.days || 45)
     const apply = Boolean(body.apply)
     const force = Boolean(body.force)
@@ -60,6 +64,8 @@ export async function POST(req: NextRequest) {
       apply,
       days,
       force,
+      from,
+      to,
     })
 
     return NextResponse.json(report)
