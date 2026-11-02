@@ -576,9 +576,11 @@ async function updatePieceInPlace(
     stationId: r.stationId,
   }))
   const have = new Set(keep.map((r) => r.stationId))
+  const addedStationIds: string[] = []
   for (const sid of wanted) {
     if (have.has(sid)) continue
     routeChanged = true
+    addedStationIds.push(sid)
     const wi = wanted.indexOf(sid)
     let pos = finalRows.findIndex((fr) => wanted.indexOf(fr.stationId) > wi)
     if (pos === -1) pos = finalRows.length
@@ -617,6 +619,32 @@ async function updatePieceInPlace(
     }
   }
 
+  // قطعه‌ای که قبلاً به «انبار آماده تحویل» رسیده و حالا خدمت جدیدی گرفته:
+  // ایستگاه‌های انبارِ بعد از خدمت جدید دوباره «در انتظار» می‌شوند تا بعد از انجام خدمت، دوباره به انبار برگردد.
+  let reopenedWarehouse = false
+  if (addedStationIds.length > 0) {
+    const nameById = new Map(allStations.map((x) => [x.id, x.name]))
+    const fresh = await prisma.productionItemStation.findMany({
+      where: { productionItemId: p.id },
+      orderBy: { sequence: "asc" },
+    })
+    const firstNewSeq = Math.min(
+      ...fresh
+        .filter((r: any) => addedStationIds.includes(r.stationId))
+        .map((r: any) => r.sequence)
+    )
+    for (const r of fresh) {
+      if (r.sequence <= firstNewSeq) continue
+      if (!String(nameById.get(r.stationId) || "").includes("انبار")) continue
+      if (!String(r.status || "").replace(/\u200c/g, " ").includes("تکمیل")) continue
+      await prisma.productionItemStation.update({
+        where: { id: r.id },
+        data: { status: "در انتظار", quantityOut: 0 },
+      })
+      reopenedWarehouse = true
+    }
+  }
+
   const relabel = labelChanged || routeChanged
   await prisma.productionItem.update({
     where: { id: p.id },
@@ -624,7 +652,11 @@ async function updatePieceInPlace(
       orderItemId: si.id,
       thickness: SIG_PREFIX + itemSignature(si),
       // قطعه‌ای که قبلاً تمام‌شده بود و حالا ایستگاه جدید دارد دوباره در جریان است
-      ...(routeChanged && p.status === "تکمیل‌شده" ? { status: "در حال تولید" } : {}),
+      ...(routeChanged &&
+      (reopenedWarehouse || addedStationIds.length > 0) &&
+      String(p.status || "").replace(/\u200c/g, " ") === "تکمیل شده"
+        ? { status: "در حال تولید" }
+        : {}),
       // لیبل چاپ‌شده باید دوباره (با همان بارکد) چاپ شود
       ...(relabel && p.labelStatus === "چاپ‌شده"
         ? { labelStatus: "مجاز چاپ مجدد", labelReprintAllowed: true }
