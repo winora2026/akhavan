@@ -40,7 +40,7 @@ type CuttingItem = {
   // قطعه‌ی سفارش اجرتی (سریال ۹۰۰xxx): در تب «اجرتی» نمایش داده می‌شود
   isRental?: boolean
   // قطعه‌ای که در ارسال مجدد فاکتور ویرایش‌شده اضافه یا عوض شده (تا چاپ لیبل)
-  changeTag?: "جدید" | "ویرایش‌شده" | null
+  changeTag?: "جدید" | "ویرایش‌شده" | "اصلاح لیبل" | null
 }
 
 type OrderPiece = {
@@ -1837,9 +1837,9 @@ export default function CuttingPlanningPage() {
                     ? "bg-rose-600 text-white border-rose-700"
                     : "bg-white/60 text-rose-700 border-rose-300 hover:bg-rose-50"
                 }`}
-                title="قطعاتی که بعد از ویرایش فاکتور اضافه یا عوض شده‌اند"
+                title="قطعات جدید، ویرایش‌شده یا دارای لیبل اصلاح‌شده بعد از ارسال مجدد فاکتور"
               >
-                {changeOnly ? "نمایش همه" : `فقط جدید/ویرایش‌شده (${changedCount})`}
+                {changeOnly ? "نمایش همه" : `فقط تغییرات فاکتور (${changedCount})`}
               </button>
               <button
                 type="button"
@@ -1849,9 +1849,9 @@ export default function CuttingPlanningPage() {
                   )
                 }
                 className="rounded-xl border border-rose-300 bg-white/60 px-5 py-2.5 font-bold text-rose-700 hover:bg-rose-50"
-                title="فقط قطعات جدید/ویرایش‌شده‌ی لیست فعلی را انتخاب می‌کند (برای چاپ برگه و لیبل)"
+                title="فقط قطعات تغییرکرده‌ی لیست فعلی را انتخاب می‌کند (برای چاپ لیبل؛ برگه‌ی برش فقط قطعات برش‌نخورده را می‌گیرد)"
               >
-                انتخاب جدید/ویرایش‌شده‌ها
+                انتخاب تغییرات فاکتور
               </button>
             </>
           )}
@@ -1967,9 +1967,11 @@ export default function CuttingPlanningPage() {
                           className={`mr-2 rounded-full px-2 py-0.5 text-xs font-bold ${
                             item.changeTag === "جدید"
                               ? "bg-rose-100 text-rose-800"
-                              : "bg-amber-100 text-amber-800"
+                              : item.changeTag === "اصلاح لیبل"
+                                ? "bg-sky-100 text-sky-800"
+                                : "bg-amber-100 text-amber-800"
                           }`}
-                          title="این قطعه در ارسال مجدد فاکتور ویرایش‌شده اضافه یا عوض شده است"
+                          title="این قطعه در ارسال مجدد فاکتور ویرایش‌شده اضافه، عوض یا لیبلش اصلاح شده است"
                         >
                           {item.changeTag}
                         </span>
