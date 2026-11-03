@@ -5,6 +5,12 @@ import Link from "next/link"
 
 const FISCAL_KEY = "akhavan_fiscal_year"
 
+// اول فایل روی خود سرور؛ اگر نبود لینک خارجی
+const BG_CANDIDATES = [
+  "/background.png",
+  "https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png",
+]
+
 export default function HomePage() {
   const [showSalesMenu, setShowSalesMenu] = useState(false)
   const [showProductionMenu, setShowProductionMenu] = useState(false)
@@ -16,6 +22,7 @@ export default function HomePage() {
     displayName: string
     role: string
   } | null>(null)
+  const [bgUrl, setBgUrl] = useState<string>(BG_CANDIDATES[0])
   const salesRef = useRef<HTMLDivElement>(null)
   const productionRef = useRef<HTMLDivElement>(null)
   const financeRef = useRef<HTMLDivElement>(null)
@@ -23,6 +30,26 @@ export default function HomePage() {
   useEffect(() => {
     const saved = localStorage.getItem(FISCAL_KEY)
     if (saved) setFiscalYear(saved)
+  }, [])
+
+  // اگر عکس اول لود نشد، بعدی را امتحان کن
+  useEffect(() => {
+    let cancelled = false
+    let i = 0
+    const tryNext = () => {
+      if (cancelled || i >= BG_CANDIDATES.length) return
+      const url = BG_CANDIDATES[i++]
+      const img = new Image()
+      img.onload = () => {
+        if (!cancelled) setBgUrl(url)
+      }
+      img.onerror = () => tryNext()
+      img.src = url
+    }
+    tryNext()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const saveFiscalYear = (value: string) => {
@@ -204,7 +231,7 @@ export default function HomePage() {
     },
   ]
 
-    const financeItems = [
+  const financeItems = [
     {
       title: "واریزی‌های مشتریان",
       href: "/finance/deposits",
@@ -215,7 +242,7 @@ export default function HomePage() {
       href: "/finance/convert",
       icon: "M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4",
     },
-        {
+    {
       title: "مغایرت‌گیری سپیدار",
       href: "/finance/reconcile",
       icon: "M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
@@ -288,8 +315,9 @@ export default function HomePage() {
     <div
       className="min-h-screen relative overflow-hidden bg-cover bg-center bg-no-repeat"
       style={{
-        backgroundImage:
-          "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
+        // اگر هیچ عکسی لود نشود، صفحه سبز/روشن می‌ماند نه سیاه
+        backgroundColor: "#d8efe9",
+        backgroundImage: `url('${bgUrl}')`,
         backgroundSize: "cover",
         backgroundPosition: "center center",
         fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif",
@@ -303,13 +331,14 @@ export default function HomePage() {
         رفتن به منوی اصلی
       </a>
 
-      <div className="pointer-events-none fixed inset-0 bg-black/10" />
+      {/* لایه تیره خیلی کم تا اگر عکس نیامد سیاه نشود */}
+      <div className="pointer-events-none fixed inset-0 bg-black/5" />
 
       <div className="relative z-10 min-h-screen flex flex-col">
         <header className="pt-4 px-4 sm:px-8 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
             {currentUser ? (
-              <div className="rounded-2xl bg-white/50 border border-teal-500/30 px-4 py-2 shadow">
+              <div className="rounded-2xl bg-white/70 border border-teal-500/30 px-4 py-2 shadow">
                 <p className="text-xl sm:text-2xl font-black text-blue-950 leading-tight">
                   {currentUser.displayName}
                 </p>
@@ -323,7 +352,7 @@ export default function HomePage() {
               </div>
             )}
 
-            <div className="rounded-2xl bg-white/50 border border-teal-500/30 px-4 py-2 shadow">
+            <div className="rounded-2xl bg-white/70 border border-teal-500/30 px-4 py-2 shadow">
               <p className="text-xs font-bold text-blue-800 mb-0.5">سال مالی</p>
               {editingFiscal ? (
                 <div className="flex items-center gap-2">
@@ -389,7 +418,7 @@ export default function HomePage() {
         <div className="pb-10 px-4 sm:px-6" id="main-menu">
           <div className="max-w-4xl mx-auto">
             <div
-              className={`bg-white/20 backdrop-blur-xl border border-white/30 rounded-2xl shadow-2xl px-3 sm:px-4 py-5 ${
+              className={`bg-white/40 backdrop-blur-xl border border-white/40 rounded-2xl shadow-2xl px-3 sm:px-4 py-5 ${
                 mobileOpen ? "block" : "hidden sm:block"
               }`}
             >
