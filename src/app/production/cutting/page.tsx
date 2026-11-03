@@ -132,9 +132,9 @@ const BARCODE_MODULE_MM = 0.375
 // اگر بارکد خیلی کم‌رنگ/نازک شد: 0
 const BARCODE_BAR_TRIM_MM = 0.125
 // ارتفاع میله‌های بارکد
-const BARCODE_HEIGHT_MM = 8
+const BARCODE_HEIGHT_MM = 7
 // حداکثر عرض بارکد (ستون چپ لیبل)؛ اگر بارکد بلندتر شد، مدول‌ها کوچک‌تر می‌شوند
-const BARCODE_MAX_WIDTH_MM = 37
+const BARCODE_MAX_WIDTH_MM = 34
 
 const MM_TO_PX = 96 / 25.4
 
@@ -2612,7 +2612,6 @@ export default function CuttingPlanningPage() {
 
             <div className="label-print-root flex flex-wrap gap-4 print:block">
               {labels.map((label, idx) => {
-                const installCode = labelText(label.installationCode)
                 const services = splitServices(labelText(label.servicesText))
                 const customerStr = labelText(label.customerName) || "—"
                 const dimsText = `${label.length ?? "—"} * ${label.width ?? "—"}=${label.quantity ?? 1}`
@@ -2637,13 +2636,7 @@ export default function CuttingPlanningPage() {
                     <div className="label-line" />
 
                     <FitLabelBody
-                      sig={[
-                        labelText(label.productName),
-                        dimsText,
-                        customerStr,
-                        installCode,
-                        ...services,
-                      ].join("|")}
+                      sig={[labelText(label.productName), dimsText, customerStr, ...services].join("|")}
                       maxPt={14}
                       minPt={8}
                     >
@@ -2674,23 +2667,30 @@ export default function CuttingPlanningPage() {
                               minPt={7}
                             />
                           ) : null}
+                          {labelText(label.installationCode) ? (
+                            <div
+                              className="label-notes"
+                              style={{
+                                fontWeight: 800,
+                                fontSize: "9pt",
+                                lineHeight: 1.15,
+                                marginTop: 1,
+                              }}
+                            >
+                              {`کد نصب: ${labelText(label.installationCode)}`}
+                            </div>
+                          ) : null}
                           <div className="label-barcode">
                             <svg
                               id={`barcode-${label.productionItemId}-${idx}`}
-                              width="110"
-                              height="44"
+                              width="96"
+                              height="38"
                             />
                           </div>
                         </div>
 
-                        {/* راست: کد نصب (در صورت وجود) بالای خدمات */}
+                        {/* راست: خدمات، هر کدام در یک سطر، زیر ردیف ابعاد */}
                         <div className="label-right fit-box">
-                          {installCode ? (
-                            <FitLine
-                              className="label-service"
-                              text={`کد نصب: ${installCode}`}
-                            />
-                          ) : null}
                           {services.map((sv, i) => (
                             <FitLine key={i} className="label-service" text={sv} />
                           ))}
