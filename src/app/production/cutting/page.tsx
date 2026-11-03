@@ -1205,13 +1205,17 @@ export default function CuttingPlanningPage() {
         alert(data.error || "خطا در چاپ")
         return
       }
-      const newLabels = (data.labels || []).map((l: any) => ({
-        ...l,
-        servicesText:
-          l.servicesText ||
-          items.find((i: any) => i.productionItemId === l.productionItemId)?.servicesText ||
-          "",
-      }))
+      const newLabels = (data.labels || []).map((l: any) => {
+        const src = items.find(
+          (i: any) => i.productionItemId === l.productionItemId
+        )
+        return {
+          ...l,
+          servicesText: l.servicesText || src?.servicesText || "",
+          installationCode:
+            l.installationCode || src?.installationCode || null,
+        }
+      })
       setLabels(newLabels)
       // قطعاتی که اگر این پیش‌نمایش چاپ شود «چاپ‌شده» ثبت می‌شوند
       labelCommitIdsRef.current = Array.from(
@@ -2608,6 +2612,7 @@ export default function CuttingPlanningPage() {
 
             <div className="label-print-root flex flex-wrap gap-4 print:block">
               {labels.map((label, idx) => {
+                const installCode = labelText(label.installationCode)
                 const services = splitServices(labelText(label.servicesText))
                 const customerStr = labelText(label.customerName) || "—"
                 const dimsText = `${label.length ?? "—"} * ${label.width ?? "—"}=${label.quantity ?? 1}`
@@ -2632,7 +2637,13 @@ export default function CuttingPlanningPage() {
                     <div className="label-line" />
 
                     <FitLabelBody
-                      sig={[labelText(label.productName), dimsText, customerStr, ...services].join("|")}
+                      sig={[
+                        labelText(label.productName),
+                        dimsText,
+                        customerStr,
+                        installCode,
+                        ...services,
+                      ].join("|")}
                       maxPt={14}
                       minPt={8}
                     >
@@ -2672,8 +2683,14 @@ export default function CuttingPlanningPage() {
                           </div>
                         </div>
 
-                        {/* راست: خدمات، هر کدام در یک سطر، زیر ردیف ابعاد */}
+                        {/* راست: کد نصب (در صورت وجود) بالای خدمات */}
                         <div className="label-right fit-box">
+                          {installCode ? (
+                            <FitLine
+                              className="label-service"
+                              text={`کد نصب: ${installCode}`}
+                            />
+                          ) : null}
                           {services.map((sv, i) => (
                             <FitLine key={i} className="label-service" text={sv} />
                           ))}
