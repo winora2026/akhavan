@@ -39,3 +39,26 @@ html,
 body {
   font-family: Vazirmatn, Tahoma, Arial, sans-serif;
 }
+
+/* پس‌زمینهٔ سراسری: اگر عکس لود نشد، صفحه سیاه نشود
+   (در حالت تیرهٔ سیستم‌عامل، --background برابر #0a0a0a بود و همه‌جا سیاه می‌شد) */
+html,
+html body {
+  background-color: #d8efe9;
+  color: #171717;
+}
+html body {
+  background-image:
+    url("/background.png"),
+    url("https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png");
+  background-size: cover;
+  background-position: center center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+@media print {
+  html,
+  html body {
+    background: none !important;
+  }
+}
