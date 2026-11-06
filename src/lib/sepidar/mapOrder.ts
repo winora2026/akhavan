@@ -127,6 +127,12 @@ async function lookupByCode(code: string) {
   }
 }
 
+// انبار پیش‌فرضِ تعریف‌شده روی کالا در سپیدار (DefaultStockRef)؛ بدون آن سند حسابداری فاکتور خطای انبار می‌دهد
+const stockOfItem = (it: any): number | null => {
+  const n = Number(it?.DefaultStockRef ?? it?.defaultStockRef)
+  return Number.isInteger(n) && n > 0 ? n : null
+}
+
 function suggest(list: any[], name: string) {
   const mine = new Set(normName(name).split(" ").filter(Boolean))
   if (!mine.size) return []
@@ -202,14 +208,21 @@ export async function createItemResolver() {
           await persist(productName, id)
         }
         const savedStock = saved && Number(saved.itemRef) === id ? saved.stockRef ?? null : null
-        return { itemRef: id, stockRef: savedStock, via }
+        // اولویت: انبار دستی در SepidarItemMap، بعد انبار پیش‌فرض کالا در سپیدار
+        return { itemRef: id, stockRef: savedStock ?? stockOfItem(hit), via }
       }
       // کد در سپیدار پیدا نشد (کد قدیمی/اشتباه)؛ با نام ادامه می‌دهیم
     }
 
     // ۲) نگاشت ذخیره‌شده با نام
     if (saved) {
-      return { itemRef: Number(saved.itemRef), stockRef: saved.stockRef ?? null, via: "map" }
+      let mapStock: number | null = saved.stockRef ?? null
+      if (!mapStock) {
+        const idx = await loadItemIndex()
+        const it = idx.list.find((x) => itemIdOf(x) === Number(saved.itemRef))
+        mapStock = it ? stockOfItem(it) : null
+      }
+      return { itemRef: Number(saved.itemRef), stockRef: mapStock, via: "map" }
     }
 
     const index = await loadItemIndex()
@@ -220,7 +233,7 @@ export async function createItemResolver() {
       const id = itemIdOf(byName[0])
       if (id) {
         await persist(productName, id)
-        return { itemRef: id, stockRef: null, via: "name" }
+        return { itemRef: id, stockRef: stockOfItem(byName[0]), via: "name" }
       }
     }
     if (byName && byName.length > 1) {
@@ -239,7 +252,7 @@ export async function createItemResolver() {
         const id = itemIdOf(again[0])
         if (id) {
           await persist(productName, id)
-          return { itemRef: id, stockRef: null, via: "name" }
+          return { itemRef: id, stockRef: stockOfItem(again[0]), via: "name" }
         }
       }
     }
