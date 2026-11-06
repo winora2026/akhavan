@@ -5,7 +5,6 @@ import Link from "next/link"
 
 const FISCAL_KEY = "akhavan_fiscal_year"
 
-// اول فایل روی خود سرور؛ اگر نبود لینک خارجی
 const BG_CANDIDATES = [
   "/background.png",
   "https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png",
@@ -15,6 +14,7 @@ export default function HomePage() {
   const [showSalesMenu, setShowSalesMenu] = useState(false)
   const [showProductionMenu, setShowProductionMenu] = useState(false)
   const [showFinanceMenu, setShowFinanceMenu] = useState(false)
+  const [showReportsMenu, setShowReportsMenu] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [fiscalYear, setFiscalYear] = useState("1405")
   const [editingFiscal, setEditingFiscal] = useState(false)
@@ -26,13 +26,13 @@ export default function HomePage() {
   const salesRef = useRef<HTMLDivElement>(null)
   const productionRef = useRef<HTMLDivElement>(null)
   const financeRef = useRef<HTMLDivElement>(null)
+  const reportsRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const saved = localStorage.getItem(FISCAL_KEY)
     if (saved) setFiscalYear(saved)
   }, [])
 
-  // اگر عکس اول لود نشد، بعدی را امتحان کن
   useEffect(() => {
     let cancelled = false
     let i = 0
@@ -111,6 +111,9 @@ export default function HomePage() {
       if (financeRef.current && !financeRef.current.contains(e.target as Node)) {
         setShowFinanceMenu(false)
       }
+      if (reportsRef.current && !reportsRef.current.contains(e.target as Node)) {
+        setShowReportsMenu(false)
+      }
     }
     document.addEventListener("mousedown", handleClickOutside)
     return () => document.removeEventListener("mousedown", handleClickOutside)
@@ -119,6 +122,7 @@ export default function HomePage() {
   const isProductionOnly = currentUser?.role === "production"
   const canOpenSales = !isProductionOnly
   const canOpenFinance = !isProductionOnly
+  const canOpenReports = !isProductionOnly
 
   const menuItems = [
     {
@@ -155,6 +159,7 @@ export default function HomePage() {
       title: "گزارش‌ها",
       href: "#",
       icon: "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z",
+      isReports: true,
       lockedForProduction: true,
     },
     {
@@ -249,6 +254,19 @@ export default function HomePage() {
     },
   ]
 
+  const reportsItems = [
+    {
+      title: "گزارش تولید",
+      href: "/reports?tab=production",
+      icon: "M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
+    },
+    {
+      title: "گزارش فروش",
+      href: "/reports?tab=sales",
+      icon: "M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z",
+    },
+  ]
+
   const roleLabel = (role: string) => {
     switch (role) {
       case "sales":
@@ -266,6 +284,13 @@ export default function HomePage() {
     }
   }
 
+  const closeAllMenus = () => {
+    setShowSalesMenu(false)
+    setShowProductionMenu(false)
+    setShowFinanceMenu(false)
+    setShowReportsMenu(false)
+  }
+
   const renderSubMenu = (
     open: boolean,
     items: { title: string; href: string; icon: string }[],
@@ -273,7 +298,7 @@ export default function HomePage() {
   ) =>
     open ? (
       <div
-        className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 min-w-[220px]"
+        className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 min-w-[240px]"
         role="menu"
       >
         <div className="rounded-2xl bg-white/95 backdrop-blur-xl border border-teal-500/30 shadow-2xl p-2">
@@ -286,7 +311,7 @@ export default function HomePage() {
                 onClick={onClose}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-teal-50 focus:bg-teal-50 focus:outline-none focus:ring-2 focus:ring-teal-500 transition group"
               >
-                <div className="w-9 h-9 rounded-lg bg-teal-500/15 flex items-center justify-center border border-teal-500/20 shrink-0">
+                <div className="w-10 h-10 rounded-lg bg-teal-500/15 flex items-center justify-center border border-teal-500/20 shrink-0">
                   <svg
                     className="w-5 h-5 text-teal-700"
                     fill="none"
@@ -301,7 +326,7 @@ export default function HomePage() {
                     />
                   </svg>
                 </div>
-                <span className="text-sm font-bold text-gray-800 group-hover:text-teal-800">
+                <span className="text-base font-bold text-gray-800 group-hover:text-teal-800">
                   {sub.title}
                 </span>
               </Link>
@@ -311,15 +336,18 @@ export default function HomePage() {
       </div>
     ) : null
 
+  const menuBtnClass =
+    "w-full flex flex-col items-center gap-2.5 p-3.5 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
+
   return (
     <div
-      className="min-h-screen relative overflow-hidden bg-cover bg-center bg-no-repeat"
+      className="min-h-screen relative overflow-hidden"
       style={{
-        // اگر هیچ عکسی لود نشود، صفحه سبز/روشن می‌ماند نه سیاه
         backgroundColor: "#d8efe9",
         backgroundImage: `url('${bgUrl}')`,
         backgroundSize: "cover",
-        backgroundPosition: "center center",
+        backgroundPosition: "center 18%",
+        backgroundRepeat: "no-repeat",
         fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif",
       }}
       dir="rtl"
@@ -331,29 +359,28 @@ export default function HomePage() {
         رفتن به منوی اصلی
       </a>
 
-      {/* لایه تیره خیلی کم تا اگر عکس نیامد سیاه نشود */}
       <div className="pointer-events-none fixed inset-0 bg-black/5" />
 
       <div className="relative z-10 min-h-screen flex flex-col">
         <header className="pt-4 px-4 sm:px-8 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
             {currentUser ? (
-              <div className="rounded-2xl bg-white/70 border border-teal-500/30 px-4 py-2 shadow">
-                <p className="text-xl sm:text-2xl font-black text-blue-950 leading-tight">
+              <div className="rounded-2xl bg-white/80 border border-teal-500/30 px-5 py-2.5 shadow">
+                <p className="text-2xl sm:text-3xl font-black text-blue-950 leading-tight">
                   {currentUser.displayName}
                 </p>
-                <p className="text-sm font-bold text-teal-700">
+                <p className="text-base font-bold text-teal-700">
                   {roleLabel(currentUser.role)}
                 </p>
               </div>
             ) : (
-              <div className="text-sm text-gray-600 font-bold">
+              <div className="text-base text-gray-600 font-bold">
                 در حال دریافت کاربر...
               </div>
             )}
 
-            <div className="rounded-2xl bg-white/70 border border-teal-500/30 px-4 py-2 shadow">
-              <p className="text-xs font-bold text-blue-800 mb-0.5">سال مالی</p>
+            <div className="rounded-2xl bg-white/80 border border-teal-500/30 px-5 py-2.5 shadow">
+              <p className="text-sm font-bold text-blue-800 mb-0.5">سال مالی</p>
               {editingFiscal ? (
                 <div className="flex items-center gap-2">
                   <input
@@ -368,7 +395,7 @@ export default function HomePage() {
                         setEditingFiscal(false)
                       }
                     }}
-                    className="w-24 rounded-lg border border-teal-500 px-2 py-1 text-lg font-black text-blue-950 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    className="w-28 rounded-lg border border-teal-500 px-2 py-1 text-xl font-black text-blue-950 focus:outline-none focus:ring-2 focus:ring-teal-500"
                   />
                   <button
                     type="button"
@@ -376,7 +403,7 @@ export default function HomePage() {
                       const el = document.activeElement as HTMLInputElement
                       saveFiscalYear(el?.value || fiscalYear)
                     }}
-                    className="text-sm font-bold text-teal-700"
+                    className="text-base font-bold text-teal-700"
                   >
                     ذخیره
                   </button>
@@ -385,7 +412,7 @@ export default function HomePage() {
                 <button
                   type="button"
                   onClick={() => setEditingFiscal(true)}
-                  className="text-xl font-black text-blue-950 hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded"
+                  className="text-2xl font-black text-blue-950 hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded"
                   title="برای تغییر کلیک کنید"
                 >
                   {fiscalYear}
@@ -397,7 +424,7 @@ export default function HomePage() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="sm:hidden rounded-xl bg-white/60 border border-teal-500/30 px-3 py-2 font-bold text-blue-900 focus:ring-2 focus:ring-teal-500"
+              className="sm:hidden rounded-xl bg-white/60 border border-teal-500/30 px-3 py-2 text-base font-bold text-blue-900 focus:ring-2 focus:ring-teal-500"
               aria-expanded={mobileOpen}
               onClick={() => setMobileOpen((v) => !v)}
             >
@@ -406,19 +433,19 @@ export default function HomePage() {
             <button
               type="button"
               onClick={handleLogout}
-              className="text-base font-bold text-gray-700 hover:text-teal-700 transition px-3 py-1.5 rounded-lg hover:bg-white/40 focus:outline-none focus:ring-2 focus:ring-teal-500"
+              className="text-lg font-bold text-gray-700 hover:text-teal-700 transition px-3 py-1.5 rounded-lg hover:bg-white/40 focus:outline-none focus:ring-2 focus:ring-teal-500"
             >
               خروج
             </button>
           </div>
         </header>
 
-        <div className="flex-1" />
+        <div className="flex-1 min-h-[48vh] sm:min-h-[52vh]" />
 
-        <div className="pb-10 px-4 sm:px-6" id="main-menu">
-          <div className="max-w-4xl mx-auto">
+        <div className="pb-8 px-4 sm:px-6" id="main-menu">
+          <div className="max-w-5xl mx-auto">
             <div
-              className={`bg-white/40 backdrop-blur-xl border border-white/40 rounded-2xl shadow-2xl px-3 sm:px-4 py-5 ${
+              className={`bg-white/45 backdrop-blur-xl border border-white/50 rounded-2xl shadow-2xl px-3 sm:px-4 py-5 ${
                 mobileOpen ? "block" : "hidden sm:block"
               }`}
             >
@@ -428,7 +455,32 @@ export default function HomePage() {
                     isProductionOnly &&
                     (item.isSales ||
                       (item as any).isFinance ||
+                      (item as any).isReports ||
                       (item as any).lockedForProduction)
+
+                  const iconSvg = (
+                    <div className="w-14 h-14 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
+                      <svg
+                        className="w-8 h-8 text-teal-700"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2.2}
+                          d={item.icon}
+                        />
+                      </svg>
+                    </div>
+                  )
+
+                  const titleSpan = (
+                    <span className="text-base sm:text-lg font-bold text-gray-800 text-center">
+                      {item.title}
+                    </span>
+                  )
 
                   if (item.isSales) {
                     return (
@@ -439,30 +491,13 @@ export default function HomePage() {
                           aria-expanded={canOpenSales ? showSalesMenu : false}
                           onClick={() => {
                             if (!canOpenSales) return
-                            setShowProductionMenu(false)
-                            setShowFinanceMenu(false)
+                            closeAllMenus()
                             setShowSalesMenu((prev) => !prev)
                           }}
-                          className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition group"
+                          className={menuBtnClass}
                         >
-                          <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
-                            <svg
-                              className="w-7 h-7 text-teal-700"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2.2}
-                                d={item.icon}
-                              />
-                            </svg>
-                          </div>
-                          <span className="text-sm sm:text-base font-bold text-gray-800 text-center">
-                            {item.title}
-                          </span>
+                          {iconSvg}
+                          {titleSpan}
                         </button>
                         {canOpenSales &&
                           renderSubMenu(showSalesMenu, salesItems, () =>
@@ -484,30 +519,13 @@ export default function HomePage() {
                           aria-haspopup="menu"
                           aria-expanded={showProductionMenu}
                           onClick={() => {
-                            setShowSalesMenu(false)
-                            setShowFinanceMenu(false)
+                            closeAllMenus()
                             setShowProductionMenu((prev) => !prev)
                           }}
-                          className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition group"
+                          className={menuBtnClass}
                         >
-                          <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
-                            <svg
-                              className="w-7 h-7 text-teal-700"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2.2}
-                                d={item.icon}
-                              />
-                            </svg>
-                          </div>
-                          <span className="text-sm sm:text-base font-bold text-gray-800 text-center">
-                            {item.title}
-                          </span>
+                          {iconSvg}
+                          {titleSpan}
                         </button>
                         {renderSubMenu(
                           showProductionMenu,
@@ -524,27 +542,10 @@ export default function HomePage() {
                         <button
                           key={item.title}
                           type="button"
-                          onClick={() => {}}
-                          className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
+                          className={menuBtnClass}
                         >
-                          <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
-                            <svg
-                              className="w-7 h-7 text-teal-700"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2.2}
-                                d={item.icon}
-                              />
-                            </svg>
-                          </div>
-                          <span className="text-sm sm:text-base font-bold text-gray-800 text-center">
-                            {item.title}
-                          </span>
+                          {iconSvg}
+                          {titleSpan}
                         </button>
                       )
                     }
@@ -560,34 +561,58 @@ export default function HomePage() {
                           aria-expanded={showFinanceMenu}
                           onClick={() => {
                             if (!canOpenFinance) return
-                            setShowSalesMenu(false)
-                            setShowProductionMenu(false)
+                            closeAllMenus()
                             setShowFinanceMenu((prev) => !prev)
                           }}
-                          className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition group"
+                          className={menuBtnClass}
                         >
-                          <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
-                            <svg
-                              className="w-7 h-7 text-teal-700"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2.2}
-                                d={item.icon}
-                              />
-                            </svg>
-                          </div>
-                          <span className="text-sm sm:text-base font-bold text-gray-800 text-center">
-                            {item.title}
-                          </span>
+                          {iconSvg}
+                          {titleSpan}
                         </button>
                         {canOpenFinance &&
                           renderSubMenu(showFinanceMenu, financeItems, () =>
                             setShowFinanceMenu(false)
+                          )}
+                      </div>
+                    )
+                  }
+
+                  if ((item as any).isReports) {
+                    if (blockedForProduction) {
+                      return (
+                        <button
+                          key={item.title}
+                          type="button"
+                          className={menuBtnClass}
+                        >
+                          {iconSvg}
+                          {titleSpan}
+                        </button>
+                      )
+                    }
+                    return (
+                      <div
+                        key={item.title}
+                        ref={reportsRef}
+                        className="relative"
+                      >
+                        <button
+                          type="button"
+                          aria-haspopup="menu"
+                          aria-expanded={showReportsMenu}
+                          onClick={() => {
+                            if (!canOpenReports) return
+                            closeAllMenus()
+                            setShowReportsMenu((prev) => !prev)
+                          }}
+                          className={menuBtnClass}
+                        >
+                          {iconSvg}
+                          {titleSpan}
+                        </button>
+                        {canOpenReports &&
+                          renderSubMenu(showReportsMenu, reportsItems, () =>
+                            setShowReportsMenu(false)
                           )}
                       </div>
                     )
@@ -598,27 +623,10 @@ export default function HomePage() {
                       <button
                         key={item.title}
                         type="button"
-                        onClick={() => {}}
-                        className="w-full flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
+                        className={menuBtnClass}
                       >
-                        <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
-                          <svg
-                            className="w-7 h-7 text-teal-700"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2.2}
-                              d={item.icon}
-                            />
-                          </svg>
-                        </div>
-                        <span className="text-sm sm:text-base font-bold text-gray-800 text-center">
-                          {item.title}
-                        </span>
+                        {iconSvg}
+                        {titleSpan}
                       </button>
                     )
                   }
@@ -627,26 +635,10 @@ export default function HomePage() {
                     <Link
                       key={item.title}
                       href={item.href}
-                      className="flex flex-col items-center gap-2.5 p-3 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
+                      className={menuBtnClass}
                     >
-                      <div className="w-12 h-12 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
-                        <svg
-                          className="w-7 h-7 text-teal-700"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2.2}
-                            d={item.icon}
-                          />
-                        </svg>
-                      </div>
-                      <span className="text-sm sm:text-base font-bold text-gray-800 text-center">
-                        {item.title}
-                      </span>
+                      {iconSvg}
+                      {titleSpan}
                     </Link>
                   )
                 })}
@@ -654,26 +646,67 @@ export default function HomePage() {
             </div>
           </div>
 
-          <div className="mt-7 flex justify-center items-center gap-6 sm:gap-8 flex-wrap text-sm sm:text-base font-bold text-gray-700">
+          <div className="mt-6 flex justify-center items-center gap-6 sm:gap-8 flex-wrap text-base sm:text-lg font-bold text-gray-700">
             <a
               href="https://www.akhavanglass.com"
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded px-1"
+              className="flex items-center gap-2 hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded px-1 transition"
             >
-              www.akhavanglass.com
+              <span>www.akhavanglass.com</span>
+              <svg
+                className="w-6 h-6 text-teal-600 shrink-0"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
+                />
+              </svg>
             </a>
+
             <a
               href="tel:02191005103"
-              className="hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded px-1"
+              className="flex items-center gap-2 hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded px-1 transition"
             >
-              02191005103
+              <span>02191005103</span>
+              <svg
+                className="w-6 h-6 text-teal-600 shrink-0"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"
+                />
+              </svg>
             </a>
+
             <a
               href="tel:09129582600"
-              className="hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded px-1"
+              className="flex items-center gap-2 hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded px-1 transition"
             >
-              09129582600
+              <span>09129582600</span>
+              <svg
+                className="w-6 h-6 text-teal-600 shrink-0"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
+                />
+              </svg>
             </a>
           </div>
         </div>

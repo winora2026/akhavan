@@ -6,7 +6,7 @@ import DatePicker, { DateObject } from "react-multi-date-picker"
 import persian from "react-date-object/calendars/persian"
 import persian_fa from "react-date-object/locales/persian_fa"
 import gregorian from "react-date-object/calendars/gregorian"
-// ⚠ مسیر را مطابق محل این فایل تنظیم کنید (همان فایل لیست مشتریان که ثبت سفارش و فاکتورها هم می‌خوانند)
+// ⚠ مسیر را مطابق محل این فایل تنظیم کنید
 import customersSeedRaw from "../../customers/customers-seed.json"
 
 type Row = {
@@ -24,7 +24,6 @@ type Row = {
   convertedBy?: string | null
 }
 
-// حروف عربی → فارسی، ارقام فارسی/عربی → لاتین، حذف نیم‌فاصله و کاراکترهای جهت‌ساز
 const normalizeText = (value: string | null | undefined) => {
   if (!value) return ""
   return String(value)
@@ -40,8 +39,6 @@ const normalizeText = (value: string | null | undefined) => {
     .trim()
 }
 
-// ===== کد مشتری (همان منطق صفحه‌ی فاکتورها / پیش‌فاکتورها) =====
-// کدهای مشتریان قدیمی (از فایل لیست مشتریان): نام نرمال‌شده → کد
 const seedCodeByName = (() => {
   const map = new Map<string, string>()
   ;(customersSeedRaw as any[]).forEach((c: any) => {
@@ -60,7 +57,6 @@ const seedCodeByName = (() => {
   return map
 })()
 
-// اگر در دیتابیس کد واقعی ثبت شده همان؛ وگرنه (خالی یا کد خودکارِ C-عدد) از لیست قدیمی به‌اسم پیدا می‌شود
 function resolveCustomerCode(
   name: string | null | undefined,
   dbCode?: string | null
@@ -87,11 +83,23 @@ function formatFaDate(iso?: string | null) {
   }
 }
 
-/** ابتدای همان روز تقویمی انتخاب‌شده، به‌وقت تهران */
-function dayStartIsoTehran(dObj: any): string | null {
+function toDateObject(dObj: any): DateObject | null {
   if (!dObj) return null
   try {
-    const g = new DateObject(dObj).convert(gregorian)
+    if (dObj instanceof DateObject) return dObj
+    if (Array.isArray(dObj)) return dObj[0] ? new DateObject(dObj[0]) : null
+    return new DateObject(dObj)
+  } catch {
+    return null
+  }
+}
+
+/** ابتدای همان روز تقویمی انتخاب‌شده، به‌وقت تهران */
+function dayStartIsoTehran(dObj: any): string | null {
+  const d = toDateObject(dObj)
+  if (!d) return null
+  try {
+    const g = new DateObject(d).convert(gregorian)
     const y = g.year
     const m = String(g.month.number).padStart(2, "0")
     const day = String(g.day).padStart(2, "0")
@@ -103,9 +111,10 @@ function dayStartIsoTehran(dObj: any): string | null {
 
 /** انتهای همان روز تقویمی انتخاب‌شده، به‌وقت تهران */
 function dayEndIsoTehran(dObj: any): string | null {
-  if (!dObj) return null
+  const d = toDateObject(dObj)
+  if (!d) return null
   try {
-    const g = new DateObject(dObj).convert(gregorian)
+    const g = new DateObject(d).convert(gregorian)
     const y = g.year
     const m = String(g.month.number).padStart(2, "0")
     const day = String(g.day).padStart(2, "0")
@@ -151,10 +160,8 @@ function syncBadge(status?: string | null) {
   )
 }
 
-// فیلترها در sessionStorage ذخیره می‌شوند تا با رفتن به صفحه‌ی دیگر و برگشتن، از اول نشود
 const FILTERS_KEY = "financeConvertFilters"
 
-// کلاس‌های مشترک ظاهر (هم‌سبک صفحه‌های پیش‌فاکتورها و فاکتورها)
 const glassCard =
   "rounded-2xl bg-teal-500/10 backdrop-blur-2xl shadow-lg border border-teal-500/20"
 const fieldClass =
@@ -183,7 +190,6 @@ export default function FinanceConvertPage() {
 
   const canSync = me?.role === "finance" || me?.role === "admin"
 
-  // بارگذاری لیست: بازه‌ی تاریخ از ابتدای روز «از» تا انتهای روز «تا» (به‌وقت تهران)
   const loadWith = async (
     f: any,
     t: any,
@@ -229,7 +235,6 @@ export default function FinanceConvertPage() {
       } catch {}
     })()
 
-    // بازیابی فیلترهای قبلی؛ تاریخ‌های ذخیره‌شده فقط در همان روز معتبرند (تا فردا با تاریخ دیروز باز نشود)
     let f: any = today
     let t: any = today
     let fNo = ""
@@ -271,7 +276,6 @@ export default function FinanceConvertPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ذخیره‌ی خودکار فیلترها
   useEffect(() => {
     if (!filtersReady) return
     try {
@@ -283,15 +287,13 @@ export default function FinanceConvertPage() {
           fromNo,
           toNo,
           syncStatus,
-          fromDate: fromDate?.toDate ? fromDate.toDate().toISOString() : null,
-          toDate: toDate?.toDate ? toDate.toDate().toISOString() : null,
+          fromDate: toDateObject(fromDate)?.toDate?.()?.toISOString?.() ?? null,
+          toDate: toDateObject(toDate)?.toDate?.()?.toISOString?.() ?? null,
         })
       )
     } catch {}
   }, [filtersReady, search, fromNo, toNo, syncStatus, fromDate, toDate])
 
-  // جستجوی صفحه (سمت مرورگر): نام، کد مشتری (با پیدا کردن کد از لیست قدیمی) و شماره فاکتور،
-  // با یکسان‌سازی حروف/ارقام و همه‌ی کلمه‌ها (ترتیب مهم نیست)
   const visibleRows = useMemo(() => {
     const tokens = normalizeText(search).split(" ").filter(Boolean)
     if (!tokens.length) return rows
@@ -306,7 +308,6 @@ export default function FinanceConvertPage() {
     })
   }, [rows, search])
 
-  // فقط ردیف‌های دیده‌شده در لیست «انتخاب‌شده» حساب می‌شوند (تا ردیف پنهانِ فیلتر ناخواسته ارسال نشود)
   const visibleIds = useMemo(() => visibleRows.map((r) => r.id), [visibleRows])
   const selectedVisible = useMemo(
     () => selected.filter((id) => visibleIds.includes(id)),
@@ -424,7 +425,6 @@ export default function FinanceConvertPage() {
           </div>
         </div>
 
-        {/* فیلتر */}
         <div
           className={`${glassCard} p-4 mb-4 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3`}
         >
@@ -432,26 +432,28 @@ export default function FinanceConvertPage() {
             <label className={labelClass}>از تاریخ</label>
             <DatePicker
               value={fromDate}
-              onChange={setFromDate}
+              onChange={(d) => setFromDate(toDateObject(d))}
               calendar={persian}
               locale={persian_fa}
               inputClass={fieldClass}
               containerClassName="w-full"
               portal
               zIndex={1000}
+              format="YYYY/MM/DD"
             />
           </div>
           <div className="relative z-30">
             <label className={labelClass}>تا تاریخ</label>
             <DatePicker
               value={toDate}
-              onChange={setToDate}
+              onChange={(d) => setToDate(toDateObject(d))}
               calendar={persian}
               locale={persian_fa}
               inputClass={fieldClass}
               containerClassName="w-full"
               portal
               zIndex={1000}
+              format="YYYY/MM/DD"
             />
           </div>
           <div>
@@ -499,6 +501,7 @@ export default function FinanceConvertPage() {
           </div>
           <div className="md:col-span-3 lg:col-span-6 flex flex-wrap items-center gap-2">
             <button
+              type="button"
               onClick={load}
               className="rounded-xl bg-blue-900 hover:bg-blue-950 text-white font-bold px-5 py-2.5 transition"
             >
@@ -507,6 +510,7 @@ export default function FinanceConvertPage() {
             {canSync && (
               <>
                 <button
+                  type="button"
                   disabled={syncing || !selectedVisible.length}
                   onClick={() => syncSelected(false)}
                   className="rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold px-5 py-2.5 disabled:opacity-50 transition"
@@ -516,6 +520,7 @@ export default function FinanceConvertPage() {
                     : `ارسال انتخاب‌شده‌ها (${selectedVisible.length})`}
                 </button>
                 <button
+                  type="button"
                   disabled={syncing || !selectedVisible.length}
                   onClick={() => syncSelected(true)}
                   className="rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold px-5 py-2.5 disabled:opacity-50 transition"

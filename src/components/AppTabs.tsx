@@ -24,6 +24,7 @@ const TITLE_MAP: Record<string, string> = {
   "/finance/convert": "کانورت فاکتورها",
   "/finance/reconcile": "مغایرت‌گیری",
   "/sms-report": "گزارش پیامک‌ها",
+  "/reports": "گزارش‌ها",
 }
 
 const STORAGE_KEY = "akhavan_open_tabs"
