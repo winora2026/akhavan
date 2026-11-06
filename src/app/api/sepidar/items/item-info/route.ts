@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSession } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
-import { sepidarGet, extractList } from "@/lib/sepidar/client"
+import { sepidarGet, extractList, getAll } from "@/lib/sepidar/client"
 
 // فقط‌خواندنی و موقت: نشان می‌دهد یک کالا در سپیدار چه فیلدهایی دارد (به‌خصوص انبار)
 // و در اخوان به چه انباری نگاشت شده. چیزی نمی‌نویسد؛ بعد از استفاده پاکش کنید.
@@ -15,9 +15,12 @@ export async function GET(req: NextRequest) {
 
   const out: any = { code }
 
+  // خواندن کل آیتم‌ها و پیدا کردن کالا با کد (فیلتر Code سپیدار قابل اعتماد نبود؛ حدود نیم دقیقه طول می‌کشد)
   try {
-    const data = await sepidarGet("/api/sepidar/v1/Inventory/GetAllItems", { Code: code, Page: 1, ItemCount: 50 })
-    out.sepidarItem = extractList(data).filter((it: any) => String(it?.code ?? it?.Code ?? "") === code)
+    const all = await getAll("/api/sepidar/v1/Inventory/GetAllItems", {}, 100)
+    out.totalItemsRead = all.length
+    out.sepidarItem = all.filter((it: any) => String(it?.Code ?? it?.code ?? "").trim() === code)
+    out.sampleItemKeys = all[0] ? Object.keys(all[0]) : []
   } catch (e: any) {
     out.sepidarItemError = e?.message
   }
@@ -35,7 +38,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const maps: any[] = await (prisma as any).sepidarItemMap.findMany()
-    const title = String(out.sepidarItem?.[0]?.title ?? out.sepidarItem?.[0]?.Title ?? "")
+    const title = String(out.sepidarItem?.[0]?.Title ?? out.sepidarItem?.[0]?.title ?? "")
     out.itemMapRows = maps.filter((m) => title && String(m.productName).includes(title.slice(0, 8)))
   } catch (e: any) {
     out.itemMapError = e?.message
