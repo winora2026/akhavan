@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
-import { useSearchParams } from "next/navigation"
 import DatePicker, { DateObject } from "react-multi-date-picker"
 import persian from "react-date-object/calendars/persian"
 import persian_fa from "react-date-object/locales/persian_fa"
@@ -142,10 +141,7 @@ function SortIcon({ active, dir }: { active: boolean; dir: "asc" | "desc" }) {
 }
 
 export default function ReportsPage() {
-  const searchParams = useSearchParams()
-  const [tab, setTab] = useState<"production" | "sales">(
-    searchParams.get("tab") === "sales" ? "sales" : "production"
-  )
+  const [tab, setTab] = useState<"production" | "sales">("production")
   const [fromObj, setFromObj] = useState<DateObject | null>(defaultFrom)
   const [toObj, setToObj] = useState<DateObject | null>(defaultTo)
 
@@ -163,6 +159,15 @@ export default function ReportsPage() {
   const [stDir, setStDir] = useState<"asc" | "desc">("desc")
   const [wSort, setWSort] = useState<WasteSortKey>("createdAt")
   const [wDir, setWDir] = useState<"asc" | "desc">("desc")
+
+  // تب از querystring بعد از mount (بدون useSearchParams تا بیلد نشکند)
+  useEffect(() => {
+    try {
+      const t = new URLSearchParams(window.location.search).get("tab")
+      if (t === "sales") setTab("sales")
+      if (t === "production") setTab("production")
+    } catch {}
+  }, [])
 
   const load = async () => {
     setLoading(true)
@@ -313,9 +318,7 @@ export default function ReportsPage() {
           </button>
         </div>
 
-        <div
-          className={`${glassCard} p-4 mb-4 flex flex-wrap items-end gap-3`}
-        >
+        <div className={`${glassCard} p-4 mb-4 flex flex-wrap items-end gap-3`}>
           <div className="relative z-30">
             <label className={labelClass}>از تاریخ</label>
             <DatePicker
@@ -411,6 +414,7 @@ export default function ReportsPage() {
                       ))}
                       <th className="p-2 text-right font-bold border border-teal-600 min-w-[140px]">
                         خدمات مرتبط
+
                       </th>
                       {(
                         [
