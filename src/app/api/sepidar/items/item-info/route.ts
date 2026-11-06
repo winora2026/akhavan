@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSession } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
-import { sepidarGet, extractList, getAll } from "@/lib/sepidar/client"
+import { sepidarGet, extractList } from "@/lib/sepidar/client"
 
 // فقط‌خواندنی و موقت: نشان می‌دهد یک کالا در سپیدار چه فیلدهایی دارد (به‌خصوص انبار)
 // و در اخوان به چه انباری نگاشت شده. چیزی نمی‌نویسد؛ بعد از استفاده پاکش کنید.
@@ -15,14 +15,16 @@ export async function GET(req: NextRequest) {
 
   const out: any = { code }
 
-  // خواندن کل آیتم‌ها و پیدا کردن کالا با کد (فیلتر Code سپیدار قابل اعتماد نبود؛ حدود نیم دقیقه طول می‌کشد)
-  try {
-    const all = await getAll("/api/sepidar/v1/Inventory/GetAllItems", {}, 100)
-    out.totalItemsRead = all.length
+  // از فهرست آیتم‌هایی که سرور همین حالا در حافظه دارد می‌خوانیم (خواندن دوباره‌ی کل فهرست از nginx تایم‌اوت می‌شود)
+  const idx = (globalThis as any).__sepidarItemStore?.index
+  if (idx?.list?.length) {
+    const all: any[] = idx.list
+    out.totalItemsInCache = all.length
     out.sepidarItem = all.filter((it: any) => String(it?.Code ?? it?.code ?? "").trim() === code)
     out.sampleItemKeys = all[0] ? Object.keys(all[0]) : []
-  } catch (e: any) {
-    out.sepidarItemError = e?.message
+  } else {
+    out.sepidarItemError =
+      "فهرست آیتم‌ها هنوز در حافظه‌ی سرور نیست. یک فاکتور را پیش‌نمایش/ارسال کن یا سرور را ری‌استارت کن، چند دقیقه صبر کن و دوباره امتحان کن."
   }
 
   // لیست انبارها؛ نام دقیق متد را نمی‌دانیم، چند نام رایج را امتحان می‌کنیم
