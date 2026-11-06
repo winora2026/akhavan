@@ -352,6 +352,11 @@ export async function warmParties() {
   await loadParties()
 }
 
+// فقط‌خواندنی برای تشخیص: همان طرف‌حساب را همین الان از سپیدار می‌خواند
+export async function peekSepidarParty(id: number | string) {
+  return fetchPartyById(id)
+}
+
 // یک طرف‌حساب را با شناسه از سپیدار می‌خواند: ردیف | null (نبود) | undefined (نتوانستیم بفهمیم)
 async function fetchPartyById(id: number | string): Promise<PartyRow | null | undefined> {
   let answered = false
