@@ -137,6 +137,8 @@ export async function reconcileSepidarInvoices(opts: {
 
     if (status === "SUCCESS") {
       if (list.length === 0) {
+        // تازه ارسال‌شده‌ها (کمتر از ۱۵ دقیقه) را ریست نمی‌کنیم؛ ممکن است هنوز در لیست سپیدار نیامده باشند
+        if (o.sepidarSyncedAt && Date.now() - new Date(o.sepidarSyncedAt).getTime() < 15 * 60_000) continue
         missingInSepidar.push({ ...base, expectedNumber: num })
         toReset.push(o.id)
         continue

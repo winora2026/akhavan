@@ -245,5 +245,38 @@ export async function createInvoice(payload: unknown) {
       payload,
     }
   }
+
+  // محافظ تکراری: اگر فاکتوری با همین شماره از قبل در سپیدار هست، دوباره ساخته نمی‌شود.
+  // اگر خواندن لیست فاکتورها ممکن نشد هم ارسال متوقف می‌شود (ارسال تکراری از ارسال دیرتر بدتر است).
+  const p: any = payload
+  const num = Number(p?.number ?? p?.Number)
+  if (Number.isFinite(num) && num > 0) {
+    const day = (d: Date) =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tehran", year: "numeric", month: "2-digit", day: "2-digit" }).format(d)
+    const base = new Date(String(p?.date ?? "").slice(0, 10) + "T12:00:00Z")
+    const center = Number.isFinite(base.getTime()) ? base : new Date()
+    const from = new Date(center.getTime() - 10 * 86_400_000)
+    const to = new Date(Math.max(center.getTime(), Date.now()) + 3 * 86_400_000)
+    let rows: any[]
+    try {
+      rows = await getAll(
+        "/api/sepidar/v1/Sales/GetAllInvoices",
+        { StartDate: `${day(from)}T00:00:00`, EndDate: `${day(to)}T23:59:59` },
+        200
+      )
+    } catch (e: any) {
+      throw new Error(
+        `بررسی تکراری‌بودن فاکتور ${num} در سپیدار ممکن نشد؛ برای جلوگیری از ثبت تکراری ارسال نشد. دوباره تلاش کنید. (${e?.message ?? e})`
+      )
+    }
+    const dup = rows.find((i) => Number(i?.Number ?? i?.number) === num)
+    if (dup) {
+      throw new Error(
+        `فاکتور شماره ${num} از قبل در سپیدار ثبت شده است (شناسه: ${dup?.InvoiceId ?? dup?.invoiceId ?? dup?.Id ?? dup?.id ?? "؟"}). ` +
+          `برای جلوگیری از ثبت تکراری ارسال نشد. اگر این فاکتور را در سپیدار حذف کرده‌اید، چند دقیقه صبر کنید یا صفحه‌ی همگام‌سازی را بزنید.`
+      )
+    }
+  }
+
   return sepidarPost("/api/sepidar/v1/Sales/CreateInvoice", payload)
 }

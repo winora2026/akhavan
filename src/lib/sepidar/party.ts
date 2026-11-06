@@ -117,8 +117,9 @@ function resolvePartyInfo(c: any): PartyInfo | null {
 function buildPartyPayloadWithNotes(customer: any) {
   const phoneType = Number(process.env.SEPIDAR_PHONE_TYPE || 1)
   const addressType = Number(process.env.SEPIDAR_ADDRESS_TYPE || 1)
-  // مقدار «نوع» برای مشتری حقوقی در سپیدار؛ تا وقتی در .env تنظیم نشده، فیلد نوع فرستاده نمی‌شود
-  const legalSubType = Number(process.env.SEPIDAR_LEGAL_SUBTYPE || 0)
+  // نوع طرف‌حساب در سپیدار: ۱ = حقیقی، ۲ = حقوقی (اگر نفرستیم سپیدار «حقوقی» ثبت می‌کند)
+  const realSubType = 1
+  const legalSubType = Number(process.env.SEPIDAR_LEGAL_SUBTYPE || 2)
   const notes: string[] = []
   const info = resolvePartyInfo(customer)
   const fullName = String(customer.name || "").trim()
@@ -180,14 +181,10 @@ function buildPartyPayloadWithNotes(customer: any) {
     else notes.push(`کد اقتصادی «${info.economicCode}» نامعتبر بود و ارسال نشد`)
   }
 
-  if (legal && !legalSubType) {
-    notes.push("نوع «حقوقی» ارسال نشد (SEPIDAR_LEGAL_SUBTYPE در .env تنظیم نشده)؛ در سپیدار حقیقی ثبت شد")
-  }
-
   const payload = {
     name,
     ...(lastName ? { lastName } : {}),
-    ...(legal && legalSubType ? { subType: legalSubType } : {}),
+    subType: legal ? legalSubType : realSubType,
     isCustomer: true,
     ...(identificationCode ? { identificationCode } : {}),
     ...(economicCode ? { economicCode } : {}),

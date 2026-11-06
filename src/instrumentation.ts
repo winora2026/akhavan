@@ -10,4 +10,26 @@ export async function register() {
   // بدون await: سرور همین حالا بالا می‌آید و کش در پس‌زمینه پر می‌شود
   warmParties().catch((e) => console.error("Sepidar warm-up (parties):", e))
   warmItems().catch((e) => console.error("Sepidar warm-up (items):", e))
+
+  // هر ۱۰ دقیقه: فاکتورهایی که در سپیدار حذف شده‌اند دوباره «ارسال‌نشده» می‌شوند
+  // (بدون force؛ اگر تعداد حذف‌شده‌ها مشکوک باشد، چیزی تغییر نمی‌کند)
+  const g = globalThis as any
+  if (!g.__sepidarReconcileTimer) {
+    const run = async () => {
+      try {
+        const { reconcileSepidarInvoices } = await import("@/lib/sepidar/reconcile")
+        const r = await reconcileSepidarInvoices({ apply: true, days: 45 })
+        if (r.refused) console.warn("Sepidar reconcile:", r.refused)
+        else if (r.applied && (r.missingInSepidar.count || r.markableAsSent.count)) {
+          console.log(
+            `Sepidar reconcile: ${r.missingInSepidar.count} فاکتور حذف‌شده آزاد شد، ${r.markableAsSent.count} فاکتور ارسال‌شده علامت خورد`
+          )
+        }
+      } catch (e) {
+        console.error("Sepidar reconcile (خودکار):", e)
+      }
+    }
+    g.__sepidarReconcileTimer = setInterval(run, 10 * 60_000)
+    setTimeout(run, 60_000)
+  }
 }
