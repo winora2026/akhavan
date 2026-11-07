@@ -294,6 +294,10 @@ export const TAG_NEW = "ارسال مجدد: قطعه‌ی جدید"
 export const TAG_EDITED = "ارسال مجدد: قطعه‌ی ویرایش‌شده"
 export const TAG_RELABEL = "ارسال مجدد: اصلاح لیبل و خدمات"
 
+/** وضعیت قطعه‌ای که کاملاً ضایعات شده و برایش برش مجدد ثبت شده:
+ *  از تولید و کارتابل‌ها خارج است (ایستگاه‌هایش حذف می‌شود) و فقط در گزارش ضایعات می‌ماند. */
+export const SCRAPPED_STATUS = "ضایعات"
+
 function parseServices(sd: any): any[] {
   if (!sd) return []
   try {
@@ -847,6 +851,21 @@ export async function syncProductionOrderFromSales(
 
   // اصلاح در جا: همان بارکد، بدون برش مجدد
   for (const u of inplacePairs) {
+    if (u.p.status === SCRAPPED_STATUS) {
+      // قطعه‌ی ضایعات‌شده از تولید خارج است؛ فقط به قلم جدید وصل می‌ماند
+      await prisma.productionItem.update({
+        where: { id: u.p.id },
+        data: { orderItemId: u.si.id },
+      })
+      await prisma.productionItem.updateMany({
+        where: { parentItemId: u.p.id },
+        data: { orderItemId: u.si.id },
+      })
+      notes.push(
+        `«${u.p.productName}» (بارکد ${u.p.barcode || "—"}) قبلاً ضایعات شده و با بارکد جدید برش مجدد خورده؛ تغییر خدمات فاکتور روی قطعه‌ی برش مجدد اعمال نشد و باید دستی بررسی شود`
+      )
+      continue
+    }
     const r = await updatePieceInPlace(
       u.p,
       u.si,
@@ -864,6 +883,17 @@ export async function syncProductionOrderFromSales(
 
   // تغییر مشخصات قطعه
   for (const c of corePairs) {
+    if (c.p.status === SCRAPPED_STATUS) {
+      await prisma.productionItem.update({
+        where: { id: c.p.id },
+        data: { orderItemId: c.si.id },
+      })
+      kept++
+      notes.push(
+        `«${c.p.productName}» (بارکد ${c.p.barcode || "—"}) قبلاً ضایعات شده بود و در فاکتور تغییر کرده (ابعاد/تعداد)؛ باید دستی بررسی شود`
+      )
+      continue
+    }
     const sameShape =
       Number(c.p.length || 0) === Number(c.si.length || 0) &&
       Number(c.p.width || 0) === Number(c.si.width || 0)

@@ -784,6 +784,12 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
 
     if (createdParty) {
       sepidarCode = await syncCodeFromSepidar(customerId, createdParty, { force: true })
+      // اگر سپیدار نوع را غیر از آنچه فرستادیم ثبت کرده باشد (مثلاً حقیقی → حقوقی)، کد از شمارنده‌ی نوع دیگری می‌آید؛ هشدار می‌دهیم
+      const gotType = Number(createdParty.type ?? createdParty.Type)
+      const wantType = Number((payload as any).subType)
+      if (Number.isFinite(gotType) && wantType && gotType !== wantType) {
+        built.notes.push(`نوع طرف‌حساب در سپیدار ${gotType} ثبت شد ولی ${wantType} فرستاده شده بود`)
+      }
     } else {
       console.error(`Sepidar: طرف‌حساب ${id} بعد از ساخت پیدا نشد؛ کد روی مشتری نوشته نشد`)
     }

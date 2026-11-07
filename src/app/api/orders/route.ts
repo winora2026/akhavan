@@ -258,7 +258,7 @@ export async function PATCH(req: NextRequest) {
     // وضعیت قبلی: پیامک خودکار «ثبت سفارش» فقط وقتی بررسی می‌شود که سفارش از غیرفاکتور به فاکتور تبدیل شده باشد
     const before = await prisma.order.findUnique({
       where: { id },
-      select: { status: true },
+      select: { status: true, invoicedAt: true, convertedBy: true },
     })
 
     // برگرداندن فاکتور به پیش‌فاکتور فقط اگر برش شروع نشده باشد
@@ -288,10 +288,15 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
+    // اگر این سفارش قبلاً یک بار فاکتور شده (و بعد برای اصلاح به پیش‌فاکتور برگشته)،
+    // تاریخ فاکتور اولیه حفظ می‌شود و در لیست روز اول می‌ماند.
+    const firstInvoicedAt = before?.invoicedAt || null
+    const reInvoicing = status === "فاکتور" && !!firstInvoicedAt
+
     // تاریخ تحویل (و در صورت ارسال، orderDate) فقط هنگام تبدیل به فاکتور
     const dateUpdates: { orderDate?: Date; deliveryDate?: Date } = {}
     if (status === "فاکتور") {
-      if (orderDate) dateUpdates.orderDate = safeDate(orderDate)
+      if (orderDate && !reInvoicing) dateUpdates.orderDate = safeDate(orderDate)
       if (deliveryDate) dateUpdates.deliveryDate = safeDate(deliveryDate)
     }
 
@@ -309,18 +314,21 @@ export async function PATCH(req: NextRequest) {
         ...dateUpdates,
         ...(status === "فاکتور"
           ? {
-              convertedBy: whoConverted,
-              invoicedAt: new Date(),
+              convertedBy: reInvoicing
+                ? before?.convertedBy || whoConverted
+                : whoConverted,
+              invoicedAt: firstInvoicedAt || new Date(),
               // برای سازگاری با گزارش‌های قدیمی notes هم نگه داشته می‌شود
-              notes: whoConverted
-                ? `تبدیل شده توسط: ${whoConverted}`
-                : undefined,
+              notes: reInvoicing
+                ? undefined
+                : whoConverted
+                  ? `تبدیل شده توسط: ${whoConverted}`
+                  : undefined,
             }
           : {}),
         ...(status === "پیش‌فاکتور"
           ? {
-              convertedBy: null,
-              invoicedAt: null,
+              // تاریخ فاکتور اولیه (invoicedAt) و تبدیل‌کننده برای ارسال مجدد حفظ می‌شود
             }
           : {}),
       },

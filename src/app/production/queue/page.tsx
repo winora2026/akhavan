@@ -148,6 +148,11 @@ const compact = (value: string | null | undefined): string => {
 export default function ProductionWorkflowPage() {
   const router = useRouter()
   const [orders, setOrders] = useState<ProductionOrder[]>([])
+  // قطعاتی که در یک برگه‌ی خروج فعال ثبت شده‌اند (null = هنوز خوانده نشده / خوانده نشد)
+  const [exitedSet, setExitedSet] = useState<{
+    ids: Set<string>
+    barcodes: Set<string>
+  } | null>(null)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState("همه")
@@ -350,10 +355,32 @@ export default function ProductionWorkflowPage() {
   const fetchOrders = async () => {
     try {
       setLoading(true)
-      const res = await fetch("/api/production/orders")
+      // لیست سفارش‌ها و وضعیت خروج (از روی برگه‌های خروج) هم‌زمان خوانده می‌شوند
+      const [res, exitRes] = await Promise.all([
+        fetch("/api/production/orders"),
+        fetch("/api/production/exit-status", { cache: "no-store" }).catch(
+          () => null
+        ),
+      ])
       if (!res.ok) throw new Error("خطا در دریافت")
       const data = await res.json()
       setOrders(Array.isArray(data) ? data : [])
+
+      if (exitRes && exitRes.ok) {
+        try {
+          const d = await exitRes.json()
+          setExitedSet({
+            ids: new Set<string>(d.exitedItemIds || []),
+            barcodes: new Set<string>(d.exitedBarcodes || []),
+          })
+        } catch {
+          setExitedSet(null)
+        }
+      } else {
+        // اگر وضعیت خروج خوانده نشد، همان فیلدهای خود API لیست استفاده می‌شود
+        setExitedSet(null)
+      }
+
       if (openRef.current) loadRoute(openRef.current)
     } catch (error) {
       console.error(error)
@@ -429,9 +456,14 @@ export default function ProductionWorkflowPage() {
           ]
 
       for (const item of items) {
-        const exited = Boolean(
-          item.isExited ?? order.isExited ?? order.order?.isExited ?? false
-        )
+        // خروج خورده = قلم در یک برگه‌ی خروج فعال (غیر ابطال) ثبت شده باشد؛
+        // اگر وضعیت برگه‌ها خوانده نشده بود، همان فیلدهای خود API لیست
+        const exited = exitedSet
+          ? exitedSet.ids.has(item.id) ||
+            (!!item.barcode && exitedSet.barcodes.has(item.barcode))
+          : Boolean(
+              item.isExited ?? order.isExited ?? order.order?.isExited ?? false
+            )
         rows.push({
           rowKey: `${order.id}-${item.id}`,
           productionOrderId: order.id,
@@ -455,7 +487,7 @@ export default function ProductionWorkflowPage() {
       }
     }
     return rows
-  }, [orders])
+  }, [orders, exitedSet])
 
   /** گروه‌بندی ردیف‌های کالا بر اساس سفارش: هر سفارش یک ردیف */
   const allGroups = useMemo((): OrderGroup[] => {

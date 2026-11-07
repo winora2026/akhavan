@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { safeDate } from "@/lib/date"
 import { withTotals } from "@/lib/orderTotals"
+import { getSession } from "@/lib/auth"
 
 export async function GET(
   req: NextRequest,
@@ -255,6 +256,111 @@ export async function PUT(
     console.error("Error updating order:", error)
     return NextResponse.json(
       { error: error.message || "خطا در بروزرسانی سفارش", details: error.meta || null },
+      { status: 500 }
+    )
+  }
+}
+
+// حذف کامل سفارش (فقط پیش‌فاکتور). اگر سفارش وارد تولید شده باشد،
+// قطعات تولید، ایستگاه‌ها و تاریخچه‌ی آن هم پاک می‌شود.
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const session = await getSession()
+    if (!session) {
+      return NextResponse.json({ error: "ابتدا وارد سیستم شوید" }, { status: 401 })
+    }
+
+    const { id } = await params
+
+    const order = await prisma.order.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        sepidarInvoiceId: true,
+        sepidarSyncStatus: true,
+      },
+    })
+    if (!order) {
+      return NextResponse.json({ error: "سفارش یافت نشد" }, { status: 404 })
+    }
+
+    if (order.status === "فاکتور") {
+      return NextResponse.json(
+        {
+          error:
+            "این سفارش فاکتور است. اول از لیست فاکتورها «برگشت به پیش‌فاکتور» بزنید، بعد حذفش کنید.",
+        },
+        { status: 400 }
+      )
+    }
+
+    // فاکتوری که در سپیدار ثبت شده با حذف محلی از سپیدار پاک نمی‌شود
+    if (order.sepidarSyncStatus === "SUCCESS" || order.sepidarInvoiceId) {
+      return NextResponse.json(
+        {
+          error:
+            "این سفارش قبلاً به سپیدار ارسال شده و از اینجا قابل حذف نیست. اول باید در سپیدار رسیدگی شود.",
+        },
+        { status: 409 }
+      )
+    }
+
+    let hadProduction = false
+
+    await prisma.$transaction(async (tx) => {
+      const prods = await tx.productionOrder.findMany({
+        where: { orderId: id },
+        select: { id: true },
+      })
+      const prodIds = prods.map((p) => p.id)
+
+      if (prodIds.length > 0) {
+        hadProduction = true
+        await tx.productionHistory.deleteMany({
+          where: { productionOrderId: { in: prodIds } },
+        })
+        await tx.productionItemStation.deleteMany({
+          where: { productionItem: { productionOrderId: { in: prodIds } } },
+        })
+        await tx.productionItem.deleteMany({
+          where: { productionOrderId: { in: prodIds } },
+        })
+        await tx.productionOrder.deleteMany({ where: { id: { in: prodIds } } })
+      }
+
+      await tx.orderItem.deleteMany({ where: { orderId: id } })
+      await tx.order.delete({ where: { id } })
+    })
+
+    console.log(
+      `[order delete] سفارش ${order.orderNumber} توسط ${session?.displayName || "نامشخص"} حذف شد` +
+        (hadProduction ? " (همراه با داده‌ی تولید)" : "")
+    )
+
+    return NextResponse.json({
+      success: true,
+      orderNumber: order.orderNumber,
+      hadProduction,
+    })
+  } catch (error: any) {
+    console.error("Error deleting order:", error)
+    // P2003 = رکورد دیگری (مثل ضایعات یا برگه‌ی خروج) هنوز به این سفارش وصل است
+    if (error?.code === "P2003") {
+      return NextResponse.json(
+        {
+          error:
+            "این سفارش هنوز رکوردهای وابسته دارد (مثلاً ضایعات یا برگه‌ی خروج) و حذف نشد. فایل prisma/schema.prisma را بفرستید تا حذف آن‌ها هم اضافه شود.",
+        },
+        { status: 409 }
+      )
+    }
+    return NextResponse.json(
+      { error: error.message || "خطا در حذف سفارش" },
       { status: 500 }
     )
   }

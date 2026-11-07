@@ -273,6 +273,8 @@ export default function PreInvoicesPage() {
   const [currentUserName, setCurrentUserName] = useState<string | null>(null)
   // پیش‌نمایش کامل پیش‌فاکتور با دبل‌کلیک روی ردیف (iframe همان صفحه‌ی ثبت سفارش در حالت preview)
   const [previewId, setPreviewId] = useState<string | null>(null)
+  // شناسه‌ی سفارشی که در حال حذف شدن است (برای غیرفعال کردن دکمه‌ی حذف)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   // آیا فیلترهای ذخیره‌شده بازیابی شده‌اند؟ تا قبل از آن، افکت ذخیره چیزی نمی‌نویسد
   // (تا مقادیر پیش‌فرضِ اولیه، حالت ذخیره‌شده را بازنویسی نکنند)
@@ -662,6 +664,7 @@ export default function PreInvoicesPage() {
     try {
       setSending(true)
       const { today, delivery } = calcNewDates(confirmItem)
+      const wasInvoicedBefore = !!confirmItem.invoicedAt
       const res = await fetch("/api/orders", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -684,9 +687,14 @@ export default function PreInvoicesPage() {
             ? {
                 ...i,
                 status: "فاکتور",
-                convertedBy: currentUserName || i.salesRep || null,
-                invoicedAt: new Date().toISOString(),
-                orderDate: toPersianStr(today),
+                // اگر قبلاً یک بار فاکتور شده بوده، تاریخ فاکتور اولیه (و تبدیل‌کننده) ثابت می‌ماند
+                convertedBy: wasInvoicedBefore
+                  ? i.convertedBy || currentUserName || i.salesRep || null
+                  : currentUserName || i.salesRep || null,
+                invoicedAt: wasInvoicedBefore
+                  ? i.invoicedAt
+                  : new Date().toISOString(),
+                orderDate: wasInvoicedBefore ? i.orderDate : toPersianStr(today),
                 deliveryDate: toPersianStr(delivery),
               }
             : i
@@ -699,6 +707,35 @@ export default function PreInvoicesPage() {
       alert(error.message || "خطا در انتقال به فاکتور")
     } finally {
       setSending(false)
+    }
+  }
+
+  // حذف پیش‌فاکتور (حتی اگر وارد تولید شده باشد؛ قطعات تولید و سوابقش هم پاک می‌شود)
+  const deleteOrder = async (item: OrderFromApi) => {
+    if (
+      !confirm(
+        `پیش‌فاکتور شماره ${item.orderNumber} (${item.customer?.name}) برای همیشه حذف شود؟\n\nاگر این سفارش وارد تولید شده باشد، قطعات تولید، لیبل‌ها و سوابق آن هم پاک می‌شود و برگشت‌پذیر نیست.`
+      )
+    )
+      return
+    setDeletingId(item.id)
+    try {
+      const res = await fetch(`/api/orders/${item.id}`, { method: "DELETE" })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        alert(data.error || "خطا در حذف سفارش")
+        return
+      }
+      setOrders((prev) => prev.filter((o) => o.id !== item.id))
+      alert(
+        data.hadProduction
+          ? `سفارش ${item.orderNumber} همراه با داده‌ی تولیدش حذف شد`
+          : `سفارش ${item.orderNumber} حذف شد`
+      )
+    } catch {
+      alert("خطا در ارتباط با سرور")
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -1102,12 +1139,22 @@ export default function PreInvoicesPage() {
                         onDoubleClick={(e) => e.stopPropagation()}
                       >
                         {!isInv ? (
-                          <button
-                            onClick={() => setConfirmItem(item)}
-                            className="rounded-lg bg-teal-500 hover:bg-teal-600 px-3 py-1.5 text-xs font-bold text-white shadow transition focus:ring-2 focus:ring-teal-300"
-                          >
-                            ارسال به فاکتور
-                          </button>
+                          <div className="flex gap-1.5 justify-center">
+                            <button
+                              onClick={() => setConfirmItem(item)}
+                              className="rounded-lg bg-teal-500 hover:bg-teal-600 px-3 py-1.5 text-xs font-bold text-white shadow transition focus:ring-2 focus:ring-teal-300"
+                            >
+                              ارسال به فاکتور
+                            </button>
+                            <button
+                              type="button"
+                              disabled={deletingId === item.id}
+                              onClick={() => deleteOrder(item)}
+                              className="rounded-lg bg-red-500/15 hover:bg-red-500/30 disabled:opacity-50 disabled:cursor-not-allowed px-3 py-1.5 text-xs font-bold text-red-700 transition focus:ring-2 focus:ring-red-300"
+                            >
+                              {deletingId === item.id ? "..." : "حذف"}
+                            </button>
+                          </div>
                         ) : (
                           <span className="text-xs text-gray-500">—</span>
                         )}
@@ -1223,12 +1270,24 @@ export default function PreInvoicesPage() {
 
               {newDates && (
                 <div className="rounded-xl bg-teal-50 border border-teal-200 p-3 text-sm">
-                  <p>
-                    تاریخ فاکتور (امروز):{" "}
-                    <strong className="text-teal-700">
-                      {formatDate(newDates.today.toISOString())}
-                    </strong>
-                  </p>
+                  {confirmItem.invoicedAt ? (
+                    <p>
+                      تاریخ فاکتور (اولیه):{" "}
+                      <strong className="text-teal-700">
+                        {formatDate(confirmItem.invoicedAt)}
+                      </strong>
+                      <span className="text-xs text-gray-500 mr-1">
+                        (این سفارش قبلاً فاکتور شده؛ ثابت می‌ماند)
+                      </span>
+                    </p>
+                  ) : (
+                    <p>
+                      تاریخ فاکتور (امروز):{" "}
+                      <strong className="text-teal-700">
+                        {formatDate(newDates.today.toISOString())}
+                      </strong>
+                    </p>
+                  )}
                   <p className="mt-1">
                     تاریخ تحویل جدید:{" "}
                     <strong className="text-teal-700">
@@ -1244,7 +1303,11 @@ export default function PreInvoicesPage() {
               <p className="text-sm text-gray-600 mt-3">با تأیید:</p>
               <ul className="text-sm text-gray-700 list-disc list-inside space-y-1">
                 <li>وضعیت به «فاکتور» تغییر می‌کند</li>
-                <li>تاریخ فاکتور و تاریخ تحویل از امروز به‌روزرسانی می‌شود</li>
+                <li>
+                  {confirmItem.invoicedAt
+                    ? "تاریخ فاکتور اولیه ثابت می‌ماند و فقط تاریخ تحویل به‌روزرسانی می‌شود"
+                    : "تاریخ فاکتور و تاریخ تحویل از امروز به‌روزرسانی می‌شود"}
+                </li>
                 <li>تاریخ پیش‌فاکتور (اولین ثبت) ثابت می‌ماند</li>
                 <li>سفارش به‌صورت خودکار وارد تولید می‌شود</li>
               </ul>

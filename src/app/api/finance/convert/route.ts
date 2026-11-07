@@ -2,15 +2,41 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getSession } from "@/lib/auth"
 
-function startOfDay(d: Date) {
-  const x = new Date(d)
-  x.setHours(0, 0, 0, 0)
-  return x
+/** YYYY-MM-DD یا ISO → شروع همان روز به وقت تهران */
+function dayStartTehran(input: string): Date | null {
+  if (!input) return null
+  const m = String(input).trim().match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (m) {
+    return new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00+03:30`)
+  }
+  const d = new Date(input)
+  if (isNaN(d.getTime())) return null
+  // از روی تقویم تهران همان روز را می‌گیریم
+  const fa = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tehran",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d) // YYYY-MM-DD
+  return new Date(`${fa}T00:00:00+03:30`)
 }
-function endOfDay(d: Date) {
-  const x = new Date(d)
-  x.setHours(23, 59, 59, 999)
-  return x
+
+/** YYYY-MM-DD یا ISO → پایان همان روز به وقت تهران */
+function dayEndTehran(input: string): Date | null {
+  if (!input) return null
+  const m = String(input).trim().match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (m) {
+    return new Date(`${m[1]}-${m[2]}-${m[3]}T23:59:59.999+03:30`)
+  }
+  const d = new Date(input)
+  if (isNaN(d.getTime())) return null
+  const fa = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tehran",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d)
+  return new Date(`${fa}T23:59:59.999+03:30`)
 }
 
 function orderTotal(order: {
@@ -24,13 +50,25 @@ function orderTotal(order: {
   return Math.round(sum - discount + extra)
 }
 
-/** شماره فاکتور را برای مقایسه بازه‌ای عددی می‌کند */
 function numOrder(n: string | null | undefined) {
   if (!n) return null
   const digits = String(n).replace(/[^\d]/g, "")
   if (!digits) return null
   const v = Number(digits)
   return isNaN(v) ? null : v
+}
+
+/** تاریخ مبنا برای فیلتر: فاکتور = invoicedAt وگرنه orderDate */
+function effectiveDate(
+  o: { invoicedAt?: Date | null; orderDate?: Date | null },
+  dateField: string
+): Date | null {
+  if (dateField === "order") {
+    return o.orderDate ? new Date(o.orderDate) : null
+  }
+  if (o.invoicedAt) return new Date(o.invoicedAt)
+  if (o.orderDate) return new Date(o.orderDate)
+  return null
 }
 
 export async function GET(req: NextRequest) {
@@ -54,28 +92,22 @@ export async function GET(req: NextRequest) {
     const toNo = searchParams.get("toNo")?.trim() || ""
     const q = (searchParams.get("q") || "").trim().toLowerCase()
     const syncStatus = searchParams.get("syncStatus") || "همه"
-    // تاریخ مبنا: invoicedAt یا orderDate
     const dateField = searchParams.get("dateField") || "invoice" // invoice | order
+
+    const fromDate = from ? dayStartTehran(from) : null
+    const toDate = to ? dayEndTehran(to) : null
 
     const where: any = {
       status: "فاکتور",
     }
 
-    if (from || to) {
-      const range: any = {}
-      if (from) range.gte = startOfDay(new Date(from))
-      if (to) range.lte = endOfDay(new Date(to))
-      if (dateField === "order") where.orderDate = range
-      else {
-        // ترجیح با invoicedAt؛ اگر null باشد در فیلتر کلاینت‌ساید هم پوشش می‌دهیم
-        where.OR = [
-          { invoicedAt: range },
-          { invoicedAt: null, orderDate: range },
-        ]
-      }
-    }
-
-    if (syncStatus === "SUCCESS" || syncStatus === "FAILED" || syncStatus === "PENDING") {
+    // فقط وضعیت همگام‌سازی را در Prisma فیلتر می‌کنیم
+    // فیلتر تاریخ را بعد از خواندن با تاریخ مؤثر انجام می‌دهیم تا جابه‌جایی روز و null بودن invoicedAt درست شود
+    if (
+      syncStatus === "SUCCESS" ||
+      syncStatus === "FAILED" ||
+      syncStatus === "PENDING"
+    ) {
       where.sepidarSyncStatus = syncStatus
     } else if (syncStatus === "NONE") {
       where.sepidarSyncStatus = null
@@ -87,10 +119,24 @@ export async function GET(req: NextRequest) {
         customer: true,
         items: true,
       },
-      orderBy: [{ invoicedAt: "desc" }, { orderDate: "desc" }, { orderNumber: "desc" }],
+      orderBy: [
+        { invoicedAt: "desc" },
+        { orderDate: "desc" },
+        { orderNumber: "desc" },
+      ],
     })
 
-    // فیلتر بازه شماره فاکتور
+    // فیلتر تاریخ با مرز روز تهران
+    if (fromDate || toDate) {
+      orders = orders.filter((o) => {
+        const d = effectiveDate(o, dateField)
+        if (!d || isNaN(d.getTime())) return false
+        if (fromDate && d < fromDate) return false
+        if (toDate && d > toDate) return false
+        return true
+      })
+    }
+
     const fromN = numOrder(fromNo)
     const toN = numOrder(toNo)
     if (fromN != null || toN != null) {

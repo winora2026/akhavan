@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
+import { SCRAPPED_STATUS } from "@/lib/createProductionOrder"
 
 // جستجوی سفارش (شماره سفارش / نام مشتری / بارکد) و فهرست همه‌ی قطعات تولیدی آن،
 // حتی قطعاتی که برش خورده‌اند یا از کارخانه خارج شده‌اند — برای ثبت ضایعات و برش مجدد بدون نیاز به بارکد.
@@ -72,7 +73,12 @@ export async function GET(req: Request) {
           recutNumber: (i as any).recutNumber || 0,
           labelStatus: i.labelStatus,
           inCuttingQueue: !!cut && ["در انتظار", "در حال انجام"].includes(cut.status),
-          currentStation: open ? open.station?.name || "—" : "تکمیل مسیر",
+          currentStation:
+            i.status === SCRAPPED_STATUS
+              ? "ضایعات (خارج از تولید)"
+              : open
+                ? open.station?.name || "—"
+                : "تکمیل مسیر",
           exited: !!ex,
           exitNumber: ex?.exitSlip?.exitNumber ?? null,
           wasteCount: i.wastes.length,

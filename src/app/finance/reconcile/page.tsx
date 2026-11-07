@@ -6,6 +6,8 @@ import DatePicker, { DateObject } from "react-multi-date-picker"
 import persian from "react-date-object/calendars/persian"
 import persian_fa from "react-date-object/locales/persian_fa"
 
+type Bucket = { count: number; rows: any[] }
+
 type Report = {
   range?: { StartDate: string; EndDate: string; days: number }
   sepidarInvoicesRead?: number
@@ -14,24 +16,36 @@ type Report = {
   matchedOk?: number
   applied?: boolean
   refused?: string | null
-  missingInSepidar?: { count: number; rows: any[] }
-  markableAsSent?: { count: number; rows: any[] }
-  wrongParty?: { count: number; rows: any[] }
-  priceDiff?: { count: number; rows: any[] }
+  missingInSepidar?: Bucket
+  markableAsSent?: Bucket
+  wrongParty?: Bucket
+  priceDiff?: Bucket
+  dateDiff?: Bucket
+  itemDiff?: Bucket
+  numberMismatch?: Bucket
+  duplicateInSepidar?: Bucket
 }
 
-type TabKey = "missing" | "markable" | "party" | "price"
+type TabKey =
+  | "duplicate"
+  | "number"
+  | "party"
+  | "price"
+  | "date"
+  | "item"
+  | "missing"
+  | "markable"
 
 const TABS: { key: TabKey; label: string; desc: string }[] = [
   {
-    key: "missing",
-    label: "حذف‌شده از سپیدار",
-    desc: "در اخوان SUCCESS است ولی در سپیدار نیست (شماره فاکتور)",
+    key: "duplicate",
+    label: "تکراری سپیدار",
+    desc: "یک شماره فاکتور بیش از یک‌بار در سپیدار ثبت شده (خطر دوبار کانورت)",
   },
   {
-    key: "markable",
-    label: "قابل علامت SUCCESS",
-    desc: "در سپیدار هست ولی در اخوان ارسال‌نشده/خطا مانده",
+    key: "number",
+    label: "شماره فاکتور",
+    desc: "شناسه ذخیره‌شده در اخوان به فاکتوری با شماره متفاوت در سپیدار وصل است",
   },
   {
     key: "party",
@@ -42,6 +56,26 @@ const TABS: { key: TabKey; label: string; desc: string }[] = [
     key: "price",
     label: "مبلغ",
     desc: "اختلاف جمع فاکتور بیش از ۱ ریال",
+  },
+  {
+    key: "date",
+    label: "تاریخ فاکتور",
+    desc: "روز تاریخ فاکتور در اخوان با سپیدار یکی نیست",
+  },
+  {
+    key: "item",
+    label: "کالا",
+    desc: "اختلاف نوع/کد یا تعداد اقلام (اگر API سپیدار اقلام را برگرداند)",
+  },
+  {
+    key: "missing",
+    label: "حذف‌شده از سپیدار",
+    desc: "در اخوان SUCCESS است ولی آن شماره در سپیدار نیست — برای اصلاح وضعیت اخوان",
+  },
+  {
+    key: "markable",
+    label: "قابل علامت SUCCESS",
+    desc: "در سپیدار هست ولی در اخوان هنوز SUCCESS نشده — می‌توانید وضعیت را هم‌تراز کنید",
   },
 ]
 
@@ -63,18 +97,17 @@ function defaultTo() {
   return new DateObject({ calendar: persian, locale: persian_fa })
 }
 
-function toIsoDayStart(d: DateObject | null) {
+/** ارسال به API به‌صورت YYYY-MM-DD (مرز روز در سرور با تهران بسته می‌شود) */
+function toYmd(d: DateObject | null) {
   if (!d) return null
   const x = d.toDate()
-  x.setHours(0, 0, 0, 0)
-  return x.toISOString()
-}
-
-function toIsoDayEnd(d: DateObject | null) {
-  if (!d) return null
-  const x = d.toDate()
-  x.setHours(23, 59, 59, 999)
-  return x.toISOString()
+  const fa = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tehran",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(x)
+  return fa
 }
 
 function daysBetween(from: DateObject | null, to: DateObject | null) {
@@ -92,7 +125,7 @@ export default function FinanceReconcilePage() {
   const [applying, setApplying] = useState(false)
   const [report, setReport] = useState<Report | null>(null)
   const [error, setError] = useState("")
-  const [tab, setTab] = useState<TabKey>("missing")
+  const [tab, setTab] = useState<TabKey>("duplicate")
   const [me, setMe] = useState<{ role: string } | null>(null)
 
   const canRun = me?.role === "finance" || me?.role === "admin"
@@ -115,8 +148,8 @@ export default function FinanceReconcilePage() {
   }, [])
 
   const rangeQuery = () => {
-    const from = toIsoDayStart(fromDate)
-    const to = toIsoDayEnd(toDate)
+    const from = toYmd(fromDate)
+    const to = toYmd(toDate)
     const days = daysBetween(fromDate, toDate)
     const q = new URLSearchParams()
     q.set("days", String(days))
@@ -164,8 +197,8 @@ export default function FinanceReconcilePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           days: daysBetween(fromDate, toDate),
-          from: toIsoDayStart(fromDate),
-          to: toIsoDayEnd(toDate),
+          from: toYmd(fromDate),
+          to: toYmd(toDate),
           apply: true,
           force,
         }),
@@ -173,11 +206,8 @@ export default function FinanceReconcilePage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "خطا")
       setReport(data)
-      if (data.refused) {
-        alert(data.refused)
-      } else {
-        alert(data.applied ? "اصلاح وضعیت‌ها اعمال شد" : "چیزی اعمال نشد")
-      }
+      if (data.refused) alert(data.refused)
+      else alert(data.applied ? "اصلاح وضعیت‌ها اعمال شد" : "چیزی اعمال نشد")
     } catch (e: any) {
       setError(e.message || "خطا")
     } finally {
@@ -185,21 +215,33 @@ export default function FinanceReconcilePage() {
     }
   }
 
-  const counts = {
-    missing: report?.missingInSepidar?.count || 0,
-    markable: report?.markableAsSent?.count || 0,
+  const counts: Record<TabKey, number> = {
+    duplicate: report?.duplicateInSepidar?.count || 0,
+    number: report?.numberMismatch?.count || 0,
     party: report?.wrongParty?.count || 0,
     price: report?.priceDiff?.count || 0,
+    date: report?.dateDiff?.count || 0,
+    item: report?.itemDiff?.count || 0,
+    missing: report?.missingInSepidar?.count || 0,
+    markable: report?.markableAsSent?.count || 0,
   }
 
   const currentRows =
-    tab === "missing"
-      ? report?.missingInSepidar?.rows || []
-      : tab === "markable"
-        ? report?.markableAsSent?.rows || []
+    tab === "duplicate"
+      ? report?.duplicateInSepidar?.rows || []
+      : tab === "number"
+        ? report?.numberMismatch?.rows || []
         : tab === "party"
           ? report?.wrongParty?.rows || []
-          : report?.priceDiff?.rows || []
+          : tab === "price"
+            ? report?.priceDiff?.rows || []
+            : tab === "date"
+              ? report?.dateDiff?.rows || []
+              : tab === "item"
+                ? report?.itemDiff?.rows || []
+                : tab === "missing"
+                  ? report?.missingInSepidar?.rows || []
+                  : report?.markableAsSent?.rows || []
 
   return (
     <div
@@ -219,7 +261,7 @@ export default function FinanceReconcilePage() {
               گزارش مغایرت‌گیری
             </h1>
             <p className="text-base text-blue-900 mt-1 font-semibold">
-              مقایسه فاکتورهای اخوان با سپیدار (شماره، طرف‌حساب، مبلغ)
+              شماره، طرف‌حساب، مبلغ، تاریخ، کالا و فاکتور تکراری در سپیدار
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -284,7 +326,6 @@ export default function FinanceReconcilePage() {
             onClick={() => applyFix(false)}
             disabled={applying || !report || !canRun}
             className="rounded-xl bg-teal-600 text-white font-bold px-5 py-2.5 disabled:opacity-50"
-            title="اگر تعداد حذف‌شده زیاد باشد ممکن است رد شود"
           >
             {applying ? "..." : "اعمال اصلاح وضعیت"}
           </button>
@@ -292,7 +333,6 @@ export default function FinanceReconcilePage() {
             onClick={() => applyFix(true)}
             disabled={applying || !report || !canRun}
             className="rounded-xl bg-amber-600 text-white font-bold px-5 py-2.5 disabled:opacity-50"
-            title="حتی با تعداد زیاد مغایرت، اصلاح را اجباری اعمال می‌کند"
           >
             اعمال با force
           </button>
@@ -335,7 +375,13 @@ export default function FinanceReconcilePage() {
                   {report.matchedOk ?? 0}
                 </p>
               </div>
-              <div className="rounded-xl bg-white/90 border border-teal-500/20 p-3 text-center col-span-2">
+              <div className="rounded-xl bg-red-50/95 border border-red-200 p-3 text-center">
+                <p className="text-xs font-bold text-gray-600">تکراری سپیدار</p>
+                <p className="text-xl font-black text-red-700">
+                  {counts.duplicate}
+                </p>
+              </div>
+              <div className="rounded-xl bg-white/90 border border-teal-500/20 p-3 text-center">
                 <p className="text-xs font-bold text-gray-600">بازه API</p>
                 <p className="text-sm font-bold" dir="ltr">
                   {report.range?.StartDate} → {report.range?.EndDate}
@@ -349,7 +395,7 @@ export default function FinanceReconcilePage() {
                   key={t.key}
                   type="button"
                   onClick={() => setTab(t.key)}
-                  className={`rounded-xl px-4 py-2 font-bold border ${
+                  className={`rounded-xl px-3 py-2 text-sm font-bold border ${
                     tab === t.key
                       ? "bg-teal-600 text-white border-teal-700"
                       : "bg-white/90 text-blue-900 border-teal-200"
@@ -373,6 +419,19 @@ export default function FinanceReconcilePage() {
                     <th className="p-3">شماره فاکتور</th>
                     <th className="p-3">مشتری</th>
                     <th className="p-3">وضعیت اخوان</th>
+                    {tab === "duplicate" && (
+                      <>
+                        <th className="p-3">تعداد در سپیدار</th>
+                        <th className="p-3">شناسه‌ها</th>
+                      </>
+                    )}
+                    {tab === "number" && (
+                      <>
+                        <th className="p-3">شماره مورد انتظار</th>
+                        <th className="p-3">شماره سپیدار</th>
+                        <th className="p-3">شناسه سپیدار</th>
+                      </>
+                    )}
                     {tab === "missing" && (
                       <th className="p-3">شماره مورد انتظار</th>
                     )}
@@ -393,6 +452,18 @@ export default function FinanceReconcilePage() {
                         <th className="p-3">اختلاف</th>
                       </>
                     )}
+                    {tab === "date" && (
+                      <>
+                        <th className="p-3">تاریخ اخوان</th>
+                        <th className="p-3">تاریخ سپیدار</th>
+                      </>
+                    )}
+                    {tab === "item" && (
+                      <>
+                        <th className="p-3">شرح مغایرت کالا</th>
+                        <th className="p-3">تعداد اقلام</th>
+                      </>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -404,6 +475,29 @@ export default function FinanceReconcilePage() {
                       </td>
                       <td className="p-3 font-bold">{r.customer || "—"}</td>
                       <td className="p-3 text-center text-sm">{r.status || "—"}</td>
+                      {tab === "duplicate" && (
+                        <>
+                          <td className="p-3 text-center font-black text-red-700">
+                            {r.count ?? "—"}
+                          </td>
+                          <td className="p-3 text-center text-xs" dir="ltr">
+                            {(r.sepidarInvoiceIds || []).join(", ") || "—"}
+                          </td>
+                        </>
+                      )}
+                      {tab === "number" && (
+                        <>
+                          <td className="p-3 text-center" dir="ltr">
+                            {r.expectedNumber ?? "—"}
+                          </td>
+                          <td className="p-3 text-center" dir="ltr">
+                            {r.sepidarNumber ?? "—"}
+                          </td>
+                          <td className="p-3 text-center" dir="ltr">
+                            {r.sepidarInvoiceId ?? "—"}
+                          </td>
+                        </>
+                      )}
                       {tab === "missing" && (
                         <td className="p-3 text-center" dir="ltr">
                           {r.expectedNumber ?? "—"}
@@ -445,6 +539,25 @@ export default function FinanceReconcilePage() {
                           </td>
                         </>
                       )}
+                      {tab === "date" && (
+                        <>
+                          <td className="p-3 text-center" dir="ltr">
+                            {r.akhavanDate ?? "—"}
+                          </td>
+                          <td className="p-3 text-center" dir="ltr">
+                            {r.sepidarDate ?? "—"}
+                          </td>
+                        </>
+                      )}
+                      {tab === "item" && (
+                        <>
+                          <td className="p-3 text-sm">{r.detail || "—"}</td>
+                          <td className="p-3 text-center text-sm" dir="ltr">
+                            {r.akhavanItemCount ?? "—"} /{" "}
+                            {r.sepidarItemCount ?? "—"}
+                          </td>
+                        </>
+                      )}
                     </tr>
                   ))}
                   {currentRows.length === 0 && (
@@ -462,7 +575,9 @@ export default function FinanceReconcilePage() {
             </div>
 
             <p className="text-sm text-blue-950/80 mt-3 font-semibold">
-              حداکثر ۲۰۰ ردیف در هر دسته نمایش داده می‌شود.
+              حداکثر ۲۰۰ ردیف در هر دسته. تب «تکراری سپیدار» همان مشکل دوبار
+              کانورت را نشان می‌دهد. تب کالا فقط وقتی پر می‌شود که GetAllInvoices
+              اقلام را برگرداند.
             </p>
           </>
         )}

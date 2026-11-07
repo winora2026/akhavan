@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
+import { SCRAPPED_STATUS } from "@/lib/createProductionOrder"
 
 // بارکد بعدی: بزرگ‌ترین بارکد عددی موجود + ۱ (هم‌طول با بارکدهای قبلی)
 // ⚠️ اگر بارکد اصلی را جای دیگری با منطق خاص تولید می‌کنید، فقط همین تابع را با آن عوض کنید
@@ -63,6 +64,13 @@ export async function POST(req: Request) {
           }
 
           const item = waste.productionItem
+          if (item.status === SCRAPPED_STATUS) {
+            skipped.push({
+              wasteId,
+              why: "این قطعه قبلاً ضایعات شده و از تولید خارج است",
+            })
+            continue
+          }
           const stillInQueue = item.stations.some(
             (s) =>
               s.stationId === cutStation.id &&
@@ -129,6 +137,44 @@ export async function POST(req: Request) {
                 quantityIn: st.stationId === cutStation.id ? qty : null,
               },
             })
+          }
+
+          // قطعه‌ی قبلی از تولید خارج می‌شود (در هر ایستگاهی که بوده، حتی ایستگاه آخر)
+          // و فقط در گزارش ضایعات می‌ماند. اگر فقط بخشی از تعدادش ضایعات شده، باقیِ سالم می‌ماند.
+          const oldQty = item.quantity || 1
+          if (qty >= oldQty) {
+            await tx.productionHistory.updateMany({
+              where: { productionItemId: item.id, productionItemStationId: { not: null } },
+              data: { productionItemStationId: null },
+            })
+            await tx.productionItemStation.deleteMany({
+              where: { productionItemId: item.id },
+            })
+            await tx.productionItem.update({
+              where: { id: item.id },
+              data: { status: SCRAPPED_STATUS, currentStationId: null },
+            })
+          } else {
+            const left = oldQty - qty
+            await tx.productionItem.update({
+              where: { id: item.id },
+              data: {
+                quantity: left,
+                meterage:
+                  item.meterage != null ? (item.meterage * left) / oldQty : item.meterage,
+              },
+            })
+            for (const st of item.stations) {
+              if (
+                ["در انتظار", "در حال انجام"].includes(st.status) &&
+                st.quantityIn != null
+              ) {
+                await tx.productionItemStation.update({
+                  where: { id: st.id },
+                  data: { quantityIn: Math.max(st.quantityIn - qty, 0) },
+                })
+              }
+            }
           }
 
           await tx.waste.update({

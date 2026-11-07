@@ -158,6 +158,7 @@ export async function GET(req: Request) {
     const relabelCandidates = await prisma.productionItem.findMany({
       where: {
         labelStatus: "مجاز چاپ مجدد",
+        status: { not: "ضایعات" },
         productionOrder: { order: { status: "فاکتور" } },
         history: { some: { action: TAG_RELABEL } },
       },
