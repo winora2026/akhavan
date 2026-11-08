@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
+import { sharesNameToken } from "@/lib/sepidar/customerCodes"
 
 // ذخیره و خواندن مشتریانی که از صفحه‌ی «مدیریت مشتریان» ثبت می‌شوند.
 // مشتریان قدیمی (فایل customers-seed.json) همچنان از خود فایل خوانده می‌شوند.
@@ -68,6 +69,19 @@ export async function POST(req: NextRequest) {
   try {
     const built = buildData(await req.json())
     if ("error" in built) return NextResponse.json({ error: built.error }, { status: 400 })
+
+    // اولین ویرایشِ مشتری seed: اگر برای همین کد از قبل ردیفی در دیتابیس هست (مثلاً از سفارش یا لینک سپیدار ساخته شده
+    // و کدش با سپیدار هماهنگ شده)، به‌جای خطای «کد تکراری»، همان ردیف به‌روز می‌شود. فقط وقتی نامشان هم می‌خواند.
+    const code = built.data.customerCode
+    if (code) {
+      const existing: any = await prisma.customer.findUnique({ where: { customerCode: code } })
+      if (existing && sharesNameToken(String(existing.name || ""), built.data.name)) {
+        const { customerCode: _keep, ...rest } = built.data
+        await prisma.customer.update({ where: { id: existing.id }, data: rest })
+        return NextResponse.json({ success: true, id: existing.id }, { status: 200 })
+      }
+    }
+
     const created = await prisma.customer.create({ data: built.data })
     return NextResponse.json({ success: true, id: created.id }, { status: 201 })
   } catch (error: any) {
@@ -81,7 +95,17 @@ export async function PUT(req: NextRequest) {
     if (!id) return NextResponse.json({ error: "شناسه مشتری الزامی است" }, { status: 400 })
     const built = buildData(await req.json())
     if ("error" in built) return NextResponse.json({ error: built.error }, { status: 400 })
-    await prisma.customer.update({ where: { id }, data: built.data })
+
+    // مشتری‌ای که به سپیدار وصل است: کد او را سپیدار تعیین کرده و ویرایش فرم نباید آن را بازنویسی کند
+    // (صفحه‌ی باز قبل از کانورت هنوز کد قدیمی را دارد و ذخیره‌اش کد سپیدار را برمی‌گرداند به کد قدیمی)
+    const current: any = await prisma.customer.findUnique({
+      where: { id },
+      select: { sepidarPartyRef: true },
+    })
+    const data: any = { ...built.data }
+    if (current?.sepidarPartyRef) delete data.customerCode
+
+    await prisma.customer.update({ where: { id }, data })
     return NextResponse.json({ success: true })
   } catch (error: any) {
     return errorResponse(error, "خطا در ویرایش مشتری")
