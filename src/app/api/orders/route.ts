@@ -13,15 +13,11 @@ import { notifyOrderRegistered } from "@/lib/orderRegisteredSms"
 // دو سریال جدا داریم و شماره‌ی سفارش همان شماره‌ی فاکتور سپیدار می‌شود:
 //   خریداری: چهار رقمی (از ۳۳۹۶ به بعد)
 //   اجرتی:   سریال ۹۰۰xxx (از ۹۰۰۵۷۴ به بعد)
-// سفارشی که «خط تولید»ش اجرتی باشد سریال اجرتی می‌گیرد، بقیه سریال خریداری.
 const RENTAL_PRODUCTION_LINE = "اجرتی"
 
-// خریداری: شروع شماره‌ی سفارش
 const PURCHASE_ORDER_NUMBER_START = 3396
 const PURCHASE_ORDER_NUMBER_MAX = 99999
 
-// اجرتی: شروع سریال. باید از آخرین شماره‌ی اجرتی در سپیدار و نرم‌افزار قدیمی
-// بزرگ‌تر باشد و اگر نرم‌افزار قدیمی هنوز کار می‌کند، با آن تداخل نکند.
 const RENTAL_ORDER_NUMBER_START = 900574
 const RENTAL_ORDER_NUMBER_MIN = 900000
 const RENTAL_ORDER_NUMBER_MAX = 999999
@@ -57,7 +53,6 @@ export async function GET() {
       },
     })
 
-    // هر سفارش با subtotalAmount / totalAfterDiscount / vatAmount / finalTotal برمی‌گردد
     return NextResponse.json(orders.map((o: any) => withTotals(o)))
   } catch (error: any) {
     console.error("Error fetching orders:", error)
@@ -118,8 +113,8 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // سریال سفارش: اجرتی (۹۰۰xxx) یا خریداری (چهار رقمی)
-    const isRental = String(productionLine || "").trim() === RENTAL_PRODUCTION_LINE
+    const isRental =
+      String(productionLine || "").trim() === RENTAL_PRODUCTION_LINE
 
     const customerOrdersCount = await prisma.order.count({
       where: { customerId: customer.id },
@@ -142,7 +137,6 @@ export async function POST(req: NextRequest) {
 
     const itemsData = (items || []).map((item: any, index: number) => ({
       productName: item.productName || "بدون نام",
-      // کد کالا (برای تشخیص آیتم درست در سپیدار، مخصوصاً وقتی دو کالا هم‌نام هستند)
       productCode: item.productCode ? String(item.productCode).trim() : null,
       pieceNumber: item.partNumber || null,
       installationCode: item.installCode || null,
@@ -164,7 +158,6 @@ export async function POST(req: NextRequest) {
       sortOrder: index,
     }))
 
-    // ساخت سفارش؛ اگر دو نفر هم‌زمان ثبت کنند و شماره تکراری شد، شماره دوباره محاسبه می‌شود
     let order: any = null
     let nextOrderNumber = 0
     let lastError: any = null
@@ -212,7 +205,6 @@ export async function POST(req: NextRequest) {
         break
       } catch (err: any) {
         lastError = err
-        // P2002 = شماره‌ی سفارش تکراری؛ دوباره از دیتابیس محاسبه و تلاش می‌کنیم
         if (err?.code !== "P2002") throw err
       }
     }
@@ -246,7 +238,14 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json()
-    const { id, status, convertedBy, orderDate, deliveryDate } = body
+    const {
+      id,
+      status,
+      convertedBy,
+      orderDate,
+      deliveryDate,
+      cancelReason,
+    } = body
 
     if (!id || !status) {
       return NextResponse.json(
@@ -255,13 +254,68 @@ export async function PATCH(req: NextRequest) {
       )
     }
 
-    // وضعیت قبلی: پیامک خودکار «ثبت سفارش» فقط وقتی بررسی می‌شود که سفارش از غیرفاکتور به فاکتور تبدیل شده باشد
     const before = await prisma.order.findUnique({
       where: { id },
-      select: { status: true, invoicedAt: true, convertedBy: true },
+      select: {
+        status: true,
+        invoicedAt: true,
+        convertedBy: true,
+      },
     })
 
-    // برگرداندن فاکتور به پیش‌فاکتور فقط اگر برش شروع نشده باشد
+    if (!before) {
+      return NextResponse.json({ error: "سفارش یافت نشد" }, { status: 404 })
+    }
+
+    // ───────────── لغو قطعی پیش‌فاکتور ─────────────
+    if (status === "لغو شده") {
+      const reason = cancelReason ? String(cancelReason).trim() : ""
+      if (!reason) {
+        return NextResponse.json(
+          { error: "دلیل لغو الزامی است" },
+          { status: 400 }
+        )
+      }
+      if (before.status === "فاکتور") {
+        return NextResponse.json(
+          { error: "فاکتور قطعی را از اینجا لغو نکنید" },
+          { status: 400 }
+        )
+      }
+      if (before.status === "لغو شده") {
+        return NextResponse.json(
+          { error: "این پیش‌فاکتور قبلاً لغو شده است" },
+          { status: 400 }
+        )
+      }
+
+      const sessionCancel = await getSession()
+      const who =
+        (convertedBy && String(convertedBy).trim()) ||
+        sessionCancel?.displayName ||
+        null
+
+      const cancelled = await prisma.order.update({
+        where: { id },
+        data: {
+          status: "لغو شده",
+          cancelledAt: new Date(),
+          cancelledBy: who,
+          cancelReason: reason,
+        },
+        include: {
+          customer: true,
+          items: true,
+        },
+      })
+
+      return NextResponse.json({
+        success: true,
+        order: withTotals(cancelled),
+      })
+    }
+
+    // ───────────── برگشت فاکتور به پیش‌فاکتور ─────────────
     if (status === "پیش‌فاکتور") {
       const prod = await prisma.productionOrder.findFirst({
         where: { orderId: id },
@@ -275,8 +329,6 @@ export async function PATCH(req: NextRequest) {
       })
 
       if (prod) {
-        // قطعات تولید پاک نمی‌شوند: تا ارسال مجدد نگه داشته می‌شوند (از صف‌ها پنهان‌اند)
-        // و بعد از ویرایش فقط قطعات جدید/تغییرکرده دوباره وارد صف برش می‌شوند.
         await prisma.productionHistory.create({
           data: {
             productionOrderId: prod.id,
@@ -288,19 +340,15 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
-    // اگر این سفارش قبلاً یک بار فاکتور شده (و بعد برای اصلاح به پیش‌فاکتور برگشته)،
-    // تاریخ فاکتور اولیه حفظ می‌شود و در لیست روز اول می‌ماند.
     const firstInvoicedAt = before?.invoicedAt || null
     const reInvoicing = status === "فاکتور" && !!firstInvoicedAt
 
-    // تاریخ تحویل (و در صورت ارسال، orderDate) فقط هنگام تبدیل به فاکتور
     const dateUpdates: { orderDate?: Date; deliveryDate?: Date } = {}
     if (status === "فاکتور") {
       if (orderDate && !reInvoicing) dateUpdates.orderDate = safeDate(orderDate)
       if (deliveryDate) dateUpdates.deliveryDate = safeDate(deliveryDate)
     }
 
-    // نام منتقل‌کننده: از body یا از نشست لاگین
     const session = await getSession()
     const whoConverted =
       (convertedBy && String(convertedBy).trim()) ||
@@ -318,7 +366,6 @@ export async function PATCH(req: NextRequest) {
                 ? before?.convertedBy || whoConverted
                 : whoConverted,
               invoicedAt: firstInvoicedAt || new Date(),
-              // برای سازگاری با گزارش‌های قدیمی notes هم نگه داشته می‌شود
               notes: reInvoicing
                 ? undefined
                 : whoConverted
@@ -326,11 +373,7 @@ export async function PATCH(req: NextRequest) {
                   : undefined,
             }
           : {}),
-        ...(status === "پیش‌فاکتور"
-          ? {
-              // تاریخ فاکتور اولیه (invoicedAt) و تبدیل‌کننده برای ارسال مجدد حفظ می‌شود
-            }
-          : {}),
+        ...(status === "پیش‌فاکتور" ? {} : {}),
       },
       include: {
         customer: true,
@@ -356,7 +399,6 @@ export async function PATCH(req: NextRequest) {
           console.error("production create failed:", result.error)
         }
       } else {
-        // ارسال مجدد بعد از ویرایش: فقط قطعات جدید/ویرایش‌شده وارد صف می‌شوند
         const sync = await syncProductionOrderFromSales(order.id)
         if (sync.ok) {
           productionSync = sync
@@ -367,10 +409,6 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
-    // پیامک خودکار «ثبت سفارش» (فقط وقتی ORDER_SMS_ENABLED=true باشد).
-    // اگر برای این فاکتور قبلاً پیامک رفته باشد (مثلاً بعد از برگشت به پیش‌فاکتور و ارسال مجدد)،
-    // تابع خودش رد می‌کند و پیامک تکراری نمی‌رود؛ اگر قبلاً ناموفق بوده، دوباره تلاش می‌کند.
-    // منتظر نتیجه‌اش نمی‌مانیم تا تبدیل به فاکتور کند نشود؛ تابع هیچ‌وقت ارور نمی‌دهد.
     if (status === "فاکتور" && before?.status !== "فاکتور") {
       void notifyOrderRegistered(order.id)
     }

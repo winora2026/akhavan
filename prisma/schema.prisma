@@ -71,6 +71,10 @@ model Order {
   smsError               String?
   items                  OrderItem[]
   productionOrders       ProductionOrder[]
+    // لغو پیش‌فاکتور
+  cancelledAt            DateTime?
+  cancelledBy            String?
+  cancelReason           String?
 }
 
 model OrderItem {

@@ -29,11 +29,13 @@ type OrderFromApi = {
   salesRep?: string | null
   convertedBy?: string | null
   invoicedAt?: string | null
+  cancelledAt?: string | null
+  cancelledBy?: string | null
+  cancelReason?: string | null
   customer: {
     id: string
     name: string
     customerGroup: string | null
-    // کد مشتری (بسته به خروجی /api/orders یکی از این دو فیلد پر می‌شود)
     customerCode?: string | null
     code?: string | null
   }
@@ -89,14 +91,12 @@ const PERSIAN_MONTHS = [
 
 const PERSIAN_DATE_REGEX = /^\d{3,4}\/\d{1,2}\/\d{1,2}$/
 
-// ===== ذخیره‌ی حالت فیلترها (برای وقتی به صفحه‌ی دیگر می‌رویم و برمی‌گردیم) =====
-// در sessionStorage نگه داشته می‌شود: با رفتن به صفحه‌ی دیگر و برگشتن می‌ماند،
-// ولی با بستن تب پاک می‌شود تا روز بعد با فیلترهای کهنه شروع نشود.
 const FILTERS_STORAGE_KEY = "preInvoicesFilters"
 const SCROLL_STORAGE_KEY = "preInvoicesTableScroll"
 
 const serializeFilterDate = (d: any): string | null =>
   d && typeof d.toDate === "function" ? d.toDate().toISOString() : null
+
 const deserializeFilterDate = (iso: string | null | undefined) =>
   iso
     ? new DateObject({
@@ -120,7 +120,6 @@ const normalizeText = (value: string | null | undefined) => {
     .trim()
 }
 
-// کدهای مشتریان قدیمی (از فایل لیست مشتریان): نام نرمال‌شده → کد (همان منطق صفحه‌ی فاکتورها)
 const seedCodeByName = (() => {
   const map = new Map<string, string>()
   ;(customersSeedRaw as any[]).forEach((c: any) => {
@@ -139,8 +138,6 @@ const seedCodeByName = (() => {
   return map
 })()
 
-// کد مشتری: اگر در دیتابیس کد واقعی ثبت شده همان؛ وگرنه (خالی یا کد خودکارِ C-عدد که سیستم هنگام
-// ثبت سفارش می‌سازد) از لیست مشتریان قدیمی به‌اسم پیدا می‌شود
 const getCustomerCode = (o: OrderFromApi) => {
   const dbCode = String(o.customer?.customerCode || o.customer?.code || "").trim()
   if (dbCode && !/^C-\d{8,}$/.test(dbCode)) return dbCode
@@ -203,6 +200,7 @@ const isSameLocalDay = (a: Date, b: Date) =>
 
 const isPreStatus = (s: string) => s === "پیش‌فاکتور" || s === "ثبت‌شده"
 const isInvoiceStatus = (s: string) => s === "فاکتور"
+const isCancelledStatus = (s: string) => s === "لغو شده"
 
 const IRAN_HOLIDAYS: string[] = []
 const DEFAULT_LEAD_DAYS = 4
@@ -248,10 +246,11 @@ const calcNewDates = (order: {
   return { today, delivery: addBusinessDays(today, lead), lead }
 }
 
-const toPersianStr = (d: Date) =>
-  new DateObject({ date: d, calendar: persian, locale: persian_fa }).format(
-    "YYYY/MM/DD"
-  )
+const formatPrice = (n: number) =>
+  Math.round(n || 0).toLocaleString("fa-IR")
+
+const thClass =
+  "p-3 font-bold text-center cursor-pointer select-none hover:bg-teal-200/60 whitespace-nowrap"
 
 export default function PreInvoicesPage() {
   const [orders, setOrders] = useState<OrderFromApi[]>([])
@@ -263,26 +262,21 @@ export default function PreInvoicesPage() {
   const [confirmItem, setConfirmItem] = useState<OrderFromApi | null>(null)
   const [selectedExpert, setSelectedExpert] = useState("همه کارشناسان")
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("pre")
-  // پیش‌فرض: فقط امروز؛ با گذشتن از نیمه‌شب صفحه خودکار روی روز جدید (خالی) می‌رود.
-  // برای روزهای قبل از «از تاریخ / تا تاریخ» یا «همه روزها» استفاده کنید.
   const [dayFilter, setDayFilter] = useState<"all" | "today">("today")
   const [dayKey, setDayKey] = useState(() => new Date().toDateString())
   const [sending, setSending] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>("orderDate")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
   const [currentUserName, setCurrentUserName] = useState<string | null>(null)
-  // پیش‌نمایش کامل پیش‌فاکتور با دبل‌کلیک روی ردیف (iframe همان صفحه‌ی ثبت سفارش در حالت preview)
   const [previewId, setPreviewId] = useState<string | null>(null)
-  // شناسه‌ی سفارشی که در حال حذف شدن است (برای غیرفعال کردن دکمه‌ی حذف)
   const [deletingId, setDeletingId] = useState<string | null>(null)
-
-  // آیا فیلترهای ذخیره‌شده بازیابی شده‌اند؟ تا قبل از آن، افکت ذخیره چیزی نمی‌نویسد
-  // (تا مقادیر پیش‌فرضِ اولیه، حالت ذخیره‌شده را بازنویسی نکنند)
+  const [cancelItem, setCancelItem] = useState<OrderFromApi | null>(null)
+  const [cancelReason, setCancelReason] = useState("")
+  const [cancelling, setCancelling] = useState(false)
   const [filtersRestored, setFiltersRestored] = useState(false)
   const tableRef = useRef<HTMLDivElement>(null)
   const scrollRestoredRef = useRef(false)
 
-  // بازیابی فیلترها فقط در کلاینت (بعد از mount) تا با رندر سمت سرور ناسازگاری ایجاد نشود
   useEffect(() => {
     try {
       const raw = sessionStorage.getItem(FILTERS_STORAGE_KEY)
@@ -292,10 +286,16 @@ export default function PreInvoicesPage() {
         if (f.fromDate) setFromDate(deserializeFilterDate(f.fromDate))
         if (f.toDate) setToDate(deserializeFilterDate(f.toDate))
         if (typeof f.selectedMonth === "string") setSelectedMonth(f.selectedMonth)
-        if (typeof f.selectedExpert === "string") setSelectedExpert(f.selectedExpert)
-        if (f.statusFilter === "pre" || f.statusFilter === "invoice" || f.statusFilter === "all")
+        if (typeof f.selectedExpert === "string")
+          setSelectedExpert(f.selectedExpert)
+        if (
+          f.statusFilter === "pre" ||
+          f.statusFilter === "invoice" ||
+          f.statusFilter === "all"
+        )
           setStatusFilter(f.statusFilter)
-        if (f.dayFilter === "all" || f.dayFilter === "today") setDayFilter(f.dayFilter)
+        if (f.dayFilter === "all" || f.dayFilter === "today")
+          setDayFilter(f.dayFilter)
         if (f.sortKey) setSortKey(f.sortKey)
         if (f.sortDir === "asc" || f.sortDir === "desc") setSortDir(f.sortDir)
       }
@@ -306,7 +306,6 @@ export default function PreInvoicesPage() {
     }
   }, [])
 
-  // ذخیره‌ی خودکار فیلترها با هر تغییر
   useEffect(() => {
     if (!filtersRestored) return
     try {
@@ -340,7 +339,6 @@ export default function PreInvoicesPage() {
     sortDir,
   ])
 
-  // بازیابی محل اسکرول جدول (یک‌بار، بعد از اینکه لیست بارگذاری شد)
   useEffect(() => {
     if (loading || scrollRestoredRef.current) return
     const el = tableRef.current
@@ -387,8 +385,6 @@ export default function PreInvoicesPage() {
     }
   }, [previewId])
 
-  // به‌روزرسانی خودکار: هر ۶۰ ثانیه (و وقتی دوباره به تب برمی‌گردید) لیست بدون رفرش و بدون چشمک‌زدن
-  // دوباره خوانده می‌شود. کلید روز هم همین‌جا عوض می‌شود تا با رد شدن از نیمه‌شب، صفحه خودکار روی روز جدید برود.
   useEffect(() => {
     const tick = () => {
       if (document.hidden) return
@@ -403,7 +399,6 @@ export default function PreInvoicesPage() {
     }
   }, [])
 
-  // انتخاب تاریخ/ماه دستی یعنی کاربر روزهای دیگر را می‌خواهد؛ پس فیلتر «امروز» کنار می‌رود
   useEffect(() => {
     if (fromDate || toDate || selectedMonth !== "همه") setDayFilter("all")
   }, [fromDate, toDate, selectedMonth])
@@ -414,7 +409,6 @@ export default function PreInvoicesPage() {
       const res = await fetch("/api/orders")
       if (!res.ok) throw new Error("خطا در دریافت سفارش‌ها")
       const data = await res.json()
-      // همه سفارش‌ها را نگه می‌داریم؛ فیلتر وضعیت سمت کلاینت است
       setOrders(Array.isArray(data) ? data : [])
     } catch (error) {
       console.error(error)
@@ -434,11 +428,9 @@ export default function PreInvoicesPage() {
     ]
   }, [orders])
 
-  // جمع اقلام (کالا + خدمات) بدون تخفیف و ارزش افزوده
   const getSubtotal = (order: OrderFromApi) =>
     order.items?.reduce((sum, item) => sum + (item.totalPrice || 0), 0) || 0
 
-  // ارزش افزوده: فقط برای فاکتور رسمی، ۱۰٪ بعد از کسر تخفیف
   const getVatAmount = (order: OrderFromApi) => {
     if (!order.isOfficialInvoice) return 0
     if (typeof order.vatAmount === "number") return order.vatAmount
@@ -446,7 +438,6 @@ export default function PreInvoicesPage() {
     return Math.round(afterDiscount * 0.1)
   }
 
-  // قیمت کل: برای فاکتور رسمی، مبلغ قابل پرداخت با ارزش افزوده؛ برای غیررسمی همان جمع اقلام
   const getTotalPrice = (order: OrderFromApi) => {
     const subtotal = getSubtotal(order)
     if (!order.isOfficialInvoice) return subtotal
@@ -475,6 +466,7 @@ export default function PreInvoicesPage() {
     let preToday = 0
     let invToday = 0
     for (const o of orders) {
+      if (isCancelledStatus(o.status)) continue
       const created = parseOrderDate(o.createdAt)
       const invAt = parseOrderDate(o.invoicedAt || null)
       if (isPreStatus(o.status)) {
@@ -487,11 +479,18 @@ export default function PreInvoicesPage() {
         else if (!invAt && created && isSameLocalDay(created, now)) invToday++
       }
     }
-    return { pre, inv, all: orders.length, preToday, invToday }
+    return {
+      pre,
+      inv,
+      all: orders.filter((o) => !isCancelledStatus(o.status)).length,
+      preToday,
+      invToday,
+    }
   }, [orders, dayKey])
 
   const filtered = useMemo(() => {
-    let result = [...orders]
+    // لغوشده‌ها در این صفحه نیستند
+    let result = orders.filter((o) => !isCancelledStatus(o.status))
     const now = new Date()
 
     if (statusFilter === "pre") {
@@ -524,7 +523,6 @@ export default function PreInvoicesPage() {
       )
     }
 
-    // فیلتر بازه/ماه روی تاریخ پیش‌فاکتور (createdAt)
     if (fromDate) {
       const from = fromDate?.toDate ? fromDate.toDate() : new Date(fromDate)
       from.setHours(0, 0, 0, 0)
@@ -634,87 +632,94 @@ export default function PreInvoicesPage() {
     selectedExpert,
     statusFilter,
     dayFilter,
-    dayKey,
     sortKey,
     sortDir,
+    dayKey,
   ])
 
   const report = useMemo(() => {
-    const totalCount = filtered.length
-    const totalMeterage = filtered.reduce(
-      (sum, o) => sum + (o.totalMeterage || 0),
-      0
-    )
-    const totalPrice = filtered.reduce((sum, o) => sum + getTotalPrice(o), 0)
-    const totalDiscount = filtered.reduce(
-      (sum, o) => sum + (o.discountAmount || 0),
-      0
-    )
-    const totalVat = filtered.reduce((sum, o) => sum + getVatAmount(o), 0)
+    let totalCount = 0
+    let totalMeterage = 0
+    let totalPrice = 0
+    let totalDiscount = 0
+    let totalVat = 0
+    for (const o of filtered) {
+      totalCount++
+      totalMeterage += o.totalMeterage || 0
+      totalPrice += getTotalPrice(o)
+      totalDiscount += o.discountAmount || 0
+      totalVat += getVatAmount(o)
+    }
     return { totalCount, totalMeterage, totalPrice, totalDiscount, totalVat }
   }, [filtered])
 
-  const formatPrice = (n: number) => {
-    if (!n && n !== 0) return "—"
-    return n.toLocaleString("en-US")
-  }
+  const newDates = useMemo(() => {
+    if (!confirmItem) return null
+    return calcNewDates(confirmItem)
+  }, [confirmItem])
 
   const confirmSend = async () => {
-    if (!confirmItem) return
+    if (!confirmItem || !newDates) return
+    setSending(true)
     try {
-      setSending(true)
-      const { today, delivery } = calcNewDates(confirmItem)
-      const wasInvoicedBefore = !!confirmItem.invoicedAt
       const res = await fetch("/api/orders", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: confirmItem.id,
           status: "فاکتور",
-          convertedBy: currentUserName || confirmItem.salesRep || "سیستم",
-          orderDate: toPersianStr(today),
-          deliveryDate: toPersianStr(delivery),
+          convertedBy: currentUserName || undefined,
+          orderDate: newDates.today.toISOString(),
+          deliveryDate: newDates.delivery.toISOString(),
         }),
       })
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.error || "خطا در انتقال")
-      }
-      // به‌جای حذف، وضعیت را در لیست به‌روز می‌کنیم
-      setOrders((prev) =>
-        prev.map((i) =>
-          i.id === confirmItem.id
-            ? {
-                ...i,
-                status: "فاکتور",
-                // اگر قبلاً یک بار فاکتور شده بوده، تاریخ فاکتور اولیه (و تبدیل‌کننده) ثابت می‌ماند
-                convertedBy: wasInvoicedBefore
-                  ? i.convertedBy || currentUserName || i.salesRep || null
-                  : currentUserName || i.salesRep || null,
-                invoicedAt: wasInvoicedBefore
-                  ? i.invoicedAt
-                  : new Date().toISOString(),
-                orderDate: wasInvoicedBefore ? i.orderDate : toPersianStr(today),
-                deliveryDate: toPersianStr(delivery),
-              }
-            : i
-        )
-      )
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "خطا در انتقال")
       setConfirmItem(null)
-      alert("پیش‌فاکتور به فاکتور منتقل شد و وارد تولید گردید")
-    } catch (error: any) {
-      console.error(error)
-      alert(error.message || "خطا در انتقال به فاکتور")
+      await fetchOrders()
+    } catch (e: any) {
+      alert(e.message || "خطا")
     } finally {
       setSending(false)
     }
   }
 
-  // حذف پیش‌فاکتور (حتی اگر وارد تولید شده باشد؛ قطعات تولید و سوابقش هم پاک می‌شود)
+  const confirmCancel = async () => {
+    if (!cancelItem) return
+    const reason = cancelReason.trim()
+    if (!reason) {
+      alert("دلیل لغو را بنویسید")
+      return
+    }
+    setCancelling(true)
+    try {
+      const res = await fetch("/api/orders", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: cancelItem.id,
+          status: "لغو شده",
+          cancelReason: reason,
+          convertedBy: currentUserName || undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "خطا در لغو")
+      setCancelItem(null)
+      setCancelReason("")
+      await fetchOrders()
+      alert("پیش‌فاکتور به لیست لغوشده‌ها منتقل شد")
+    } catch (e: any) {
+      alert(e.message || "خطا")
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   const deleteOrder = async (item: OrderFromApi) => {
     if (
       !confirm(
-        `پیش‌فاکتور شماره ${item.orderNumber} (${item.customer?.name}) برای همیشه حذف شود؟\n\nاگر این سفارش وارد تولید شده باشد، قطعات تولید، لیبل‌ها و سوابق آن هم پاک می‌شود و برگشت‌پذیر نیست.`
+        `پیش‌فاکتور ${item.orderNumber} برای همیشه حذف شود؟\n(برای لغو با ثبت دلیل از دکمه «لغو» استفاده کنید)`
       )
     )
       return
@@ -722,152 +727,135 @@ export default function PreInvoicesPage() {
     try {
       const res = await fetch(`/api/orders/${item.id}`, { method: "DELETE" })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        alert(data.error || "خطا در حذف سفارش")
-        return
-      }
-      setOrders((prev) => prev.filter((o) => o.id !== item.id))
-      alert(
-        data.hadProduction
-          ? `سفارش ${item.orderNumber} همراه با داده‌ی تولیدش حذف شد`
-          : `سفارش ${item.orderNumber} حذف شد`
-      )
-    } catch {
-      alert("خطا در ارتباط با سرور")
+      if (!res.ok) throw new Error(data.error || "خطا در حذف")
+      await fetchOrders()
+    } catch (e: any) {
+      alert(e.message || "خطا")
     } finally {
       setDeletingId(null)
     }
   }
 
-  const thClass =
-    "p-3 font-bold whitespace-nowrap text-center cursor-pointer select-none hover:bg-teal-500/25 transition"
-
-  const newDates = confirmItem ? calcNewDates(confirmItem) : null
-
-  const chip = (active: boolean) =>
-    `rounded-lg px-3 py-1 text-sm font-bold transition ${
-      active
-        ? "bg-teal-600 text-white"
-        : "bg-white/50 text-blue-900 border border-teal-500/30 hover:bg-white/70"
-    }`
-
   return (
     <div
-      className="min-h-screen lg:h-screen lg:overflow-hidden p-4 bg-cover bg-center bg-fixed"
+      className="min-h-screen p-3 md:p-4 bg-cover bg-center bg-fixed"
+      dir="rtl"
       style={{
+        fontFamily: "Vazirmatn, Tahoma, sans-serif",
         backgroundImage:
           "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
-        fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif",
       }}
-      dir="rtl"
     >
-      <a
-        href="#order-table"
-        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:right-2 focus:z-50 focus:bg-white focus:px-4 focus:py-2 focus:rounded-lg focus:font-bold focus:text-teal-800"
-      >
-        رفتن به جدول سفارش‌ها
-      </a>
-      <div className="pointer-events-none fixed inset-0 bg-black/5" />
-
-      <div className="relative z-10 max-w-[1920px] mx-auto lg:h-full lg:flex lg:flex-col">
-        <div className="mb-2 lg:shrink-0 flex items-center justify-between rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-2.5 shadow-lg border border-teal-500/20">
-          <div className="w-48" />
-          <div className="text-center flex-1">
-            <h1 className="text-lg font-bold text-blue-950">
-              لیست پیش‌فاکتورها
+      <div className="pointer-events-none fixed inset-0 bg-black/20" />
+      <div className="relative z-10 max-w-[1800px] mx-auto flex flex-col lg:h-[calc(100vh-1.5rem)] lg:overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2 lg:shrink-0">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-black text-blue-950">
+              پیش‌فاکتورها
             </h1>
-            <p className="text-sm font-bold text-blue-900">
-              نرم‌افزار اخوان | شیشه و آینه
+            <p className="text-sm text-blue-900 font-semibold">
+              مدیریت پیش‌فاکتور، ارسال به فاکتور و لغو
             </p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-2">
             <Link
               href="/order/new"
-              className="rounded-xl bg-teal-500 hover:bg-teal-600 px-4 py-1.5 text-base font-bold text-white shadow transition focus:outline-none focus:ring-2 focus:ring-teal-400"
+              className="rounded-xl bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 font-bold"
             >
-              + ثبت سفارش جدید
+              ثبت سفارش
+            </Link>
+            <Link
+              href="/order/cancelled"
+              className="rounded-xl border border-amber-400 bg-amber-50 px-4 py-2 font-bold text-amber-900"
+            >
+              لغوشده‌ها
             </Link>
             <Link
               href="/invoices"
-              className="rounded-xl border border-teal-500/40 bg-white/40 hover:bg-white/60 px-4 py-1.5 text-base font-bold text-blue-900 transition focus:outline-none focus:ring-2 focus:ring-teal-400"
+              className="rounded-xl border bg-white/90 px-4 py-2 font-bold"
             >
               فاکتورها
+            </Link>
+            <Link
+              href="/"
+              className="rounded-xl border bg-white/90 px-4 py-2 font-bold"
+            >
+              داشبورد
             </Link>
           </div>
         </div>
 
-        <div className="mb-2 lg:shrink-0 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-2.5 shadow-lg border border-teal-500/20">
-          {/* فیلتر وضعیت: پیش‌فاکتور / فاکتور / همه */}
-          <div className="mb-2 flex flex-wrap gap-1.5 items-center">
-            <span className="text-sm font-bold text-blue-900 ml-1">وضعیت:</span>
+        <div className="rounded-2xl bg-white/85 backdrop-blur border border-teal-500/25 p-3 mb-2 lg:shrink-0 shadow">
+          <div className="flex flex-wrap gap-2 mb-2">
             <button
               type="button"
               onClick={() => setStatusFilter("pre")}
-              className={chip(statusFilter === "pre")}
+              className={`rounded-xl px-3 py-1.5 text-sm font-bold border ${
+                statusFilter === "pre"
+                  ? "bg-teal-600 text-white border-teal-700"
+                  : "bg-white text-blue-900 border-teal-200"
+              }`}
             >
-              فقط پیش‌فاکتور ({statusCounts.pre})
+              پیش‌فاکتور ({statusCounts.pre})
+              {dayFilter === "today" ? ` · امروز ${statusCounts.preToday}` : ""}
             </button>
             <button
               type="button"
               onClick={() => setStatusFilter("invoice")}
-              className={chip(statusFilter === "invoice")}
+              className={`rounded-xl px-3 py-1.5 text-sm font-bold border ${
+                statusFilter === "invoice"
+                  ? "bg-amber-600 text-white border-amber-700"
+                  : "bg-white text-blue-900 border-teal-200"
+              }`}
             >
-              فقط فاکتور ({statusCounts.inv})
+              فاکتور ({statusCounts.inv})
             </button>
             <button
               type="button"
               onClick={() => setStatusFilter("all")}
-              className={chip(statusFilter === "all")}
+              className={`rounded-xl px-3 py-1.5 text-sm font-bold border ${
+                statusFilter === "all"
+                  ? "bg-blue-900 text-white border-blue-950"
+                  : "bg-white text-blue-900 border-teal-200"
+              }`}
             >
               همه ({statusCounts.all})
             </button>
-
-            <span className="text-sm font-bold text-blue-900 mr-3 ml-1">
-              روز:
-            </span>
             <button
               type="button"
-              onClick={() => setDayFilter("all")}
-              className={chip(dayFilter === "all")}
+              onClick={() =>
+                setDayFilter((d) => (d === "today" ? "all" : "today"))
+              }
+              className={`rounded-xl px-3 py-1.5 text-sm font-bold border ${
+                dayFilter === "today"
+                  ? "bg-blue-600 text-white border-blue-700"
+                  : "bg-white text-blue-900 border-teal-200"
+              }`}
             >
-              همه روزها
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setDayFilter("today")
-                setFromDate(null)
-                setToDate(null)
-                setSelectedMonth("همه")
-              }}
-              className={chip(dayFilter === "today")}
-            >
-              امروز (پیش‌فاکتور {statusCounts.preToday} / فاکتور{" "}
-              {statusCounts.invToday})
+              {dayFilter === "today" ? "فقط امروز" : "همه روزها"}
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+          <div className="grid grid-cols-2 md:grid-cols-12 gap-2 items-end">
             <div className="md:col-span-3">
               <label className="mb-0.5 block text-xs font-bold text-blue-900">
                 جستجو
               </label>
               <input
-                type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="نام / کد مشتری / شماره سفارش / کارشناس..."
-                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-3 py-1.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400 hover:bg-yellow-100 transition"
+                placeholder="مشتری، کد، شماره سفارش..."
+                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-3 py-1.5 text-sm font-semibold"
               />
             </div>
             <div className="md:col-span-2">
               <label className="mb-0.5 block text-xs font-bold text-blue-900">
-                ماه پیش‌فاکتور
+                ماه
               </label>
               <select
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(e.target.value)}
-                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-3 py-1.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400"
+                className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-3 py-1.5 text-sm font-semibold"
               >
                 {PERSIAN_MONTHS.map((m) => (
                   <option key={m.value} value={m.value}>
@@ -942,7 +930,6 @@ export default function PreInvoicesPage() {
           ref={tableRef}
           tabIndex={-1}
           onScroll={(e) => {
-            // ذخیره‌ی محل اسکرول جدول تا بعد از برگشت به صفحه، همان‌جا بماند
             const top = e.currentTarget.scrollTop
             try {
               sessionStorage.setItem(SCROLL_STORAGE_KEY, String(top))
@@ -1139,12 +1126,22 @@ export default function PreInvoicesPage() {
                         onDoubleClick={(e) => e.stopPropagation()}
                       >
                         {!isInv ? (
-                          <div className="flex gap-1.5 justify-center">
+                          <div className="flex flex-wrap gap-1.5 justify-center">
                             <button
                               onClick={() => setConfirmItem(item)}
                               className="rounded-lg bg-teal-500 hover:bg-teal-600 px-3 py-1.5 text-xs font-bold text-white shadow transition focus:ring-2 focus:ring-teal-300"
                             >
                               ارسال به فاکتور
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCancelReason("")
+                                setCancelItem(item)
+                              }}
+                              className="rounded-lg bg-amber-500/20 hover:bg-amber-500/40 px-3 py-1.5 text-xs font-bold text-amber-900 transition"
+                            >
+                              لغو
                             </button>
                             <button
                               type="button"
@@ -1326,6 +1323,67 @@ export default function PreInvoicesPage() {
                 className="rounded-xl bg-teal-500 hover:bg-teal-600 px-5 py-2.5 text-base font-bold text-white shadow transition disabled:opacity-50"
               >
                 {sending ? "در حال انتقال..." : "بله، منتقل کن"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {cancelItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white/95 p-6 shadow-2xl border border-amber-500/40">
+            <h3 className="text-xl font-bold text-blue-950 mb-3">
+              لغو پیش‌فاکتور
+            </h3>
+            <div className="space-y-2 text-base text-blue-900 mb-3">
+              <p>
+                شماره:{" "}
+                <strong className="text-teal-700">
+                  {cancelItem.orderNumber}
+                </strong>
+              </p>
+              <p>
+                مشتری:{" "}
+                <strong className="text-teal-700">
+                  {cancelItem.customer?.name}
+                </strong>
+              </p>
+              <p>
+                لغو توسط:{" "}
+                <strong className="text-teal-700">
+                  {currentUserName || "—"}
+                </strong>
+              </p>
+            </div>
+            <label className="block text-sm font-bold text-blue-900 mb-1">
+              دلیل لغو *
+            </label>
+            <textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              rows={3}
+              className="w-full rounded-xl border border-amber-400 px-3 py-2 mb-4 font-semibold"
+              placeholder="مثلاً: انصراف مشتری / قیمت / اشتباه ثبت / ..."
+            />
+            <div className="flex gap-3 justify-end">
+              <button
+                type="button"
+                disabled={cancelling}
+                onClick={() => {
+                  setCancelItem(null)
+                  setCancelReason("")
+                }}
+                className="rounded-xl border px-5 py-2.5 font-bold"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                disabled={cancelling}
+                onClick={confirmCancel}
+                className="rounded-xl bg-amber-600 hover:bg-amber-700 text-white px-5 py-2.5 font-bold disabled:opacity-50"
+              >
+                {cancelling ? "..." : "تأیید لغو"}
               </button>
             </div>
           </div>
