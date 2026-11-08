@@ -94,8 +94,11 @@ function toDateObject(dObj: any): DateObject | null {
   }
 }
 
-/** ابتدای همان روز تقویمی انتخاب‌شده، به‌وقت تهران */
-function dayStartIsoTehran(dObj: any): string | null {
+/**
+ * تاریخ انتخاب‌شده در تقویم شمسی → YYYY-MM-DD میلادی
+ * همان روز تقویمی، بدون toISOString و بدون جابه‌جایی منطقه زمانی
+ */
+function toYmd(dObj: any): string | null {
   const d = toDateObject(dObj)
   if (!d) return null
   try {
@@ -103,22 +106,24 @@ function dayStartIsoTehran(dObj: any): string | null {
     const y = g.year
     const m = String(g.month.number).padStart(2, "0")
     const day = String(g.day).padStart(2, "0")
-    return new Date(`${y}-${m}-${day}T00:00:00+03:30`).toISOString()
+    return `${y}-${m}-${day}`
   } catch {
     return null
   }
 }
 
-/** انتهای همان روز تقویمی انتخاب‌شده، به‌وقت تهران */
-function dayEndIsoTehran(dObj: any): string | null {
-  const d = toDateObject(dObj)
-  if (!d) return null
+/** YYYY-MM-DD میلادی → DateObject شمسی برای بازیابی فیلتر */
+function ymdToPersian(ymd: string): DateObject | null {
   try {
-    const g = new DateObject(d).convert(gregorian)
-    const y = g.year
-    const m = String(g.month.number).padStart(2, "0")
-    const day = String(g.day).padStart(2, "0")
-    return new Date(`${y}-${m}-${day}T23:59:59.999+03:30`).toISOString()
+    const parts = String(ymd).trim().split("-").map(Number)
+    if (parts.length < 3 || parts.some((n) => isNaN(n))) return null
+    const [y, m, d] = parts
+    return new DateObject({
+      year: y,
+      month: m,
+      day: d,
+      calendar: gregorian,
+    }).convert(persian, persian_fa)
   } catch {
     return null
   }
@@ -201,10 +206,10 @@ export default function FinanceConvertPage() {
     setSelected([])
     try {
       const params = new URLSearchParams()
-      const fromIso = dayStartIsoTehran(f)
-      const toIso = dayEndIsoTehran(t)
-      if (fromIso) params.set("from", fromIso)
-      if (toIso) params.set("to", toIso)
+      const fromYmd = toYmd(f)
+      const toYmdVal = toYmd(t)
+      if (fromYmd) params.set("from", fromYmd)
+      if (toYmdVal) params.set("to", toYmdVal)
       if (fNo.trim()) params.set("fromNo", fNo.trim())
       if (tNo.trim()) params.set("toNo", tNo.trim())
       if (st !== "همه") params.set("syncStatus", st)
@@ -254,14 +259,29 @@ export default function FinanceConvertPage() {
           "fromDate" in s &&
           "toDate" in s
         ) {
-          const toDO = (iso: string) =>
-            new DateObject({
-              date: new Date(iso),
-              calendar: persian,
-              locale: persian_fa,
-            })
-          f = s.fromDate ? toDO(s.fromDate) : null
-          t = s.toDate ? toDO(s.toDate) : null
+          // فرمت جدید: YYYY-MM-DD | فرمت قدیمی ISO را هم تحمل می‌کنیم
+          if (s.fromDate) {
+            f =
+              ymdToPersian(String(s.fromDate).slice(0, 10)) ||
+              new DateObject({
+                date: new Date(s.fromDate),
+                calendar: persian,
+                locale: persian_fa,
+              })
+          } else {
+            f = null
+          }
+          if (s.toDate) {
+            t =
+              ymdToPersian(String(s.toDate).slice(0, 10)) ||
+              new DateObject({
+                date: new Date(s.toDate),
+                calendar: persian,
+                locale: persian_fa,
+              })
+          } else {
+            t = null
+          }
         }
       }
     } catch {}
@@ -287,8 +307,8 @@ export default function FinanceConvertPage() {
           fromNo,
           toNo,
           syncStatus,
-          fromDate: toDateObject(fromDate)?.toDate?.()?.toISOString?.() ?? null,
-          toDate: toDateObject(toDate)?.toDate?.()?.toISOString?.() ?? null,
+          fromDate: toYmd(fromDate),
+          toDate: toYmd(toDate),
         })
       )
     } catch {}
@@ -304,7 +324,7 @@ export default function FinanceConvertPage() {
           .filter(Boolean)
           .join(" ")
       )
-      return tokens.every((t) => haystack.includes(t))
+      return tokens.every((tok) => haystack.includes(tok))
     })
   }, [rows, search])
 

@@ -2,41 +2,25 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getSession } from "@/lib/auth"
 
-/** YYYY-MM-DD یا ISO → شروع همان روز به وقت تهران */
-function dayStartTehran(input: string): Date | null {
+/** هر Date/ISO → YYYY-MM-DD به وقت تهران */
+function toTehranYmd(input: Date | string | null | undefined): string | null {
   if (!input) return null
-  const m = String(input).trim().match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (m) {
-    return new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00+03:30`)
-  }
-  const d = new Date(input)
+  const d = input instanceof Date ? input : new Date(input)
   if (isNaN(d.getTime())) return null
-  // از روی تقویم تهران همان روز را می‌گیریم
-  const fa = new Intl.DateTimeFormat("en-CA", {
+  return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Tehran",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   }).format(d) // YYYY-MM-DD
-  return new Date(`${fa}T00:00:00+03:30`)
 }
 
-/** YYYY-MM-DD یا ISO → پایان همان روز به وقت تهران */
-function dayEndTehran(input: string): Date | null {
+/** ورودی فیلتر (YYYY-MM-DD یا ISO) → YYYY-MM-DD */
+function paramToYmd(input: string | null): string | null {
   if (!input) return null
   const m = String(input).trim().match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (m) {
-    return new Date(`${m[1]}-${m[2]}-${m[3]}T23:59:59.999+03:30`)
-  }
-  const d = new Date(input)
-  if (isNaN(d.getTime())) return null
-  const fa = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Tehran",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d)
-  return new Date(`${fa}T23:59:59.999+03:30`)
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`
+  return toTehranYmd(input)
 }
 
 function orderTotal(order: {
@@ -58,17 +42,19 @@ function numOrder(n: string | null | undefined) {
   return isNaN(v) ? null : v
 }
 
-/** تاریخ مبنا برای فیلتر: فاکتور = invoicedAt وگرنه orderDate */
-function effectiveDate(
+/**
+ * تاریخ مبنا برای فیلتر:
+ * - dateField=order → orderDate
+ * - dateField=invoice (پیش‌فرض) → invoicedAt وگرنه orderDate
+ */
+function effectiveYmd(
   o: { invoicedAt?: Date | null; orderDate?: Date | null },
   dateField: string
-): Date | null {
+): string | null {
   if (dateField === "order") {
-    return o.orderDate ? new Date(o.orderDate) : null
+    return toTehranYmd(o.orderDate)
   }
-  if (o.invoicedAt) return new Date(o.invoicedAt)
-  if (o.orderDate) return new Date(o.orderDate)
-  return null
+  return toTehranYmd(o.invoicedAt) || toTehranYmd(o.orderDate)
 }
 
 export async function GET(req: NextRequest) {
@@ -86,23 +72,18 @@ export async function GET(req: NextRequest) {
     }
 
     const { searchParams } = new URL(req.url)
-    const from = searchParams.get("from")
-    const to = searchParams.get("to")
+    const fromYmd = paramToYmd(searchParams.get("from"))
+    const toYmd = paramToYmd(searchParams.get("to"))
     const fromNo = searchParams.get("fromNo")?.trim() || ""
     const toNo = searchParams.get("toNo")?.trim() || ""
     const q = (searchParams.get("q") || "").trim().toLowerCase()
     const syncStatus = searchParams.get("syncStatus") || "همه"
     const dateField = searchParams.get("dateField") || "invoice" // invoice | order
 
-    const fromDate = from ? dayStartTehran(from) : null
-    const toDate = to ? dayEndTehran(to) : null
-
     const where: any = {
       status: "فاکتور",
     }
 
-    // فقط وضعیت همگام‌سازی را در Prisma فیلتر می‌کنیم
-    // فیلتر تاریخ را بعد از خواندن با تاریخ مؤثر انجام می‌دهیم تا جابه‌جایی روز و null بودن invoicedAt درست شود
     if (
       syncStatus === "SUCCESS" ||
       syncStatus === "FAILED" ||
@@ -126,13 +107,13 @@ export async function GET(req: NextRequest) {
       ],
     })
 
-    // فیلتر تاریخ با مرز روز تهران
-    if (fromDate || toDate) {
+    // فیلتر تاریخ: مقایسه رشته YYYY-MM-DD به وقت تهران (بدون جابه‌جایی روز)
+    if (fromYmd || toYmd) {
       orders = orders.filter((o) => {
-        const d = effectiveDate(o, dateField)
-        if (!d || isNaN(d.getTime())) return false
-        if (fromDate && d < fromDate) return false
-        if (toDate && d > toDate) return false
+        const ymd = effectiveYmd(o, dateField)
+        if (!ymd) return false
+        if (fromYmd && ymd < fromYmd) return false
+        if (toYmd && ymd > toYmd) return false
         return true
       })
     }

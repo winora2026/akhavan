@@ -185,6 +185,8 @@ function buildPartyPayloadWithNotes(customer: any) {
     name,
     ...(lastName ? { lastName } : {}),
     subType: legal ? legalSubType : realSubType,
+    // در پاسخ GetAllParty نوع با نام «type» می‌آید؛ اگر درگاه subType را نادیده بگیرد، همین فیلد را هم می‌فرستیم
+    type: legal ? legalSubType : realSubType,
     isCustomer: true,
     ...(identificationCode ? { identificationCode } : {}),
     ...(economicCode ? { economicCode } : {}),
@@ -729,7 +731,16 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
   const payload = built.payload
   let result: any
   try {
-    result = await sepidarPost("/api/sepidar/v1/Parties/CreateParty", payload)
+    try {
+      result = await sepidarPost("/api/sepidar/v1/Parties/CreateParty", payload)
+    } catch (first: any) {
+      // اگر درگاه فیلد اضافه‌ی «type» را رد کرد (۴۰۰ و نه خطای تکراری)، یک‌بار بدون آن و فقط با subType می‌فرستیم
+      // (همان بدنه‌ای که تا قبل از این تغییر درست کار می‌کرد)
+      if (isDuplicateError(first) || !/\(400\)/.test(String(first?.message || ""))) throw first
+      const { type: _drop, ...withoutType } = payload as any
+      console.warn("Sepidar: CreateParty با فیلد type رد شد؛ بدون آن دوباره ارسال می‌شود", first?.message)
+      result = await sepidarPost("/api/sepidar/v1/Parties/CreateParty", withoutType)
+    }
   } catch (e: any) {
     if (!isDuplicateError(e)) throw e
 

@@ -263,14 +263,18 @@ function stationMatches(userStation: string, stationName: string) {
   const a = norm(userStation)
   const b = norm(stationName)
   if (!a || !b) return false
+
+  // ۱) تطبیق دقیق
   if (a === b) return true
-  // بدون فاصله/نیم‌فاصله و بدون «کالا / کالای / محصول»: «انبار نیمه ساخته» = «انبار کالای نیمه‌ساخته»
+
+  // بدون فاصله/نیم‌فاصله و بدون «کالا / کالای / محصول»
   const squash = (s: string) =>
     s.replace(/[\s\u200c]+/g, "").replace(/کالای|کالا|محصول/g, "")
   const sa = squash(a)
   const sb = squash(b)
   if (sa && sa === sb) return true
-  // دو انبار: نیمه‌ساخته (انبار محصول یک) و آماده تحویل (انبار محصول دو)
+
+  // دو انبار + بارگیری
   const kind = (s: string) =>
     s.includes("بارگیری")
       ? "load"
@@ -281,9 +285,11 @@ function stationMatches(userStation: string, stationName: string) {
           : ""
   const ka = kind(a)
   if (ka && ka === kind(b)) return true
-  // مثلاً «تراش» با «تراش ۱»
-  if (a.length >= 3 && b.includes(a)) return true
-  if (b.length >= 3 && a.includes(b)) return true
+
+  // فقط وقتی نام یوزر کوتاه‌تر است: «تراش» → «تراش ۱»
+  // برعکس ممنوع: «دیاموند زاویه» نباید با «دیاموند» match شود
+  if (a.length >= 2 && a.length < b.length && b.includes(a)) return true
+
   return false
 }
 
@@ -619,9 +625,27 @@ export default function StationQueuePage() {
       )
       setStations(list)
 
-      const userStation = (user?.stationName || "").trim()
+            const userStation = (user?.stationName || "").trim()
       if (userStation && list.length > 0) {
-        const match = list.find((s) => stationMatches(userStation, s.name))
+        const userStationNorm = norm(userStation)
+
+        // اول تطبیق دقیق
+        let match =
+          list.find((s) => norm(s.name) === userStationNorm) || null
+
+        // اگر نبود: بین گزینه‌ها طولانی‌ترین نام (جلوگیری از دیاموند به‌جای دیاموند زاویه)
+        if (!match) {
+          const candidates = list.filter((s) =>
+            stationMatches(userStation, s.name)
+          )
+          if (candidates.length > 0) {
+            candidates.sort(
+              (x, y) => norm(y.name).length - norm(x.name).length
+            )
+            match = candidates[0]
+          }
+        }
+
         if (match) {
           setSelectedStationId(match.id)
           setStationLocked(true)

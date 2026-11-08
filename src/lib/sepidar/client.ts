@@ -248,34 +248,54 @@ export async function createInvoice(payload: unknown) {
 
   // محافظ تکراری: اگر فاکتوری با همین شماره از قبل در سپیدار هست، دوباره ساخته نمی‌شود.
   // اگر خواندن لیست فاکتورها ممکن نشد هم ارسال متوقف می‌شود (ارسال تکراری از ارسال دیرتر بدتر است).
+  // برای ارسال گروهی، شماره‌ی فاکتورهای ۱۴ روز اخیر یک‌بار خوانده و ۹۰ ثانیه نگه داشته می‌شود
+  // (به‌جای یک خواندن کامل برای هر فاکتور)؛ شماره‌ی فاکتورِ تازه‌ارسال‌شده هم فوراً به آن اضافه می‌شود.
   const p: any = payload
   const num = Number(p?.number ?? p?.Number)
-  if (Number.isFinite(num) && num > 0) {
+  const guardOn = Number.isFinite(num) && num > 0
+  if (guardOn) {
+    const g = globalThis as any
+    const store: { at: number; nums: Set<number>; from: number } =
+      (g.__sepidarInvoiceNums ??= { at: 0, nums: new Set<number>(), from: 0 })
+
+    const dateMs = new Date(String(p?.date ?? "").slice(0, 10) + "T12:00:00Z").getTime()
+    const invoiceMs = Number.isFinite(dateMs) ? dateMs : Date.now()
+    const needFrom = invoiceMs - 10 * 86_400_000
     const day = (d: Date) =>
       new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tehran", year: "numeric", month: "2-digit", day: "2-digit" }).format(d)
-    const base = new Date(String(p?.date ?? "").slice(0, 10) + "T12:00:00Z")
-    const center = Number.isFinite(base.getTime()) ? base : new Date()
-    const from = new Date(center.getTime() - 10 * 86_400_000)
-    const to = new Date(Math.max(center.getTime(), Date.now()) + 3 * 86_400_000)
-    let rows: any[]
-    try {
-      rows = await getAll(
-        "/api/sepidar/v1/Sales/GetAllInvoices",
-        { StartDate: `${day(from)}T00:00:00`, EndDate: `${day(to)}T23:59:59` },
-        200
-      )
-    } catch (e: any) {
+
+    // کش تازه نیست، یا فاکتور قدیمی‌تر از بازه‌ی کش است
+    if (Date.now() - store.at > 90_000 || needFrom < store.from) {
+      // پیش‌فرض ۱۴ روز اخیر (هم‌اندازه‌ی بازه‌ی قبلی، تا ارسال تکی کندتر نشود)؛ فقط اگر فاکتور قدیمی‌تر بود بازه عقب‌تر می‌رود
+      const from = Math.min(needFrom - 20 * 86_400_000, Date.now() - 14 * 86_400_000)
+      const to = Math.max(invoiceMs, Date.now()) + 3 * 86_400_000
+      let rows: any[]
+      try {
+        rows = await getAll(
+          "/api/sepidar/v1/Sales/GetAllInvoices",
+          { StartDate: `${day(new Date(from))}T00:00:00`, EndDate: `${day(new Date(to))}T23:59:59` },
+          200
+        )
+      } catch (e: any) {
+        throw new Error(
+          `بررسی تکراری‌بودن فاکتور ${num} در سپیدار ممکن نشد؛ برای جلوگیری از ثبت تکراری ارسال نشد. دوباره تلاش کنید. (${e?.message ?? e})`
+        )
+      }
+      store.nums = new Set(rows.map((i) => Number(i?.Number ?? i?.number)).filter((n) => Number.isFinite(n)))
+      store.at = Date.now()
+      store.from = from
+    }
+
+    if (store.nums.has(num)) {
       throw new Error(
-        `بررسی تکراری‌بودن فاکتور ${num} در سپیدار ممکن نشد؛ برای جلوگیری از ثبت تکراری ارسال نشد. دوباره تلاش کنید. (${e?.message ?? e})`
+        `فاکتور شماره ${num} از قبل در سپیدار ثبت شده است. برای جلوگیری از ثبت تکراری ارسال نشد. ` +
+          `اگر این فاکتور را در سپیدار حذف کرده‌اید، چند دقیقه صبر کنید (یا ۱–۲ دقیقه بعد دوباره امتحان کنید).`
       )
     }
-    const dup = rows.find((i) => Number(i?.Number ?? i?.number) === num)
-    if (dup) {
-      throw new Error(
-        `فاکتور شماره ${num} از قبل در سپیدار ثبت شده است (شناسه: ${dup?.InvoiceId ?? dup?.invoiceId ?? dup?.Id ?? dup?.id ?? "؟"}). ` +
-          `برای جلوگیری از ثبت تکراری ارسال نشد. اگر این فاکتور را در سپیدار حذف کرده‌اید، چند دقیقه صبر کنید یا صفحه‌ی همگام‌سازی را بزنید.`
-      )
-    }
+
+    const res = await sepidarPost("/api/sepidar/v1/Sales/CreateInvoice", payload)
+    store.nums.add(num)
+    return res
   }
 
   return sepidarPost("/api/sepidar/v1/Sales/CreateInvoice", payload)

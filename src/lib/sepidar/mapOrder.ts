@@ -601,7 +601,8 @@ export async function buildCreateInvoicePayload(
         tax: 0,
         duty: 0,
         tracingTitle: order.orderNumber,
-        stockRef: null,
+        // خدمت‌هایی که در سپیدار «کالا» هستند (مثل چسب آینه) انبار می‌خواهند؛ خدمت واقعی انبار ندارد و null می‌ماند
+        stockRef: svc.stockRef ?? null,
         description: [`${sg.title} ${g.name}`, sg.note].filter(Boolean).join(" | "),
       })
     }
