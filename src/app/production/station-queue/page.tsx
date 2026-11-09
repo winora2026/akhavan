@@ -267,14 +267,13 @@ function stationMatches(userStation: string, stationName: string) {
   // ۱) تطبیق دقیق
   if (a === b) return true
 
-  // بدون فاصله/نیم‌فاصله و بدون «کالا / کالای / محصول»
   const squash = (s: string) =>
     s.replace(/[\s\u200c]+/g, "").replace(/کالای|کالا|محصول/g, "")
   const sa = squash(a)
   const sb = squash(b)
   if (sa && sa === sb) return true
 
-  // دو انبار + بارگیری
+  // انبار / بارگیری
   const kind = (s: string) =>
     s.includes("بارگیری")
       ? "load"
@@ -286,9 +285,18 @@ function stationMatches(userStation: string, stationName: string) {
   const ka = kind(a)
   if (ka && ka === kind(b)) return true
 
-  // فقط وقتی نام یوزر کوتاه‌تر است: «تراش» → «تراش ۱»
-  // برعکس ممنوع: «دیاموند زاویه» نباید با «دیاموند» match شود
-  if (a.length >= 2 && a.length < b.length && b.includes(a)) return true
+  // نام‌های ترکیبی فقط با تطبیق دقیق (نه includes)
+  // تراش الگویی ≠ تراش / تراش ۱
+  if (a.includes("الگویی") || b.includes("الگویی")) return false
+  // دیاموند زاویه ≠ دیاموند
+  if (a.includes("زاویه") || b.includes("زاویه")) return false
+
+  // «تراش» → فقط «تراش ۱» / «تراش ۲» (نه الگویی)
+  if (a.length >= 2 && a.length < b.length && b.startsWith(a)) {
+    const rest = b.slice(a.length).trim()
+    // باقی‌مانده فقط شماره دستگاه باشد
+    if (/^[1-2۱۲]$/.test(rest)) return true
+  }
 
   return false
 }
@@ -626,33 +634,32 @@ export default function StationQueuePage() {
       setStations(list)
 
             const userStation = (user?.stationName || "").trim()
-      if (userStation && list.length > 0) {
-        const userStationNorm = norm(userStation)
+if (userStation && list.length > 0) {
+  const userStationNorm = norm(userStation)
 
-        // اول تطبیق دقیق
-        let match =
-          list.find((s) => norm(s.name) === userStationNorm) || null
+  // اول دقیق
+  let match =
+    list.find((s) => norm(s.name) === userStationNorm) || null
 
-        // اگر نبود: بین گزینه‌ها طولانی‌ترین نام (جلوگیری از دیاموند به‌جای دیاموند زاویه)
-        if (!match) {
-          const candidates = list.filter((s) =>
-            stationMatches(userStation, s.name)
-          )
-          if (candidates.length > 0) {
-            candidates.sort(
-              (x, y) => norm(y.name).length - norm(x.name).length
-            )
-            match = candidates[0]
-          }
-        }
+  if (!match) {
+    const candidates = list.filter((s) =>
+      stationMatches(userStation, s.name)
+    )
+    if (candidates.length > 0) {
+      // کوتاه‌ترین نام (تراش → تراش ۱، نه تراش الگویی)
+      candidates.sort(
+        (x, y) => norm(x.name).length - norm(y.name).length
+      )
+      match = candidates[0]
+    }
+  }
 
-        if (match) {
-          setSelectedStationId(match.id)
-          setStationLocked(true)
-          return
-        }
-      }
-
+  if (match) {
+    setSelectedStationId(match.id)
+    setStationLocked(true)
+    return
+  }
+}
       // ادمین / فروش بدون ایستگاه → کشویی آزاد
       setStationLocked(false)
       if (list.length > 0) {
