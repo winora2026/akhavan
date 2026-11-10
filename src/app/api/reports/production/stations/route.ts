@@ -17,7 +17,8 @@ function stationIsMapped(stationName: string, mapped: string) {
   const b = canon(mapped)
   if (!a || !b) return false
   if (a === b) return true
-  if (b === canon("تراش") && a.startsWith("تراش") && !a.includes("الگویی")) return true
+  if (b === canon("تراش") && a.startsWith("تراش") && !a.includes("الگویی"))
+    return true
   return false
 }
 
@@ -159,6 +160,11 @@ export async function GET(req: NextRequest) {
       let doneMeterage = 0
       const measureTotals = new Map<string, number>()
       const serviceSet = new Set<string>()
+      // تجمیع کالاهای انجام‌شده
+      const productMap = new Map<
+        string,
+        { productName: string; quantity: number; meterage: number }
+      >()
 
       for (const row of doneRows) {
         const item = row.productionItem
@@ -167,7 +173,18 @@ export async function GET(req: NextRequest) {
         doneQty += q
         const factor =
           item.quantity > 0 ? q / item.quantity : 1
-        doneMeterage += (Number(item.meterage) || 0) * factor
+        const lineMeter = (Number(item.meterage) || 0) * factor
+        doneMeterage += lineMeter
+
+        const pName = (item.productName || "بدون نام").trim()
+        const prev = productMap.get(pName) || {
+          productName: pName,
+          quantity: 0,
+          meterage: 0,
+        }
+        prev.quantity += q
+        prev.meterage += lineMeter
+        productMap.set(pName, prev)
 
         const salesItem = matchSalesItem(item, item.productionOrder?.order)
         const calc = sumServiceMeasures(
@@ -195,6 +212,14 @@ export async function GET(req: NextRequest) {
         pendingMeterage += Number(item.meterage) || 0
       }
 
+      const doneProducts = Array.from(productMap.values())
+        .map((p) => ({
+          productName: p.productName,
+          quantity: p.quantity,
+          meterage: Number(p.meterage.toFixed(4)),
+        }))
+        .sort((a, b) => b.meterage - a.meterage)
+
       result.push({
         stationId: st.id,
         stationName: st.name,
@@ -205,6 +230,7 @@ export async function GET(req: NextRequest) {
           ([label, qty]) => ({ label, qty: Number(qty.toFixed(4)) })
         ),
         doneServices: Array.from(serviceSet),
+        doneProducts,
         pendingCount: pendingRows.length,
         pendingQuantity: pendingQty,
         pendingMeterage: Number(pendingMeterage.toFixed(4)),

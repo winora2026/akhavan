@@ -7,6 +7,12 @@ import persian from "react-date-object/calendars/persian"
 import persian_fa from "react-date-object/locales/persian_fa"
 import gregorian from "react-date-object/calendars/gregorian"
 
+type ProductLine = {
+  productName: string
+  quantity: number
+  meterage: number
+}
+
 type StationRow = {
   stationId: string
   stationName: string
@@ -15,6 +21,7 @@ type StationRow = {
   doneMeterage: number
   doneMeasures?: { label: string; qty: number }[]
   doneServices?: string[]
+  doneProducts?: ProductLine[]
   pendingCount: number
   pendingQuantity: number
   pendingMeterage: number
@@ -36,6 +43,17 @@ type WasteRow = {
   customerName: string
 }
 
+type ExpertRow = {
+  name: string
+  preInvoiceCount: number
+  preInvoiceAmount: number
+  invoiceCount: number
+  invoiceAmount: number
+  conversionCount: number
+  cancelledCount: number
+  reOpenedCount: number
+}
+
 type SalesSummary = {
   preInvoiceCount: number
   preInvoiceMeterage: number
@@ -44,6 +62,8 @@ type SalesSummary = {
   invoiceMeterage: number
   invoiceAmount: number
   conversionRatePercent: number
+  cancelledCount?: number
+  byExpert?: ExpertRow[]
 }
 
 type StationSortKey =
@@ -65,9 +85,9 @@ type WasteSortKey =
   | "reason"
 
 const glassCard =
-  "rounded-2xl bg-teal-500/10 backdrop-blur-2xl shadow-lg border border-teal-500/20"
+  "rounded-2xl bg-white/90 backdrop-blur-md shadow-lg border border-teal-200"
 const fieldClass =
-  "w-full rounded-xl border border-teal-500/30 bg-white/50 px-3 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400"
+  "w-full rounded-xl border border-teal-400/40 bg-white px-3 py-2.5 text-base font-semibold text-blue-950 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400"
 const labelClass = "mb-1 block text-sm font-bold text-blue-900"
 
 function toDateObject(dObj: any): DateObject | null {
@@ -110,9 +130,7 @@ function dayEndIsoTehran(dObj: any): string | null {
 }
 
 function defaultFrom(): DateObject {
-  const d = new Date()
-  d.setDate(d.getDate() - 30)
-  return new DateObject({ date: d, calendar: persian, locale: persian_fa })
+  return new DateObject({ calendar: persian, locale: persian_fa })
 }
 
 function defaultTo(): DateObject {
@@ -135,13 +153,21 @@ function formatPrice(n: number) {
   return new Intl.NumberFormat("fa-IR").format(Math.round(n || 0))
 }
 
+function formatMeter(n: number) {
+  const v = Number(n) || 0
+  return v.toLocaleString("fa-IR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
+  })
+}
+
 function SortIcon({ active, dir }: { active: boolean; dir: "asc" | "desc" }) {
   if (!active) return <span className="opacity-40 mr-1">↕</span>
   return <span className="mr-1">{dir === "asc" ? "↑" : "↓"}</span>
 }
 
 export default function ReportsPage() {
-  const [tab, setTab] = useState<"production" | "sales">("production")
+  const [tab, setTab] = useState<"production" | "waste" | "sales">("production")
   const [fromObj, setFromObj] = useState<DateObject | null>(defaultFrom)
   const [toObj, setToObj] = useState<DateObject | null>(defaultTo)
 
@@ -154,18 +180,19 @@ export default function ReportsPage() {
   const [sales, setSales] = useState<SalesSummary | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+  const [openStationId, setOpenStationId] = useState<string | null>(null)
 
-  const [stSort, setStSort] = useState<StationSortKey>("pendingMeterage")
+  const [stSort, setStSort] = useState<StationSortKey>("doneMeterage")
   const [stDir, setStDir] = useState<"asc" | "desc">("desc")
   const [wSort, setWSort] = useState<WasteSortKey>("createdAt")
   const [wDir, setWDir] = useState<"asc" | "desc">("desc")
 
-  // تب از querystring بعد از mount (بدون useSearchParams تا بیلد نشکند)
   useEffect(() => {
     try {
       const t = new URLSearchParams(window.location.search).get("tab")
       if (t === "sales") setTab("sales")
       if (t === "production") setTab("production")
+      if (t === "waste") setTab("waste")
     } catch {}
   }, [])
 
@@ -180,21 +207,20 @@ export default function ReportsPage() {
       if (to) q.set("to", to)
 
       if (tab === "production") {
-        const [sRes, wRes] = await Promise.all([
-          fetch(`/api/reports/production/stations?${q}`),
-          fetch(`/api/reports/production/waste?${q}`),
-        ])
+        const sRes = await fetch(`/api/reports/production/stations?${q}`)
         const sData = await sRes.json()
-        const wData = await wRes.json()
-        if (!sRes.ok) throw new Error(sData.error || "خطا ایستگاه")
-        if (!wRes.ok) throw new Error(wData.error || "خطا ضایعات")
+        if (!sRes.ok) throw new Error(sData.error || "خطا در گزارش ایستگاه‌ها")
         setStations(sData.stations || [])
+      } else if (tab === "waste") {
+        const wRes = await fetch(`/api/reports/production/waste?${q}`)
+        const wData = await wRes.json()
+        if (!wRes.ok) throw new Error(wData.error || "خطا در گزارش ضایعات")
         setWastes(wData.items || [])
         setWasteSummary(wData.summary || { count: 0, totalQuantity: 0 })
       } else {
         const res = await fetch(`/api/reports/sales/summary?${q}`)
         const data = await res.json()
-        if (!res.ok) throw new Error(data.error || "خطا فروش")
+        if (!res.ok) throw new Error(data.error || "خطا در گزارش فروش")
         setSales(data)
       }
     } catch (e: any) {
@@ -208,6 +234,26 @@ export default function ReportsPage() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
+
+  const setToday = () => {
+    const t = defaultTo()
+    setFromObj(t)
+    setToObj(t)
+  }
+
+  const setLast7 = () => {
+    const to = defaultTo()
+    const from = new DateObject(to).subtract(6, "days")
+    setFromObj(from)
+    setToObj(to)
+  }
+
+  const setThisMonth = () => {
+    const to = defaultTo()
+    const from = new DateObject(to).set("day", 1)
+    setFromObj(from)
+    setToObj(to)
+  }
 
   const toggleStSort = (key: StationSortKey) => {
     if (stSort === key) setStDir((d) => (d === "asc" ? "desc" : "asc"))
@@ -260,8 +306,50 @@ export default function ReportsPage() {
     return arr
   }, [wastes, wSort, wDir])
 
+  const prodTotals = useMemo(() => {
+    return stations.reduce(
+      (acc, s) => {
+        acc.doneMeterage += Number(s.doneMeterage) || 0
+        acc.doneQuantity += Number(s.doneQuantity) || 0
+        acc.doneCount += Number(s.doneCount) || 0
+        acc.pendingMeterage += Number(s.pendingMeterage) || 0
+        acc.pendingQuantity += Number(s.pendingQuantity) || 0
+        acc.pendingCount += Number(s.pendingCount) || 0
+        return acc
+      },
+      {
+        doneMeterage: 0,
+        doneQuantity: 0,
+        doneCount: 0,
+        pendingMeterage: 0,
+        pendingQuantity: 0,
+        pendingCount: 0,
+      }
+    )
+  }, [stations])
+
   const thBtn =
     "w-full flex items-center justify-center gap-0.5 cursor-pointer select-none hover:bg-white/10 px-1 py-0.5 rounded"
+
+  const TabBtn = ({
+    id,
+    label,
+  }: {
+    id: "production" | "waste" | "sales"
+    label: string
+  }) => (
+    <button
+      type="button"
+      onClick={() => setTab(id)}
+      className={`rounded-xl px-5 py-2.5 font-bold shadow transition ${
+        tab === id
+          ? "bg-teal-600 text-white"
+          : "bg-white/90 border border-teal-300 text-blue-900 hover:bg-teal-50"
+      }`}
+    >
+      {label}
+    </button>
+  )
 
   return (
     <div
@@ -282,42 +370,24 @@ export default function ReportsPage() {
           <div>
             <h1 className="text-3xl font-black text-blue-950">گزارش‌ها</h1>
             <p className="text-base font-semibold text-blue-900 mt-1">
-              تولید و فروش — فیلتر بازه تاریخ شمسی
+              کارکرد روزانه ایستگاه‌ها · ضایعات · فروش و کارشناسان
             </p>
           </div>
           <Link
             href="/"
-            className="rounded-xl border border-teal-500/40 bg-white/40 hover:bg-white/60 px-4 py-2.5 font-bold text-blue-900 transition"
+            className="rounded-xl border border-teal-400 bg-white hover:bg-teal-50 px-4 py-2.5 font-bold text-blue-900 transition"
           >
             داشبورد
           </Link>
         </div>
 
-        <div className="flex gap-2 mb-4">
-          <button
-            type="button"
-            onClick={() => setTab("production")}
-            className={`rounded-xl px-6 py-2.5 font-bold shadow transition ${
-              tab === "production"
-                ? "bg-teal-600 text-white"
-                : "bg-white/50 border border-teal-500/30 text-blue-900 hover:bg-white/70"
-            }`}
-          >
-            تولید
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("sales")}
-            className={`rounded-xl px-6 py-2.5 font-bold shadow transition ${
-              tab === "sales"
-                ? "bg-teal-600 text-white"
-                : "bg-white/50 border border-teal-500/30 text-blue-900 hover:bg-white/70"
-            }`}
-          >
-            فروش
-          </button>
+        <div className="flex flex-wrap gap-2 mb-4">
+          <TabBtn id="production" label="تولید / ایستگاه‌ها" />
+          <TabBtn id="waste" label="ضایعات" />
+          <TabBtn id="sales" label="فروش" />
         </div>
 
+        {/* فیلتر تاریخ */}
         <div className={`${glassCard} p-4 mb-4 flex flex-wrap items-end gap-3`}>
           <div className="relative z-30">
             <label className={labelClass}>از تاریخ</label>
@@ -349,9 +419,30 @@ export default function ReportsPage() {
           </div>
           <button
             type="button"
+            onClick={setToday}
+            className="rounded-xl border border-teal-300 bg-white px-3 py-2.5 font-bold text-sm text-blue-900"
+          >
+            امروز
+          </button>
+          <button
+            type="button"
+            onClick={setLast7}
+            className="rounded-xl border border-teal-300 bg-white px-3 py-2.5 font-bold text-sm text-blue-900"
+          >
+            ۷ روز اخیر
+          </button>
+          <button
+            type="button"
+            onClick={setThisMonth}
+            className="rounded-xl border border-teal-300 bg-white px-3 py-2.5 font-bold text-sm text-blue-900"
+          >
+            این ماه
+          </button>
+          <button
+            type="button"
             onClick={load}
             disabled={loading}
-            className="rounded-xl bg-blue-900 hover:bg-blue-950 text-white font-bold px-6 py-2.5 disabled:opacity-50 transition"
+            className="rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold px-6 py-2.5 disabled:opacity-50 transition"
           >
             {loading ? "در حال بارگذاری..." : "اعمال فیلتر"}
           </button>
@@ -363,22 +454,40 @@ export default function ReportsPage() {
           </div>
         )}
 
+        {/* ========== تولید ========== */}
         {tab === "production" && (
-          <div className="space-y-6">
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              {[
+                ["متراژ انجام‌شده", `${formatMeter(prodTotals.doneMeterage)} متر مربع`],
+                ["تعداد انجام‌شده (عدد)", formatPrice(prodTotals.doneQuantity)],
+                ["کالای انجام‌شده", formatPrice(prodTotals.doneCount)],
+                ["متراژ باقی‌مانده", `${formatMeter(prodTotals.pendingMeterage)} متر مربع`],
+                ["تعداد باقی‌مانده (عدد)", formatPrice(prodTotals.pendingQuantity)],
+                ["کالای باقی‌مانده", formatPrice(prodTotals.pendingCount)],
+              ].map(([t, v]) => (
+                <div key={String(t)} className={`${glassCard} p-3 text-center`}>
+                  <p className="text-xs font-bold text-blue-700 mb-1">{t}</p>
+                  <p className="text-lg font-black text-teal-700">{v}</p>
+                </div>
+              ))}
+            </div>
+
             <section className={`${glassCard} overflow-hidden`}>
-              <div className="px-5 py-3.5 border-b border-teal-500/20 bg-teal-500/10">
+              <div className="px-5 py-3.5 border-b border-teal-100 bg-teal-50">
                 <h2 className="text-lg font-black text-blue-950">
-                  کارکرد و پشت‌دست هر ایستگاه
+                  کارکرد هر ایستگاه در بازه انتخابی
                 </h2>
                 <p className="text-xs text-blue-800 font-semibold mt-0.5">
-                  کلیک روی عنوان ستون = مرتب‌سازی · هدر ثابت
+                  «انجام‌شده» = کار رد شده در این تاریخ · «باقی‌مانده» = هنوز در
+                  صف ایستگاه است · روی ردیف کلیک کنید تا کالاها باز شود
                 </p>
               </div>
-              <div className="overflow-auto max-h-[55vh] p-2">
-                <table className="w-full text-sm border-collapse min-w-[900px]">
+              <div className="overflow-auto max-h-[60vh] p-2">
+                <table className="w-full text-sm border-collapse min-w-[1000px]">
                   <thead className="sticky top-0 z-20">
                     <tr className="bg-teal-700 text-white shadow">
-                      <th className="p-2 text-right font-bold border border-teal-600 sticky right-0 z-30 bg-teal-700 min-w-[120px]">
+                      <th className="p-2 text-right font-bold border border-teal-600 sticky right-0 z-30 bg-teal-700 min-w-[130px]">
                         <button
                           type="button"
                           className={thBtn + " justify-start"}
@@ -393,9 +502,12 @@ export default function ReportsPage() {
                       </th>
                       {(
                         [
-                          ["doneCount", "قلم انجام‌شده"],
-                          ["doneQuantity", "تعداد قطعه"],
-                          ["doneMeterage", "متراژ / کار"],
+                          ["doneCount", "کالای انجام‌شده"],
+                          ["doneQuantity", "تعداد انجام‌شده (عدد)"],
+                          ["doneMeterage", "متراژ انجام‌شده (متر مربع)"],
+                          ["pendingCount", "کالای باقی‌مانده"],
+                          ["pendingQuantity", "تعداد باقی‌مانده (عدد)"],
+                          ["pendingMeterage", "متراژ باقی‌مانده (متر مربع)"],
                         ] as [StationSortKey, string][]
                       ).map(([key, label]) => (
                         <th
@@ -412,239 +524,127 @@ export default function ReportsPage() {
                           </button>
                         </th>
                       ))}
-                      <th className="p-2 text-right font-bold border border-teal-600 min-w-[140px]">
-                        خدمات مرتبط
-
+                      <th className="p-2 text-center font-bold border border-teal-600">
+                        کارتابل
                       </th>
-                      {(
-                        [
-                          ["pendingCount", "صف (قلم)"],
-                          ["pendingQuantity", "صف (قطعه)"],
-                          ["pendingMeterage", "متراژ پشت‌دست"],
-                        ] as [StationSortKey, string][]
-                      ).map(([key, label]) => (
-                        <th
-                          key={key}
-                          className="p-2 text-center font-bold border border-teal-600"
-                        >
-                          <button
-                            type="button"
-                            className={thBtn}
-                            onClick={() => toggleStSort(key)}
-                          >
-                            {label}
-                            <SortIcon active={stSort === key} dir={stDir} />
-                          </button>
-                        </th>
-                      ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedStations.map((r, idx) => (
-                      <tr
-                        key={r.stationId}
-                        className={
-                          idx % 2 === 0
-                            ? "bg-white/40 hover:bg-teal-400/20"
-                            : "bg-white/25 hover:bg-teal-400/20"
-                        }
-                      >
-                        <td className="p-3 font-bold text-blue-950 border border-teal-500/15 sticky right-0 z-10 bg-inherit min-w-[120px]">
-                          {r.stationName}
-                        </td>
-                        <td className="p-3 text-center border border-teal-500/15">
-                          {r.doneCount}
-                        </td>
-                        <td className="p-3 text-center border border-teal-500/15">
-                          {r.doneQuantity}
-                        </td>
-                        <td className="p-3 text-center border border-teal-500/15">
-                          <div className="font-bold">{r.doneMeterage} م²</div>
-                          {(r.doneMeasures || []).map((m) => (
-                            <div
-                              key={m.label}
-                              className="text-xs text-teal-800 font-semibold"
+                    {sortedStations.map((r, idx) => {
+                      const open = openStationId === r.stationId
+                      return (
+                        <>
+                          <tr
+                            key={r.stationId}
+                            className={
+                              (idx % 2 === 0 ? "bg-white" : "bg-teal-50/40") +
+                              " hover:bg-teal-100/50 cursor-pointer"
+                            }
+                            onClick={() =>
+                              setOpenStationId(open ? null : r.stationId)
+                            }
+                          >
+                            <td className="p-3 font-bold text-blue-950 border border-teal-100 sticky right-0 z-10 bg-inherit">
+                              {r.stationName}
+                              <span className="block text-[10px] text-teal-700 font-semibold">
+                                {open ? "بستن کالاها" : "نمایش کالاها"}
+                              </span>
+                            </td>
+                            <td className="p-3 text-center border border-teal-100">
+                              {r.doneCount}
+                            </td>
+                            <td className="p-3 text-center border border-teal-100">
+                              {r.doneQuantity}
+                            </td>
+                            <td className="p-3 text-center font-black text-teal-800 border border-teal-100">
+                              {formatMeter(r.doneMeterage)}
+                            </td>
+                            <td className="p-3 text-center border border-teal-100">
+                              {r.pendingCount}
+                            </td>
+                            <td className="p-3 text-center border border-teal-100">
+                              {r.pendingQuantity}
+                            </td>
+                            <td className="p-3 text-center font-black text-orange-600 border border-teal-100">
+                              {formatMeter(r.pendingMeterage)}
+                            </td>
+                            <td
+                              className="p-3 text-center border border-teal-100"
+                              onClick={(e) => e.stopPropagation()}
                             >
-                              {m.label}: {m.qty}
-                            </div>
-                          ))}
-                        </td>
-                        <td className="p-3 text-xs border border-teal-500/15">
-                          {(r.doneServices || []).join(" · ") || "—"}
-                        </td>
-                        <td className="p-3 text-center border border-teal-500/15">
-                          {r.pendingCount}
-                        </td>
-                        <td className="p-3 text-center border border-teal-500/15">
-                          {r.pendingQuantity}
-                        </td>
-                        <td className="p-3 text-center font-black text-orange-600 border border-teal-500/15">
-                          {r.pendingMeterage}
-                        </td>
-                      </tr>
-                    ))}
+                              <Link
+                                href={`/production/station-queue?stationId=${encodeURIComponent(
+                                  r.stationId
+                                )}`}
+                                className="inline-block rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold px-3 py-1.5"
+                              >
+                                رفتن به کارتابل
+                              </Link>
+                            </td>
+                          </tr>
+                          {open && (
+                            <tr key={r.stationId + "-p"} className="bg-slate-50">
+                              <td colSpan={8} className="p-3 border border-teal-100">
+                                <p className="text-sm font-black text-blue-900 mb-2">
+                                  کالاهای انجام‌شده در این بازه — {r.stationName}
+                                </p>
+                                {(r.doneProducts || []).length ? (
+                                  <div className="overflow-auto">
+                                    <table className="w-full text-xs border-collapse min-w-[480px]">
+                                      <thead>
+                                        <tr className="bg-teal-100 text-blue-900">
+                                          <th className="p-2 text-right">نام کالا</th>
+                                          <th className="p-2 text-center">تعداد</th>
+                                          <th className="p-2 text-center">
+                                            متراژ (متر مربع)
+                                          </th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {(r.doneProducts || []).map((p, i) => (
+                                          <tr
+                                            key={p.productName + i}
+                                            className="border-b border-teal-50"
+                                          >
+                                            <td className="p-2 font-bold">
+                                              {p.productName}
+                                            </td>
+                                            <td className="p-2 text-center">
+                                              {p.quantity}
+                                            </td>
+                                            <td className="p-2 text-center">
+                                              {formatMeter(p.meterage)}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                ) : (
+                                  <p className="text-sm text-blue-700 font-semibold">
+                                    برای این ایستگاه در بازه انتخابی کالای
+                                    انجام‌شده‌ای ثبت نشده (یا API هنوز لیست کالا
+                                    برنمی‌گرداند).
+                                  </p>
+                                )}
+                                {(r.doneServices || []).length > 0 && (
+                                  <p className="text-xs text-blue-800 mt-2 font-semibold">
+                                    خدمات مرتبط: {(r.doneServices || []).join(" · ")}
+                                  </p>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      )
+                    })}
                     {!sortedStations.length && !loading && (
                       <tr>
                         <td
                           colSpan={8}
                           className="p-8 text-center text-blue-700 font-bold"
                         >
-                          داده‌ای نیست
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <section className={`${glassCard} overflow-hidden`}>
-              <div className="px-5 py-3.5 border-b border-teal-500/20 bg-red-500/10 flex flex-wrap justify-between gap-2">
-                <div>
-                  <h2 className="text-lg font-black text-blue-950">
-                    گزارش ضایعات
-                  </h2>
-                  <p className="text-xs text-blue-800 font-semibold">
-                    از ثبت ضایعات برنامه‌ریزی برش / کارتابل
-                  </p>
-                </div>
-                <div className="text-sm font-black text-red-700 self-center">
-                  رکورد: {wasteSummary.count} | تعداد:{" "}
-                  {wasteSummary.totalQuantity}
-                </div>
-              </div>
-              <div className="overflow-auto max-h-[55vh] p-2">
-                <table className="w-full text-sm border-collapse min-w-[1100px]">
-                  <thead className="sticky top-0 z-20">
-                    <tr className="bg-slate-700 text-white shadow">
-                      {(
-                        [
-                          ["createdAt", "تاریخ"],
-                          ["orderNumber", "سفارش"],
-                          ["customerName", "مشتری"],
-                          ["productName", "کالا"],
-                        ] as [WasteSortKey, string][]
-                      ).map(([key, label]) => (
-                        <th
-                          key={key}
-                          className="p-2 text-right font-bold border border-slate-600"
-                        >
-                          <button
-                            type="button"
-                            className={thBtn + " justify-start"}
-                            onClick={() => toggleWSort(key)}
-                          >
-                            {label}
-                            <SortIcon active={wSort === key} dir={wDir} />
-                          </button>
-                        </th>
-                      ))}
-                      <th className="p-2 text-center font-bold border border-slate-600">
-                        ابعاد
-                      </th>
-                      <th className="p-2 text-center font-bold border border-slate-600">
-                        <button
-                          type="button"
-                          className={thBtn}
-                          onClick={() => toggleWSort("quantity")}
-                        >
-                          تعداد
-                          <SortIcon
-                            active={wSort === "quantity"}
-                            dir={wDir}
-                          />
-                        </button>
-                      </th>
-                      <th className="p-2 text-right font-bold border border-slate-600">
-                        <button
-                          type="button"
-                          className={thBtn + " justify-start"}
-                          onClick={() => toggleWSort("stationName")}
-                        >
-                          ایستگاه
-                          <SortIcon
-                            active={wSort === "stationName"}
-                            dir={wDir}
-                          />
-                        </button>
-                      </th>
-                      <th className="p-2 text-right font-bold border border-slate-600">
-                        <button
-                          type="button"
-                          className={thBtn + " justify-start"}
-                          onClick={() => toggleWSort("reason")}
-                        >
-                          علت
-                          <SortIcon active={wSort === "reason"} dir={wDir} />
-                        </button>
-                      </th>
-                      <th className="p-2 text-right font-bold border border-slate-600">
-                        توضیح / مسئول
-                      </th>
-                      <th className="p-2 text-center font-bold border border-slate-600">
-                        بارکد
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedWastes.map((w, idx) => (
-                      <tr
-                        key={w.wasteId}
-                        className={
-                          idx % 2 === 0
-                            ? "bg-white/40 hover:bg-red-400/15"
-                            : "bg-white/25 hover:bg-red-400/15"
-                        }
-                      >
-                        <td className="p-3 whitespace-nowrap border border-teal-500/10">
-                          {formatFaDate(w.createdAt)}
-                        </td>
-                        <td className="p-3 border border-teal-500/10">
-                          <Link
-                            href={`/production/cutting?search=${encodeURIComponent(
-                              w.orderNumber
-                            )}`}
-                            className="font-bold text-teal-800 hover:underline"
-                          >
-                            {w.orderNumber}
-                          </Link>
-                        </td>
-                        <td className="p-3 border border-teal-500/10">
-                          {w.customerName}
-                        </td>
-                        <td className="p-3 border border-teal-500/10">
-                          {w.productName}
-                        </td>
-                        <td
-                          className="p-3 text-center border border-teal-500/10"
-                          dir="ltr"
-                        >
-                          {w.length ?? "—"}×{w.width ?? "—"}
-                        </td>
-                        <td className="p-3 text-center font-bold border border-teal-500/10">
-                          {w.quantity}
-                        </td>
-                        <td className="p-3 border border-teal-500/10">
-                          {w.stationName}
-                        </td>
-                        <td className="p-3 border border-teal-500/10">
-                          {w.reason}
-                        </td>
-                        <td className="p-3 text-xs border border-teal-500/10">
-                          {w.notes || w.responsible || "—"}
-                        </td>
-                        <td className="p-3 text-center font-mono text-xs border border-teal-500/10">
-                          {w.barcode || "—"}
-                        </td>
-                      </tr>
-                    ))}
-                    {!sortedWastes.length && !loading && (
-                      <tr>
-                        <td
-                          colSpan={10}
-                          className="p-8 text-center text-blue-700 font-bold"
-                        >
-                          ضایعاتی در این بازه ثبت نشده
+                          داده‌ای در این بازه نیست
                         </td>
                       </tr>
                     )}
@@ -655,42 +655,280 @@ export default function ReportsPage() {
           </div>
         )}
 
+        {/* ========== ضایعات ========== */}
+        {tab === "waste" && (
+          <section className={`${glassCard} overflow-hidden`}>
+            <div className="px-5 py-3.5 border-b border-red-100 bg-red-50 flex flex-wrap justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-black text-blue-950">گزارش ضایعات</h2>
+                <p className="text-xs text-blue-800 font-semibold">
+                  ایستگاه = جایی که ضایعات ثبت شده
+                </p>
+              </div>
+              <div className="text-sm font-black text-red-700 self-center">
+                تعداد رکورد: {wasteSummary.count} | مجموع تعداد قطعه:{" "}
+                {wasteSummary.totalQuantity}
+              </div>
+            </div>
+            <div className="overflow-auto max-h-[65vh] p-2">
+              <table className="w-full text-sm border-collapse min-w-[1100px]">
+                <thead className="sticky top-0 z-20">
+                  <tr className="bg-teal-700 text-white shadow">
+                    {(
+                      [
+                        ["createdAt", "تاریخ"],
+                        ["orderNumber", "سفارش"],
+                        ["customerName", "مشتری"],
+                        ["productName", "کالا"],
+                      ] as [WasteSortKey, string][]
+                    ).map(([key, label]) => (
+                      <th
+                        key={key}
+                        className="p-2 text-right font-bold border border-teal-600"
+                      >
+                        <button
+                          type="button"
+                          className={thBtn + " justify-start"}
+                          onClick={() => toggleWSort(key)}
+                        >
+                          {label}
+                          <SortIcon active={wSort === key} dir={wDir} />
+                        </button>
+                      </th>
+                    ))}
+                    <th className="p-2 text-center font-bold border border-teal-600">
+                      ابعاد
+                    </th>
+                    <th className="p-2 text-center font-bold border border-teal-600">
+                      <button
+                        type="button"
+                        className={thBtn}
+                        onClick={() => toggleWSort("quantity")}
+                      >
+                        تعداد
+                        <SortIcon active={wSort === "quantity"} dir={wDir} />
+                      </button>
+                    </th>
+                    <th className="p-2 text-right font-bold border border-teal-600">
+                      <button
+                        type="button"
+                        className={thBtn + " justify-start"}
+                        onClick={() => toggleWSort("stationName")}
+                      >
+                        ایستگاه ضایعات
+                        <SortIcon
+                          active={wSort === "stationName"}
+                          dir={wDir}
+                        />
+                      </button>
+                    </th>
+                    <th className="p-2 text-right font-bold border border-teal-600">
+                      <button
+                        type="button"
+                        className={thBtn + " justify-start"}
+                        onClick={() => toggleWSort("reason")}
+                      >
+                        علت
+                        <SortIcon active={wSort === "reason"} dir={wDir} />
+                      </button>
+                    </th>
+                    <th className="p-2 text-right font-bold border border-teal-600">
+                      توضیح / مسئول
+                    </th>
+                    <th className="p-2 text-center font-bold border border-teal-600">
+                      بارکد
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedWastes.map((w, idx) => (
+                    <tr
+                      key={w.wasteId}
+                      className={
+                        idx % 2 === 0
+                          ? "bg-white hover:bg-red-50"
+                          : "bg-red-50/30 hover:bg-red-50"
+                      }
+                    >
+                      <td className="p-3 whitespace-nowrap border border-teal-50">
+                        {formatFaDate(w.createdAt)}
+                      </td>
+                      <td className="p-3 border border-teal-50">
+                        <Link
+                          href={`/production/cutting?search=${encodeURIComponent(
+                            w.orderNumber
+                          )}`}
+                          className="font-bold text-teal-800 hover:underline"
+                        >
+                          {w.orderNumber}
+                        </Link>
+                      </td>
+                      <td className="p-3 border border-teal-50">
+                        {w.customerName}
+                      </td>
+                      <td className="p-3 border border-teal-50">
+                        {w.productName}
+                      </td>
+                      <td
+                        className="p-3 text-center border border-teal-50"
+                        dir="ltr"
+                      >
+                        {w.length ?? "—"}×{w.width ?? "—"}
+                      </td>
+                      <td className="p-3 text-center font-bold border border-teal-50">
+                        {w.quantity}
+                      </td>
+                      <td className="p-3 font-bold text-red-800 border border-teal-50">
+                        {w.stationName || "—"}
+                      </td>
+                      <td className="p-3 border border-teal-50">{w.reason}</td>
+                      <td className="p-3 text-xs border border-teal-50">
+                        {w.notes || w.responsible || "—"}
+                      </td>
+                      <td className="p-3 text-center font-mono text-xs border border-teal-50">
+                        {w.barcode || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                  {!sortedWastes.length && !loading && (
+                    <tr>
+                      <td
+                        colSpan={10}
+                        className="p-8 text-center text-blue-700 font-bold"
+                      >
+                        ضایعاتی در این بازه ثبت نشده
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* ========== فروش ========== */}
         {tab === "sales" && sales && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <div className={`${glassCard} p-6`}>
-              <p className="text-sm text-blue-800 font-bold mb-1">
-                پیش‌فاکتور صادرشده
-              </p>
-              <p className="text-4xl font-black text-teal-700">
-                {sales.preInvoiceCount}
-              </p>
-              <p className="text-sm text-blue-900 mt-3 font-semibold">
-                متراژ: {sales.preInvoiceMeterage}
-              </p>
-              <p className="text-sm text-blue-900 font-semibold">
-                مبلغ حدودی: {formatPrice(sales.preInvoiceAmount)}
-              </p>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className={`${glassCard} p-5`}>
+                <p className="text-sm text-blue-800 font-bold mb-1">
+                  پیش‌فاکتور صادرشده
+                </p>
+                <p className="text-4xl font-black text-teal-700">
+                  {sales.preInvoiceCount}
+                </p>
+                <p className="text-sm text-blue-900 mt-2 font-semibold">
+                  متراژ: {formatMeter(sales.preInvoiceMeterage)} متر مربع
+                </p>
+                <p className="text-sm text-blue-900 font-bold">
+                  مبلغ: {formatPrice(sales.preInvoiceAmount)} ریال
+                </p>
+              </div>
+              <div className={`${glassCard} p-5`}>
+                <p className="text-sm text-blue-800 font-bold mb-1">
+                  تبدیل به فاکتور
+                </p>
+                <p className="text-4xl font-black text-teal-700">
+                  {sales.invoiceCount}
+                </p>
+                <p className="text-sm text-blue-900 mt-2 font-semibold">
+                  متراژ: {formatMeter(sales.invoiceMeterage)} متر مربع
+                </p>
+                <p className="text-sm text-blue-900 font-bold">
+                  مبلغ: {formatPrice(sales.invoiceAmount)} ریال
+                </p>
+              </div>
+              <div className={`${glassCard} p-5`}>
+                <p className="text-sm text-blue-800 font-bold mb-1">نرخ تبدیل</p>
+                <p className="text-4xl font-black text-orange-600">
+                  {sales.conversionRatePercent}%
+                </p>
+                <p className="text-xs text-blue-700 mt-2 font-semibold">
+                  فاکتور ÷ (پیش‌فاکتور + فاکتور در بازه) یا منطق API
+                </p>
+              </div>
+              <div className={`${glassCard} p-5`}>
+                <p className="text-sm text-blue-800 font-bold mb-1">لغو شده</p>
+                <p className="text-4xl font-black text-red-600">
+                  {sales.cancelledCount ?? 0}
+                </p>
+              </div>
             </div>
-            <div className={`${glassCard} p-6`}>
-              <p className="text-sm text-blue-800 font-bold mb-1">
-                تبدیل به فاکتور
-              </p>
-              <p className="text-4xl font-black text-teal-700">
-                {sales.invoiceCount}
-              </p>
-              <p className="text-sm text-blue-900 mt-3 font-semibold">
-                متراژ: {sales.invoiceMeterage}
-              </p>
-              <p className="text-sm text-blue-900 font-semibold">
-                مبلغ حدودی: {formatPrice(sales.invoiceAmount)}
-              </p>
-            </div>
-            <div className={`${glassCard} p-6`}>
-              <p className="text-sm text-blue-800 font-bold mb-1">نرخ تبدیل</p>
-              <p className="text-4xl font-black text-orange-600">
-                {sales.conversionRatePercent}%
-              </p>
-            </div>
+
+            <section className={`${glassCard} overflow-hidden`}>
+              <div className="px-5 py-3.5 border-b border-teal-100 bg-teal-50">
+                <h2 className="text-lg font-black text-blue-950">
+                  عملکرد کارشناسان فروش
+                </h2>
+                <p className="text-xs text-blue-800 font-semibold mt-0.5">
+                  پیش‌فاکتور، فاکتور، مبلغ دقیق، لغو و برگشت مجدد به فاکتور (در
+                  صورت پشتیبانی API)
+                </p>
+              </div>
+              <div className="overflow-auto p-2">
+                <table className="w-full text-sm border-collapse min-w-[900px]">
+                  <thead>
+                    <tr className="bg-teal-700 text-white">
+                      <th className="p-3 text-right">کارشناس</th>
+                      <th className="p-3 text-center">پیش‌فاکتور</th>
+                      <th className="p-3 text-center">مبلغ پیش‌فاکتور</th>
+                      <th className="p-3 text-center">فاکتور</th>
+                      <th className="p-3 text-center">مبلغ فاکتور</th>
+                      <th className="p-3 text-center">تبدیل‌ها</th>
+                      <th className="p-3 text-center">لغو</th>
+                      <th className="p-3 text-center">برگشت مجدد به فاکتور</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(sales.byExpert || []).map((e, idx) => (
+                      <tr
+                        key={e.name + idx}
+                        className={
+                          idx % 2 === 0 ? "bg-white" : "bg-teal-50/40"
+                        }
+                      >
+                        <td className="p-3 font-bold border border-teal-50">
+                          {e.name}
+                        </td>
+                        <td className="p-3 text-center border border-teal-50">
+                          {e.preInvoiceCount}
+                        </td>
+                        <td className="p-3 text-center font-bold border border-teal-50">
+                          {formatPrice(e.preInvoiceAmount)}
+                        </td>
+                        <td className="p-3 text-center border border-teal-50">
+                          {e.invoiceCount}
+                        </td>
+                        <td className="p-3 text-center font-bold border border-teal-50">
+                          {formatPrice(e.invoiceAmount)}
+                        </td>
+                        <td className="p-3 text-center border border-teal-50">
+                          {e.conversionCount}
+                        </td>
+                        <td className="p-3 text-center text-red-700 font-bold border border-teal-50">
+                          {e.cancelledCount}
+                        </td>
+                        <td className="p-3 text-center border border-teal-50">
+                          {e.reOpenedCount}
+                        </td>
+                      </tr>
+                    ))}
+                    {!(sales.byExpert || []).length && (
+                      <tr>
+                        <td
+                          colSpan={8}
+                          className="p-8 text-center text-blue-700 font-bold"
+                        >
+                          هنوز تفکیک کارشناس از API نیامده — فایل
+                          <code className="mx-1">api/reports/sales/summary</code>
+                          را بفرستید تا مبلغ دقیق و جدول کارشناس کامل شود.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </div>
         )}
       </div>

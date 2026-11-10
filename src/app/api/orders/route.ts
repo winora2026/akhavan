@@ -315,8 +315,38 @@ export async function PATCH(req: NextRequest) {
       })
     }
 
-    // ───────────── برگشت فاکتور به پیش‌فاکتور ─────────────
+    // ───────────── برگشت به پیش‌فاکتور (از فاکتور یا از لغو شده) ─────────────
     if (status === "پیش‌فاکتور") {
+      // بازگردانی از لغو قطعی — بدون درگیر شدن با تولید
+      if (before.status === "لغو شده") {
+        const sessionRestore = await getSession()
+        const who =
+          (convertedBy && String(convertedBy).trim()) ||
+          sessionRestore?.displayName ||
+          null
+
+        const restored = await prisma.order.update({
+          where: { id },
+          data: {
+            status: "پیش‌فاکتور",
+            cancelledAt: null,
+            cancelledBy: null,
+            cancelReason: null,
+            notes: who ? `بازگردانی از لغو توسط: ${who}` : undefined,
+          },
+          include: {
+            customer: true,
+            items: true,
+          },
+        })
+
+        return NextResponse.json({
+          success: true,
+          order: withTotals(restored),
+        })
+      }
+
+      // برگشت فاکتور → پیش‌فاکتور (منطق قبلی تولید)
       const prod = await prisma.productionOrder.findFirst({
         where: { orderId: id },
         include: {
