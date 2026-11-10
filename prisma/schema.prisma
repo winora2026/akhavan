@@ -26,6 +26,7 @@ model Customer {
   activities        Activity[]
   followUps         FollowUp[]
   deposits          CustomerDeposit[]
+    voiceCalls    VoiceCall[]
 }
 
 model Order {
@@ -259,6 +260,7 @@ model User {
   assignedOpportunities Opportunity[] @relation("OpportunityAssignee")
   createdActivities     Activity[]    @relation("ActivityCreator")
   assignedFollowUps     FollowUp[]    @relation("FollowUpAssignee")
+      assignedCalls VoiceCall[] @relation("VoiceCallAssignee")
 }
 
 // ====================== برگه خروج / بارگیری ======================
@@ -375,6 +377,7 @@ model Lead {
   followUps       FollowUp[]
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
+    voiceCalls    VoiceCall[]
 }
 
 model Opportunity {
@@ -493,4 +496,39 @@ model SepidarSettings {
   rate                Float    @default(1)
   mockMode            Boolean  @default(true)
   updatedAt           DateTime @updatedAt
+}
+// ====================== ویس / زی‌تک ======================
+model VoiceCall {
+  id              String    @id @default(cuid())
+  externalId      String?   @unique // شناسه در زی‌تک
+  direction       String    @default("INBOUND") // INBOUND | OUTBOUND
+  phone           String
+  phoneNormalized String?
+  status          String    @default("COMPLETED") // LIVE | COMPLETED | FAILED | QUEUED
+  endReason       String?
+  startedAt       DateTime
+  endedAt         DateTime?
+  durationSec     Int       @default(0)
+  turns           Int       @default(0)
+  cost            Float     @default(0)
+  answerer        String?   // منشی / اپراتور
+  goal            String?   // فروش، پیگیری، ...
+  summary         String?
+  transcript      String?   // متن کامل یا JSON
+  source          String    @default("zitech")
+  rawPayload      String?   // JSON خام وب‌هوک
+
+  leadId          String?
+  lead            Lead?     @relation(fields: [leadId], references: [id])
+  customerId      String?
+  customer        Customer? @relation(fields: [customerId], references: [id])
+  assignedToId    String?
+  assignedTo      User?     @relation("VoiceCallAssignee", fields: [assignedToId], references: [id])
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([phoneNormalized])
+  @@index([startedAt])
+  @@index([status])
 }

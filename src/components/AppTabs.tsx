@@ -13,7 +13,14 @@ const TITLE_MAP: Record<string, string> = {
   "/invoices": "فاکتورها",
   "/customers": "مشتریان",
   "/box-design": "طراحی باکس",
-  "/crm/leads": "سرنخ‌ها",
+   "/crm/leads": "سرنخ‌ها",
+   "/crm/calls": "تاریخچه تماس‌ها",
+  "/crm/calls/dashboard": "نمای کلی تماس‌ها",
+  "/crm/calls/outbound": "تماس خروجی",
+  "/crm/calls/live": "تماس‌های زنده",
+  "/crm/calls/customers": "مشتریان تماس",
+  "/crm/calls/operators": "مکالمه اپراتورها",
+  "/crm/calls/sales-manager": "مدیر فروش AI",
   "/production/cutting": "برنامه‌ریزی برش",
   "/production/station-queue": "کارتابل",
   "/production/queue": "روند کاری",
@@ -45,12 +52,12 @@ export default function AppTabs() {
   useEffect(() => {
     if (!pathname || pathname === "/login") return
     const title =
-      TITLE_MAP[pathname] ||
-      (pathname.startsWith("/production/orders/")
-        ? "جزئیات تولید"
-        : pathname.startsWith("/crm/")
-          ? "CRM"
-          : pathname)
+  TITLE_MAP[pathname] ||
+  (pathname.startsWith("/production/orders/")
+    ? "جزئیات تولید"
+    : pathname.startsWith("/crm/calls/")
+      ? "جزئیات تماس"
+      : pathname)
 
     setTabs((prev) => {
       const exists = prev.find((t) => t.href === pathname)
