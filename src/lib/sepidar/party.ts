@@ -117,9 +117,11 @@ function resolvePartyInfo(c: any): PartyInfo | null {
 function buildPartyPayloadWithNotes(customer: any) {
   const phoneType = Number(process.env.SEPIDAR_PHONE_TYPE || 1)
   const addressType = Number(process.env.SEPIDAR_ADDRESS_TYPE || 1)
-  // نوع طرف‌حساب در سپیدار: ۱ = حقیقی، ۲ = حقوقی (اگر نفرستیم سپیدار «حقوقی» ثبت می‌کند)
-  const realSubType = 1
-  const legalSubType = Number(process.env.SEPIDAR_LEGAL_SUBTYPE || 2)
+  // نوع طرف‌حساب (حقیقی/حقوقی) را درگاه خودش از روی «نام خانوادگی» تعیین می‌کند و فیلد type/subType تأثیری ندارد
+  // (مستندات Swagger: type = 1 وقتی lastName و lastNameEn هر دو خالی باشند، و 2 وقتی یکی‌شان مقدار داشته باشد).
+  // پس برای اینکه مشتری حقیقی «نوع ۱ = حقیقی» و کد از سری حقیقی‌ها (۵۲xxx) بگیرد، نام کامل در name می‌رود و lastName خالی می‌ماند.
+  // اگر SEPIDAR_SPLIT_NAME=true باشد، نام و نام خانوادگی جدا فرستاده می‌شود ولی سپیدار مشتری را «نوع ۲» می‌سازد.
+  const splitName = process.env.SEPIDAR_SPLIT_NAME === "true"
   const notes: string[] = []
   const info = resolvePartyInfo(customer)
   const fullName = String(customer.name || "").trim()
@@ -153,9 +155,14 @@ function buildPartyPayloadWithNotes(customer: any) {
     if (legal) {
       name = info.companyName || fullName
     } else if (info.firstName && info.lastName) {
-      // نام و نام خانوادگی جدا (در سپیدار «عنوان تفصیلی» خودش از ترکیب این دو ساخته می‌شود)
-      name = info.firstName
-      lastName = info.lastName
+      if (splitName) {
+        // نام و نام خانوادگی جدا (سپیدار این را «نوع ۲» می‌سازد)
+        name = info.firstName
+        lastName = info.lastName
+      } else {
+        // نام کامل در name، lastName خالی: سپیدار «نوع ۱ (حقیقی)» می‌سازد
+        name = `${info.firstName} ${info.lastName}`.replace(/\s+/g, " ").trim()
+      }
     } else {
       // فقط یک جزء داریم؛ مثل قبل یک‌جا در نام می‌رود
       name = info.lastName || info.firstName || info.companyName || fullName
@@ -184,9 +191,6 @@ function buildPartyPayloadWithNotes(customer: any) {
   const payload = {
     name,
     ...(lastName ? { lastName } : {}),
-    subType: legal ? legalSubType : realSubType,
-    // در پاسخ GetAllParty نوع با نام «type» می‌آید؛ اگر درگاه subType را نادیده بگیرد، همین فیلد را هم می‌فرستیم
-    type: legal ? legalSubType : realSubType,
     isCustomer: true,
     ...(identificationCode ? { identificationCode } : {}),
     ...(economicCode ? { economicCode } : {}),
@@ -726,21 +730,22 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
   const found = await findExistingParty(c.name, c.phone)
   if (found.match) return linkToCustomer(customerId, found.match, { trustSepidarCode: true })
 
+  // کلید توقف ساخت خودکار: درگاه نوع طرف‌حساب را نمی‌پذیرد و همه‌ی مشتری‌های تازه «حقوقی» (کد ۱۲۳xxx) ساخته می‌شوند.
+  // با SEPIDAR_BLOCK_AUTO_CREATE=true در .env، مشتری جدید ساخته نمی‌شود؛ حسابدار او را دستی در سپیدار (حقیقی) می‌سازد
+  // و ارسال بعدی خودش با نام او را وصل می‌کند و کد سپیدار را برمی‌دارد (مرحله‌ی ۱ بالا).
+  if (process.env.SEPIDAR_BLOCK_AUTO_CREATE === "true") {
+    throw new Error(
+      `مشتری «${c.name}» هنوز در سپیدار ثبت نشده. ابتدا حسابدار او را در سپیدار به‌صورت «حقیقی» (با همین نام و نام خانوادگی) ` +
+        `ثبت کند، بعد همین فاکتور را دوباره ارسال کنید تا خودکار به او وصل شود و کد سپیدار روی مشتری بنشیند.`
+    )
+  }
+
   // ۲) در غیر این صورت می‌سازیم
   const built = buildPartyPayloadWithNotes(c)
   const payload = built.payload
   let result: any
   try {
-    try {
-      result = await sepidarPost("/api/sepidar/v1/Parties/CreateParty", payload)
-    } catch (first: any) {
-      // اگر درگاه فیلد اضافه‌ی «type» را رد کرد (۴۰۰ و نه خطای تکراری)، یک‌بار بدون آن و فقط با subType می‌فرستیم
-      // (همان بدنه‌ای که تا قبل از این تغییر درست کار می‌کرد)
-      if (isDuplicateError(first) || !/\(400\)/.test(String(first?.message || ""))) throw first
-      const { type: _drop, ...withoutType } = payload as any
-      console.warn("Sepidar: CreateParty با فیلد type رد شد؛ بدون آن دوباره ارسال می‌شود", first?.message)
-      result = await sepidarPost("/api/sepidar/v1/Parties/CreateParty", withoutType)
-    }
+    result = await sepidarPost("/api/sepidar/v1/Parties/CreateParty", payload)
   } catch (e: any) {
     if (!isDuplicateError(e)) throw e
 
@@ -797,7 +802,7 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
       sepidarCode = await syncCodeFromSepidar(customerId, createdParty, { force: true })
       // اگر سپیدار نوع را غیر از آنچه فرستادیم ثبت کرده باشد (مثلاً حقیقی → حقوقی)، کد از شمارنده‌ی نوع دیگری می‌آید؛ هشدار می‌دهیم
       const gotType = Number(createdParty.type ?? createdParty.Type)
-      const wantType = Number((payload as any).subType)
+      const wantType = (payload as any).lastName ? 2 : 1 // قاعده‌ی درگاه: lastName پر = نوع ۲، خالی = نوع ۱
       if (Number.isFinite(gotType) && wantType && gotType !== wantType) {
         built.notes.push(`نوع طرف‌حساب در سپیدار ${gotType} ثبت شد ولی ${wantType} فرستاده شده بود`)
       }
