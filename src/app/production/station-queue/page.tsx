@@ -2,11 +2,25 @@
 
 import { useState, useEffect, useMemo, useRef } from "react"
 import Link from "next/link"
+import DatePicker from "react-multi-date-picker"
+import persian from "react-date-object/calendars/persian"
+import persian_fa from "react-date-object/locales/persian_fa"
 
 type Station = {
   id: string
   name: string
   sortOrder: number
+}
+
+type RouteStep = {
+  id: string
+  name: string
+  sequence: number
+  status: string
+  quantityIn: number | null
+  quantityOut: number | null
+  completedAt: string | null
+  operatorId: string | null
 }
 
 type QueueItem = {
@@ -58,6 +72,32 @@ type QueueItem = {
       stationDoneItems?: number
       /** تعداد قلم‌های رد شده‌ی همین کالا از این سفارش در همین ایستگاه */
       productDoneItems?: number
+      order: {
+        orderNumber?: string
+        customer: { name: string }
+      }
+    }
+  }
+}
+
+/** یک ردیف از تاریخچه‌ی رد شده‌های ایستگاه */
+type HistoryRow = {
+  id: string
+  status: string
+  quantityIn: number | null
+  quantityOut: number | null
+  completedAt: string | null
+  canUndo: boolean
+  blockedBy?: string | null
+  productionItem: {
+    id: string
+    productName: string
+    length: number | null
+    width: number | null
+    quantity: number
+    barcode?: string | null
+    productionOrder: {
+      id: string
       order: {
         orderNumber?: string
         customer: { name: string }
@@ -134,6 +174,9 @@ type ReadyItem = {
 type ExitSlip = {
   id: string
   exitNumber: string
+  customerId?: string | null
+  /** کد مشتری (برای چاپ بالای برگه) */
+  customerCode?: string | null
   customerName: string
   customerPhone?: string | null
   exitDate: string
@@ -160,6 +203,13 @@ type ExitSlip = {
     barcode?: string | null
     loadedAt?: string | null
   }[]
+}
+
+/** مشتری دارای سابقه‌ی خروج (برای لیست فریزِ تاریخچه‌ی خروج) */
+type ExitCustomer = {
+  name: string
+  count: number
+  lastDate?: string | null
 }
 
 /** «۱۲٫۵ متر مربع + ۴۰ متر طول» */
@@ -190,6 +240,14 @@ function sumServiceMeasures(list: (ServiceMeasure[] | null | undefined)[]) {
 function stationServiceLines(pi: { servicesText?: string; stationServicesText?: string }) {
   const own = servicesLines(pi.stationServicesText)
   return own.length > 0 ? own : servicesLines(pi.servicesText)
+}
+
+/** خدمات دیگری که روی این قطعه باید انجام شود (غیر از خدمت همین ایستگاه) */
+function otherServicesOf(pi: { servicesText?: string; stationServicesText?: string }) {
+  const own = servicesLines(pi.stationServicesText)
+  if (own.length === 0) return []
+  const ownSet = new Set(own.map((s) => norm(s)))
+  return servicesLines(pi.servicesText).filter((s) => !ownSet.has(norm(s)))
 }
 
 /** مقدار کار به تفکیک خدمت، هر خدمت در یک خط */
@@ -232,6 +290,16 @@ function norm(s: string) {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase()
+}
+
+/** تراش ۱ / تراش ۲ (دو دستگاه موازی) */
+function isBevelName(name: string) {
+  return /^تراش\s*[12]$/.test(norm(name))
+}
+
+/** ارقام لاتین را به فارسی تبدیل می‌کند */
+function toFaDigits(v: string | number) {
+  return String(v).replace(/[0-9]/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[Number(d)])
 }
 
 /**
@@ -316,8 +384,6 @@ export default function StationQueuePage() {
   const [selectedStationId, setSelectedStationId] = useState("")
   const [stationLocked, setStationLocked] = useState(false)
   const [queue, setQueue] = useState<QueueItem[]>([])
-  const [undoable, setUndoable] = useState<QueueItem[]>([])
-  const [showUndoList, setShowUndoList] = useState(false)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(false)
   const [operatorName, setOperatorName] = useState("")
@@ -331,8 +397,22 @@ export default function StationQueuePage() {
   // انتخاب چند قلم برای رد گروهی داخل یک سفارش
   const [checkedIds, setCheckedIds] = useState<string[]>([])
   const [batchBusy, setBatchBusy] = useState(false)
-  // پنجره‌ی روند کاری یک قطعه (برای انبارها)
+  // پنجره‌ی روند کاری یک قطعه
   const [routeItem, setRouteItem] = useState<QueueItem | null>(null)
+  // مسیر ایستگاه‌های قطعه‌ها به تفکیک سفارش تولید (اگر API کارتابل مسیر را نفرستد، از API جزئیات سفارش خوانده می‌شود)
+  const [routeCache, setRouteCache] = useState<
+    Record<string, Record<string, RouteStep[]>>
+  >({})
+  const routeFetchedRef = useRef<Set<string>>(new Set())
+
+  // تاریخچه‌ی کامل رد شده‌های این ایستگاه (با جستجو و بازه‌ی تاریخ) برای برگشت
+  const [showHistory, setShowHistory] = useState(false)
+  const [histQ, setHistQ] = useState("")
+  const [histFrom, setHistFrom] = useState<any>(null)
+  const [histTo, setHistTo] = useState<any>(null)
+  const [histRows, setHistRows] = useState<HistoryRow[]>([])
+  const [histLoading, setHistLoading] = useState(false)
+  const [histTruncated, setHistTruncated] = useState(false)
 
   // سفارشی که واردش شده‌ایم (null = لیست سفارش‌ها) و ردیف انتخاب‌شده داخل سفارش
   const [openOrderKey, setOpenOrderKey] = useState<string | null>(null)
@@ -394,6 +474,17 @@ export default function StationQueuePage() {
   const [vehicleName, setVehicleName] = useState("")
   const [plateNumber, setPlateNumber] = useState("")
   const [slipNotes, setSlipNotes] = useState("")
+
+  // تاریخچه‌ی خروج مشتریان: لیست مشتری‌ها (فریز) + برگه‌های مشتری انتخاب‌شده
+  const [exitCustSearch, setExitCustSearch] = useState("")
+  const [exitCustomers, setExitCustomers] = useState<ExitCustomer[]>([])
+  const [exitCustLoading, setExitCustLoading] = useState(false)
+  const [doneCustomer, setDoneCustomer] = useState<string | null>(null)
+  const [customerSlips, setCustomerSlips] = useState<ExitSlip[]>([])
+  const [slipsLoading, setSlipsLoading] = useState(false)
+  const [exitGroupBy, setExitGroupBy] = useState<"slip" | "order">("slip")
+  const [openSlipIds, setOpenSlipIds] = useState<string[]>([])
+
   // اندازه‌ی کاغذ برگه خروج (به‌خاطر سپرده می‌شود)
   const [paper, setPaper] = useState<"A4" | "A5" | "A5L">("A4")
   useEffect(() => {
@@ -415,10 +506,6 @@ export default function StationQueuePage() {
   const todayFa = new Date().toLocaleDateString("fa-IR")
   // حالت کارتابل: صفحه ثابت و فقط جدول اسکرول می‌شود (تب خروج مثل قبل)
   const queueMode = !(mainTab === "exit" && isLoadingStation)
-  // دیدن روند کاری قطعه: برای انبار نیمه‌ساخته و انبار آماده تحویل
-  const showRouteBtn =
-    norm(selectedStationName).includes("نیمه") ||
-    norm(selectedStationName).includes("آماده تحویل")
   /** «در انتظار» را کامل می‌نویسد: در انتظار برش / در انتظار تراش ۱ ... */
   const statusLabel = (s: string) =>
     s === "در انتظار"
@@ -449,10 +536,11 @@ export default function StationQueuePage() {
   useEffect(() => {
     setOpenOrderKey(null)
     setSelectedRowId(null)
+    setShowHistory(false)
+    setHistRows([])
     if (selectedStationId) fetchQueue()
     else {
       setQueue([])
-      setUndoable([])
       setSummary(null)
     }
   }, [selectedStationId])
@@ -478,14 +566,31 @@ export default function StationQueuePage() {
     }
   }, [isLoadingStation, mainTab])
 
+  // تاریخچه‌ی خروج: لیست مشتری‌های دارای سابقه (با جستجوی نام، روی همه‌ی سوابق)
   useEffect(() => {
-    if (confirmData || detail || mapPreviewUrl || mainTab === "exit") return
+    if (!(isLoadingStation && mainTab === "exit" && exitFilter === "done")) return
+    const t = setTimeout(() => {
+      void fetchExitCustomers(exitCustSearch)
+    }, 250)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoadingStation, mainTab, exitFilter, exitCustSearch])
+
+  // برگشت به «خروج‌خورده»: برگه‌های مشتریِ انتخاب‌شده دوباره خوانده می‌شود
+  useEffect(() => {
+    if (!(isLoadingStation && mainTab === "exit" && exitFilter === "done")) return
+    if (doneCustomer) void loadCustomerSlips(doneCustomer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoadingStation, mainTab, exitFilter])
+
+  useEffect(() => {
+    if (confirmData || detail || mapPreviewUrl || showHistory || mainTab === "exit") return
     const t = setTimeout(() => inputRef.current?.focus(), 80)
     return () => clearTimeout(t)
-  }, [selectedStationId, scanLoading, confirmData, detail, mapPreviewUrl, mainTab])
+  }, [selectedStationId, scanLoading, confirmData, detail, mapPreviewUrl, showHistory, mainTab])
 
   // ---- بازگشت مرحله‌به‌مرحله (Esc، دکمه‌ی بازگشت و دکمه‌ی back مرورگر) ----
-  // لایه‌ها از بالا به پایین: چاپ ← راننده ← نقشه ← تأیید تعداد ← جزئیات ← سفارش باز
+  // لایه‌ها از بالا به پایین: چاپ ← راننده ← نقشه ← روند ← تأیید تعداد ← جزئیات ← تاریخچه ← سفارش باز
   // هر بار فقط یک لایه بسته می‌شود؛ از صفحه بیرون نمی‌رود تا همه‌ی لایه‌ها بسته شوند.
   const layerCount = [
     showPrint,
@@ -494,6 +599,7 @@ export default function StationQueuePage() {
     routeItem,
     confirmData,
     detail,
+    showHistory,
     openOrderKey,
   ].filter(Boolean).length
   const layerOpen = layerCount > 0
@@ -525,6 +631,10 @@ export default function StationQueuePage() {
     if (detail) {
       setDetail(null)
       setDetailMode("done")
+      return true
+    }
+    if (showHistory) {
+      setShowHistory(false)
       return true
     }
     if (openOrderKey) {
@@ -590,7 +700,7 @@ export default function StationQueuePage() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (mainTab === "exit") return
-      if (confirmData || showDriverModal || showPrint || mapPreviewUrl) return
+      if (confirmData || showDriverModal || showPrint || mapPreviewUrl || showHistory) return
       if (e.ctrlKey || e.metaKey || e.altKey) return
       const el = e.target as HTMLElement | null
       const tag = el?.tagName
@@ -621,7 +731,7 @@ export default function StationQueuePage() {
     }
     window.addEventListener("keydown", onKey, true)
     return () => window.removeEventListener("keydown", onKey, true)
-  }, [mainTab, confirmData, showDriverModal, showPrint, mapPreviewUrl, detail])
+  }, [mainTab, confirmData, showDriverModal, showPrint, mapPreviewUrl, showHistory, detail])
 
   const fetchStations = async (user: SessionUser | null) => {
     try {
@@ -687,7 +797,6 @@ if (userStation && list.length > 0) {
             ? data
             : []
       )
-      setUndoable(Array.isArray(data.undoable) ? data.undoable : [])
       setSummary(data.summary || null)
     } catch (e) {
       console.error(e)
@@ -695,6 +804,114 @@ if (userStation && list.length > 0) {
     } finally {
       if (!silent) setLoading(false)
     }
+  }
+
+  // ----- تاریخچه‌ی کامل رد شده‌های ایستگاه -----
+  const fetchHistory = async (override?: { q: string; from: any; to: any }) => {
+    if (!selectedStationId) return
+    const q = override ? override.q : histQ
+    const from = override ? override.from : histFrom
+    const to = override ? override.to : histTo
+    try {
+      setHistLoading(true)
+      const params = new URLSearchParams({ stationId: selectedStationId })
+      if (q.trim()) params.set("q", q.trim())
+      if (from?.toDate) {
+        const d = new Date(from.toDate().getTime())
+        d.setHours(0, 0, 0, 0)
+        params.set("from", d.toISOString())
+      }
+      if (to?.toDate) {
+        const d = new Date(to.toDate().getTime())
+        d.setHours(23, 59, 59, 999)
+        params.set("to", d.toISOString())
+      }
+      const res = await fetch(
+        `/api/production/station-history?${params.toString()}`,
+        { cache: "no-store" }
+      )
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "خطا")
+      setHistRows(Array.isArray(data.items) ? data.items : [])
+      setHistTruncated(!!data.truncated)
+    } catch (e: any) {
+      console.error(e)
+      alert(e?.message || "خطا در دریافت تاریخچه")
+    } finally {
+      setHistLoading(false)
+    }
+  }
+
+  const openHistory = () => {
+    setShowHistory(true)
+    void fetchHistory()
+  }
+
+  const clearHistoryFilters = () => {
+    setHistQ("")
+    setHistFrom(null)
+    setHistTo(null)
+    void fetchHistory({ q: "", from: null, to: null })
+  }
+
+  // ----- مسیر ایستگاه‌های قطعه‌ها (برای دکمه‌ی «روند» و «ایستگاه بعدی») -----
+  const loadOrderRoutes = async (productionOrderId: string, force = false) => {
+    if (!productionOrderId) return
+    if (!force && routeFetchedRef.current.has(productionOrderId)) return
+    routeFetchedRef.current.add(productionOrderId)
+    try {
+      const res = await fetch(`/api/production/orders/${productionOrderId}`, {
+        cache: "no-store",
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "خطا")
+      const map: Record<string, RouteStep[]> = {}
+      for (const it of Array.isArray(data.items) ? data.items : []) {
+        map[it.id] = (Array.isArray(it.stations) ? it.stations : [])
+          .slice()
+          .sort((a: any, b: any) => (a.sequence ?? 0) - (b.sequence ?? 0))
+          .map((s: any) => ({
+            id: s.id,
+            name: s.station?.name || "—",
+            sequence: s.sequence ?? 0,
+            status: s.status === "تکمیل‌شده" ? "تکمیل شده" : s.status,
+            quantityIn: s.quantityIn ?? null,
+            quantityOut: s.quantityOut ?? null,
+            completedAt: s.completedAt ?? null,
+            operatorId: s.operatorId ?? null,
+          }))
+      }
+      setRouteCache((p) => ({ ...p, [productionOrderId]: map }))
+    } catch (e) {
+      console.error(e)
+      routeFetchedRef.current.delete(productionOrderId)
+    }
+  }
+
+  /** مسیر ایستگاه‌های یک قطعه: اول از خود API کارتابل، وگرنه از کش API جزئیات سفارش */
+  const routeStepsOf = (row: QueueItem): RouteStep[] => {
+    const own = row.productionItem.route
+    if (own && own.length > 0) return own
+    return (
+      routeCache[row.productionItem.productionOrder.id]?.[row.productionItem.id] ||
+      []
+    )
+  }
+
+  /** ایستگاه بعد از ایستگاه فعلی (برای تراش ۱/۲ که موازی‌اند، از بین خودشان انتخاب نمی‌شود) */
+  const nextStationOf = (row: QueueItem): RouteStep | null => {
+    const steps = routeStepsOf(row)
+    if (steps.length === 0) return null
+    const cur =
+      steps.find((s) => s.id === row.id) ||
+      steps.find((s) => s.sequence === row.sequence)
+    const curSeq = cur ? cur.sequence : row.sequence
+    const curName = cur?.name || selectedStationName
+    const skipPair = isBevelName(curName)
+    const later = steps
+      .filter((s) => s.sequence > curSeq && !(skipPair && isBevelName(s.name)))
+      .sort((a, b) => a.sequence - b.sequence)
+    return later[0] || null
   }
 
   // ----- خروج -----
@@ -734,6 +951,52 @@ if (userStation && list.length > 0) {
     }
   }
 
+  // لیست مشتری‌های دارای سابقه‌ی خروج (از همه‌ی سوابق، نه فقط برگه‌های اخیر)
+  const fetchExitCustomers = async (q: string) => {
+    try {
+      setExitCustLoading(true)
+      const res = await fetch(
+        `/api/production/exit-slips?customers=1&q=${encodeURIComponent(q.trim())}`,
+        { cache: "no-store" }
+      )
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "خطا")
+      setExitCustomers(Array.isArray(data.customers) ? data.customers : [])
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setExitCustLoading(false)
+    }
+  }
+
+  // همه‌ی برگه‌های خروجِ یک مشتری
+  const loadCustomerSlips = async (name: string) => {
+    try {
+      setSlipsLoading(true)
+      const res = await fetch(
+        `/api/production/exit-slips?customer=${encodeURIComponent(name)}`,
+        { cache: "no-store" }
+      )
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "خطا")
+      setCustomerSlips(Array.isArray(data) ? data : [])
+    } catch (e: any) {
+      console.error(e)
+      alert(e?.message || "خطا در دریافت سوابق خروج")
+    } finally {
+      setSlipsLoading(false)
+    }
+  }
+
+  const selectDoneCustomer = (name: string) => {
+    setDoneCustomer(name)
+    setOpenSlipIds([])
+    void loadCustomerSlips(name)
+  }
+
+  const toggleOpenId = (id: string) =>
+    setOpenSlipIds((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))
+
   const pendingReadyItems = useMemo(
     () => readyItems.filter((i) => !exitedItemIds.has(i.productionItemId)),
     [readyItems, exitedItemIds]
@@ -768,38 +1031,40 @@ if (userStation && list.length > 0) {
     return pendingReadyItems.filter((i) => i.customerName === lockedCustomer)
   }, [pendingReadyItems, lockedCustomer])
 
-  const displayDoneSlips = useMemo(() => {
-    if (!lockedCustomer) return exitFilter === "done" ? exitHistory : []
-    return exitHistory.filter((h) => h.customerName === lockedCustomer)
-  }, [exitHistory, lockedCustomer, exitFilter])
-
-  /** همه اقلام خروج‌خورده همان مشتری (از همه برگه‌ها) */
-  const doneItemsForCustomer = useMemo(() => {
-    if (!lockedCustomer) return []
-    const rows: {
-      slipNumber: string
-      exitDate: string
-      productName: string
-      orderNumber?: string | null
-      quantity: number
-      meterage: number | null
-      barcode?: string | null
-    }[] = []
-    for (const h of exitHistory.filter((x) => x.customerName === lockedCustomer)) {
-      for (const it of h.items || []) {
-        rows.push({
-          slipNumber: h.exitNumber,
-          exitDate: h.exitDate,
-          productName: it.productName,
-          orderNumber: it.orderNumber,
-          quantity: it.quantity,
-          meterage: it.meterage,
-          barcode: it.barcode,
-        })
+  /** جمع‌های مشتری انتخاب‌شده در تاریخچه‌ی خروج */
+  const doneTotals = useMemo(() => {
+    let items = 0
+    let qty = 0
+    let meterage = 0
+    for (const s of customerSlips)
+      for (const it of s.items || []) {
+        items += 1
+        qty += it.quantity || 0
+        meterage += Number(it.meterage) || 0
       }
-    }
-    return rows
-  }, [exitHistory, lockedCustomer])
+    return { slips: customerSlips.length, items, qty, meterage }
+  }, [customerSlips])
+
+  /** تفکیک اقلام خروج‌خورده‌ی مشتری بر اساس شماره سفارش */
+  const doneOrderGroups = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        orderNumber: string
+        rows: { slip: ExitSlip; item: ExitSlip["items"][number] }[]
+      }
+    >()
+    for (const slip of customerSlips)
+      for (const item of slip.items || []) {
+        const k = item.orderNumber || "—"
+        const g = map.get(k)
+        if (g) g.rows.push({ slip, item })
+        else map.set(k, { orderNumber: k, rows: [{ slip, item }] })
+      }
+    return Array.from(map.values()).sort((a, b) =>
+      b.orderNumber.localeCompare(a.orderNumber, "fa", { numeric: true })
+    )
+  }, [customerSlips])
 
   const lockCustomer = async (name: string) => {
     setLockedCustomer(name)
@@ -867,7 +1132,20 @@ if (userStation && list.length > 0) {
         body: JSON.stringify({ action: "print" }),
       })
       const data = await res.json()
-      if (res.ok && data.slip) setCurrentSlip(data.slip)
+      if (res.ok && data.slip) {
+        // کد مشتری و اقلام از برگه‌ی فعلی حفظ می‌شود (API چاپ ممکن است آن‌ها را برنگرداند)
+        const merged: ExitSlip = {
+          ...currentSlip,
+          ...data.slip,
+          customerCode: data.slip.customerCode ?? currentSlip.customerCode ?? null,
+        }
+        setCurrentSlip(merged)
+        setCustomerSlips((prev) =>
+          prev.map((s) =>
+            s.id === merged.id ? { ...s, printCount: merged.printCount } : s
+          )
+        )
+      }
       window.print()
     } catch {
       window.print()
@@ -1045,6 +1323,21 @@ if (userStation && list.length > 0) {
     ? orderGroups.find((g) => g.key === openOrderKey) || null
     : null
 
+  // وقتی وارد یک سفارش می‌شویم، مسیر ایستگاه‌های اقلامش (اگر از API کارتابل نیامده) خوانده می‌شود
+  useEffect(() => {
+    if (!openGroup) return
+    const ids = new Set<string>()
+    for (const r of openGroup.rows) {
+      if (!(r.productionItem.route && r.productionItem.route.length > 0)) {
+        ids.add(r.productionItem.productionOrder.id)
+      }
+    }
+    ids.forEach((id) => {
+      void loadOrderRoutes(id)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openOrderKey, queue])
+
   const sortedGroups = useMemo(() => {
     if (!orderSort) return orderGroups
     const ts = (d: string | null) => (d ? new Date(d).getTime() || 0 : 0)
@@ -1185,25 +1478,6 @@ if (userStation && list.length > 0) {
   }, [filtered, orderGroups])
 
   const filterActive = productFilter.trim() !== "" || search.trim() !== ""
-
-  // رد شده‌های قابل برگشت (با همان فیلترهای بالا)
-  const filteredUndoable = useMemo(() => {
-    const p = productFilter.trim().toLowerCase()
-    const s = search.trim().toLowerCase()
-    return undoable.filter((q) => {
-      const it = q.productionItem
-      if (p && !it.productName.toLowerCase().includes(p)) return false
-      if (s) {
-        const hit =
-          it.productionOrder.order?.orderNumber?.toLowerCase().includes(s) ||
-          it.productionOrder.order?.customer?.name?.toLowerCase().includes(s) ||
-          it.productName?.toLowerCase().includes(s) ||
-          (it.barcode || "").toLowerCase().includes(s)
-        if (!hit) return false
-      }
-      return true
-    })
-  }, [undoable, productFilter, search])
 
   const exportStationExcel = () => {
     if (!filtered.length) {
@@ -1411,6 +1685,7 @@ if (userStation && list.length > 0) {
       meterage: pi.meterage,
       notes: pi.notes,
       servicesText: pi.servicesText,
+      nextStation: nextStationOf(row)?.name || null,
       installationCode: pi.installationCode,
       mapImageUrl: pi.mapImageUrl,
       orderDate: pi.orderDate,
@@ -1428,7 +1703,7 @@ if (userStation && list.length > 0) {
     await doScan(false, null, code)
   }
 
-  /** دبل‌کلیک یا دکمه‌ی «رد» روی قلم داخل سفارش = رد ایستگاه (مثل اسکن) */
+  /** دکمه‌ی «رد» روی قلم داخل سفارش = رد ایستگاه (مثل اسکن). دبل‌کلیک دیگر چیزی را رد نمی‌کند. */
   const completeByRow = (row: QueueItem) => {
     const code = cleanBarcode(row.productionItem.barcode || "")
     if (!code) {
@@ -1510,7 +1785,10 @@ if (userStation && list.length > 0) {
     setTimeout(() => inputRef.current?.focus(), 50)
   }
 
-  const undoStation = async (row: QueueItem) => {
+  // برگشت رد ایستگاه (هم از داخل سفارش و هم از تاریخچه)
+  const undoStation = async (row: {
+    productionItem: { barcode?: string | null; productName: string }
+  }) => {
     if (!row.productionItem.barcode) {
       alert("این ردیف بارکد ندارد")
       return
@@ -1540,6 +1818,7 @@ if (userStation && list.length > 0) {
       }
       setLastResult({ type: "ok", text: data.message || "برگشت انجام شد" })
       await fetchQueue(true)
+      if (showHistory) await fetchHistory()
     } catch (e) {
       console.error(e)
       alert("خطا در ارتباط با سرور")
@@ -1602,6 +1881,9 @@ if (userStation && list.length > 0) {
     if (inputRef.current) inputRef.current.value = ""
     setTimeout(() => inputRef.current?.focus(), 50)
   }
+
+  // اندازه‌ی طول و عرض در برگه‌ی چاپی (اپراتور بر اساس همین‌ها بار را تحویل می‌دهد)
+  const dimCls = paper === "A4" ? "text-base font-black" : "text-sm font-black"
 
   return (
     <div
@@ -1670,6 +1952,14 @@ if (userStation && list.length > 0) {
             <div className="mr-auto flex flex-wrap items-center gap-1.5">
               {(!isLoadingStation || mainTab === "queue") && (
                 <>
+                  <button
+                    type="button"
+                    onClick={openHistory}
+                    className="rounded-lg border border-amber-500 bg-amber-50 px-3 py-1.5 text-sm font-bold text-amber-900 hover:bg-amber-100"
+                    title="همه‌ی قطعات رد شده‌ی این ایستگاه + برگشت"
+                  >
+                    تاریخچه رد شده‌ها
+                  </button>
                   <button
                     type="button"
                     onClick={exportStationExcel}
@@ -1926,9 +2216,9 @@ if (userStation && list.length > 0) {
                     </div>
                     <div className="mb-1 shrink-0 flex flex-wrap items-center gap-2">
                       <p className="text-[11px] leading-tight text-blue-700">
-                        دبل‌کلیک روی قلم یا اسکن بارکد = رد ایستگاه | تیک چند قلم + «رد گروهی» = رد
-                        همه‌ی انتخاب‌شده‌ها با هم | «نمایش» = جزئیات و نقشه بدون رد | Esc = یک مرحله
-                        بازگشت
+                        دکمه‌ی «رد» یا اسکن بارکد = رد ایستگاه | تیک چند قلم + «رد گروهی» = رد
+                        همه‌ی انتخاب‌شده‌ها با هم | «نمایش» = جزئیات و نقشه بدون رد | «روند» = مسیر
+                        ایستگاه‌های قطعه | Esc = یک مرحله بازگشت
                       </p>
                       <button
                         type="button"
@@ -1988,14 +2278,11 @@ if (userStation && list.length > 0) {
                                   ? "bg-teal-50"
                                   : "bg-white hover:bg-orange-50"
                             }`}
-                            title="دبل‌کلیک = رد ایستگاه"
                             onClick={() => setSelectedRowId(row.id)}
-                            onDoubleClick={() => completeByRow(row)}
                           >
                             <td
                               className="border border-gray-400 px-2 py-1 text-center"
                               onClick={(e) => e.stopPropagation()}
-                              onDoubleClick={(e) => e.stopPropagation()}
                             >
                               <input
                                 type="checkbox"
@@ -2039,6 +2326,25 @@ if (userStation && list.length > 0) {
                                     (sv, i) => <div key={i}>{sv}</div>
                                   )
                                 : "—"}
+                              {(() => {
+                                const nxt = nextStationOf(row)
+                                const others = otherServicesOf(row.productionItem)
+                                if (!nxt && others.length === 0) return null
+                                return (
+                                  <div className="mt-1 border-t border-dashed border-gray-300 pt-1 text-xs">
+                                    {nxt && (
+                                      <div className="font-black text-purple-700">
+                                        ← ایستگاه بعدی: {nxt.name}
+                                      </div>
+                                    )}
+                                    {others.length > 0 && (
+                                      <div className="font-semibold text-amber-800">
+                                        سایر خدمات: {others.join("، ")}
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })()}
                             </td>
                             <td className="border border-gray-400 px-2 py-1 text-xs">
                               {row.productionItem.notes || "—"}
@@ -2050,19 +2356,21 @@ if (userStation && list.length > 0) {
                             </td>
                             <td className="border border-gray-400 px-2 py-1 text-center">
                               <div className="flex flex-wrap justify-center gap-1">
-                                {showRouteBtn && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      setRouteItem(row)
-                                    }}
-                                    className="rounded-lg bg-purple-600 px-2 py-1 text-xs font-bold text-white hover:bg-purple-700"
-                                    title="دیدن مسیر این قطعه در ایستگاه‌ها"
-                                  >
-                                    روند
-                                  </button>
-                                )}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setRouteItem(row)
+                                    void loadOrderRoutes(
+                                      row.productionItem.productionOrder.id,
+                                      true
+                                    )
+                                  }}
+                                  className="rounded-lg bg-purple-600 px-2 py-1 text-xs font-bold text-white hover:bg-purple-700"
+                                  title="دیدن مسیر این قطعه در ایستگاه‌ها"
+                                >
+                                  روند
+                                </button>
                                 <button
                                   type="button"
                                   disabled={scanLoading}
@@ -2127,7 +2435,7 @@ if (userStation && list.length > 0) {
                 /* ---------- لیست سفارش‌ها (هر سفارش یک ردیف) ---------- */
                 <div className="h-full flex flex-col">
                   <p className="mb-1 shrink-0 text-[11px] text-blue-700">
-                    کلیک روی هر سفارش = ورود به اقلام همان سفارش، سپس دبل‌کلیک روی قلم یا اسکن بارکد برای رد
+                    کلیک روی هر سفارش = ورود به اقلام همان سفارش، سپس دکمه‌ی «رد» روی قلم یا اسکن بارکد برای رد
                   </p>
                   <div className="flex-1 min-h-0 overflow-auto">
                   <table className="w-full border-collapse border border-gray-400 text-sm">
@@ -2217,90 +2525,6 @@ if (userStation && list.length > 0) {
                 </div>
               )}
             </div>
-
-            {undoable.length > 0 && (
-              <div className="mt-2 shrink-0 max-h-[35vh] overflow-auto rounded-2xl bg-white shadow-md p-4 border border-amber-300">
-                <button
-                  type="button"
-                  onClick={() => setShowUndoList((v) => !v)}
-                  className="w-full flex items-center justify-between gap-2 font-black text-blue-950"
-                >
-                  <span>
-                    رد شده‌های اخیر این ایستگاه — قابل برگشت به کارتابل (
-                    {filteredUndoable.length})
-                  </span>
-                  <span className="text-sm text-teal-700">
-                    {showUndoList ? "بستن ▲" : "نمایش ▼"}
-                  </span>
-                </button>
-                {showUndoList && (
-                  <div className="mt-3 overflow-x-auto">
-                    <p className="text-xs text-blue-700 mb-2">
-                      فقط قطعه‌هایی نمایش داده می‌شوند که ایستگاه بعدی هنوز آن‌ها را رد نکرده است.
-                    </p>
-                    {filteredUndoable.length === 0 ? (
-                      <p className="text-center py-6 font-bold">موردی نیست</p>
-                    ) : (
-                      <table className="w-full text-sm border-collapse border border-gray-400">
-                        <thead>
-                          <tr className="bg-amber-100">
-                            <th className="p-2 border border-gray-400">ش سفارش</th>
-                            <th className="p-2 border border-gray-400">مشتری</th>
-                            <th className="p-2 border border-gray-400">کالا</th>
-                            <th className="p-2 border border-gray-400">بارکد</th>
-                            <th className="p-2 border border-gray-400">ابعاد</th>
-                            <th className="p-2 border border-gray-400">تعداد</th>
-                            <th className="p-2 border border-gray-400">زمان رد</th>
-                            <th className="p-2 border border-gray-400">عملیات</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredUndoable.map((row) => (
-                            <tr key={row.id} className="border border-gray-400 bg-white">
-                              <td className="p-2 border border-gray-400 text-center font-bold text-teal-800">
-                                {row.productionItem.productionOrder.order?.orderNumber || "—"}
-                              </td>
-                              <td className="p-2 border border-gray-400 font-bold">
-                                {row.productionItem.productionOrder.order?.customer?.name || "—"}
-                              </td>
-                              <td className="p-2 border border-gray-400 font-bold">
-                                {row.productionItem.productName}
-                              </td>
-                              <td className="p-2 border border-gray-400 text-center font-bold">
-                                {row.productionItem.barcode || "—"}
-                              </td>
-                              <td className="p-2 border border-gray-400 text-center font-black">
-                                {row.productionItem.length && row.productionItem.width
-                                  ? `${row.productionItem.length}×${row.productionItem.width}`
-                                  : "—"}
-                              </td>
-                              <td className="p-2 border border-gray-400 text-center font-black">
-                                {row.quantityOut ?? row.productionItem.quantity}
-                              </td>
-                              <td className="p-2 border border-gray-400 text-center text-xs">
-                                {row.completedAt
-                                  ? new Date(row.completedAt).toLocaleString("fa-IR")
-                                  : "—"}
-                              </td>
-                              <td className="p-2 border border-gray-400 text-center">
-                                <button
-                                  type="button"
-                                  disabled={scanLoading}
-                                  onClick={() => undoStation(row)}
-                                  className="rounded-lg bg-amber-500 hover:bg-amber-600 text-white px-3 py-1 text-xs font-bold disabled:opacity-50"
-                                >
-                                  برگشت به کارتابل
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
           </>
         )}
 
@@ -2331,44 +2555,46 @@ if (userStation && list.length > 0) {
                     : "bg-white border-teal-300"
                 }`}
               >
-                خروج‌خورده (همه برگه‌ها)
+                خروج‌خورده (همه سوابق)
               </button>
             </div>
 
-            <div className="rounded-2xl border bg-white p-4 shadow">
-              <label className="block text-sm font-bold mb-1">نام مشتری</label>
-              <div className="flex flex-wrap gap-2">
-                <input
-                  value={customerQuery}
-                  onChange={(e) => {
-                    if (!lockedCustomer) setCustomerQuery(e.target.value)
-                  }}
-                  disabled={!!lockedCustomer}
-                  className="flex-1 min-w-[200px] rounded-xl border px-4 py-2.5 font-bold disabled:bg-teal-50"
-                  placeholder="جستجو..."
-                />
-                {lockedCustomer && (
-                  <button
-                    type="button"
-                    onClick={unlockCustomer}
-                    className="rounded-xl border border-orange-400 bg-orange-50 px-4 py-2 font-bold"
-                  >
-                    خروج از مشتری
-                  </button>
-                )}
+            {exitFilter === "pending" && (
+              <div className="rounded-2xl border bg-white p-4 shadow">
+                <label className="block text-sm font-bold mb-1">نام مشتری</label>
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    value={customerQuery}
+                    onChange={(e) => {
+                      if (!lockedCustomer) setCustomerQuery(e.target.value)
+                    }}
+                    disabled={!!lockedCustomer}
+                    className="flex-1 min-w-[200px] rounded-xl border px-4 py-2.5 font-bold disabled:bg-teal-50"
+                    placeholder="جستجو..."
+                  />
+                  {lockedCustomer && (
+                    <button
+                      type="button"
+                      onClick={unlockCustomer}
+                      className="rounded-xl border border-orange-400 bg-orange-50 px-4 py-2 font-bold"
+                    >
+                      خروج از مشتری
+                    </button>
+                  )}
+                </div>
+                {!lockedCustomer &&
+                  filteredCustomers.map((c) => (
+                    <button
+                      key={c.name}
+                      type="button"
+                      onClick={() => lockCustomer(c.name)}
+                      className="block w-full text-right px-3 py-2 border-b font-bold hover:bg-teal-50"
+                    >
+                      {c.name}
+                    </button>
+                  ))}
               </div>
-              {!lockedCustomer &&
-                filteredCustomers.map((c) => (
-                  <button
-                    key={c.name}
-                    type="button"
-                    onClick={() => lockCustomer(c.name)}
-                    className="block w-full text-right px-3 py-2 border-b font-bold hover:bg-teal-50"
-                  >
-                    {c.name}
-                  </button>
-                ))}
-            </div>
+            )}
 
             {exitFilter === "pending" && lockedCustomer && (
               <div className="rounded-2xl border bg-white p-4 shadow">
@@ -2477,73 +2703,533 @@ if (userStation && list.length > 0) {
               </div>
             )}
 
-            {exitFilter === "done" && lockedCustomer && (
-              <div className="rounded-2xl border bg-white p-4 shadow space-y-4">
-                <h2 className="font-black">
-                  همه خروج‌خورده‌های {lockedCustomer} (
-                  {doneItemsForCustomer.length} قلم)
-                </h2>
-                <table className="w-full text-sm">
-                  <thead className="bg-teal-100">
-                    <tr>
-                      <th className="p-2">ش خروج</th>
-                      <th className="p-2">تاریخ</th>
-                      <th className="p-2">سفارش</th>
-                      <th className="p-2">کالا</th>
-                      <th className="p-2">تعداد</th>
-                      <th className="p-2">متراژ</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {doneItemsForCustomer.map((r, i) => (
-                      <tr key={i} className="border-b">
-                        <td className="p-2 font-bold text-teal-800">
-                          {r.slipNumber}
-                        </td>
-                        <td className="p-2 text-center">
-                          {formatFaDate(r.exitDate)}
-                        </td>
-                        <td className="p-2 text-center">{r.orderNumber}</td>
-                        <td className="p-2">{r.productName}</td>
-                        <td className="p-2 text-center">{r.quantity}</td>
-                        <td className="p-2 text-center">
-                          {r.meterage != null
-                            ? Number(r.meterage).toFixed(3)
-                            : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <h3 className="font-bold mt-4">برگه‌ها</h3>
-                {displayDoneSlips.map((h) => (
-                  <div
-                    key={h.id}
-                    className="flex flex-wrap justify-between border-b py-2 text-sm"
-                  >
-                    <span className="font-bold">{h.exitNumber}</span>
-                    <span>
-                      {formatFaDate(h.exitDate)} — {formatFaTime(h.exitDate)}
-                    </span>
-                    <span>{h.items?.length} قلم</span>
-                    <span>چاپ: {h.printCount}</span>
-                    <button
-                      type="button"
-                      className="text-teal-700 font-bold underline"
-                      onClick={() => {
-                        setCurrentSlip(h)
-                        setShowPrint(true)
-                      }}
-                    >
-                      چاپ
-                    </button>
+            {/* ---------- تاریخچه‌ی خروج: لیست مشتری‌ها (فریز) + برگه‌های مشتری انتخاب‌شده ---------- */}
+            {exitFilter === "done" && (
+              <div className="grid items-start gap-4 lg:grid-cols-[320px_1fr]">
+                <aside className="flex max-h-[calc(100vh-1rem)] flex-col rounded-2xl border border-teal-300 bg-white p-3 shadow lg:sticky lg:top-2">
+                  <label className="mb-1 block text-sm font-bold text-blue-900">
+                    جستجوی مشتری (همه‌ی سوابق خروج)
+                  </label>
+                  <input
+                    value={exitCustSearch}
+                    onChange={(e) => setExitCustSearch(e.target.value)}
+                    placeholder="نام مشتری..."
+                    className="w-full rounded-xl border border-teal-300 px-3 py-2 font-bold"
+                  />
+                  <p className="mt-1 text-[11px] text-blue-700">
+                    {exitCustLoading
+                      ? "در حال جستجو..."
+                      : `${exitCustomers.length} مشتری دارای سابقه‌ی خروج`}
+                  </p>
+                  <div className="mt-2 flex-1 overflow-auto rounded-xl border border-teal-100">
+                    {exitCustomers.length === 0 ? (
+                      <p className="p-4 text-center text-sm font-bold text-blue-700">
+                        {exitCustLoading ? "..." : "مشتری‌ای پیدا نشد"}
+                      </p>
+                    ) : (
+                      exitCustomers.map((c) => (
+                        <button
+                          key={c.name}
+                          type="button"
+                          onClick={() => selectDoneCustomer(c.name)}
+                          className={`block w-full border-b px-3 py-2 text-right hover:bg-teal-50 ${
+                            doneCustomer === c.name ? "bg-yellow-100" : ""
+                          }`}
+                        >
+                          <span className="block font-bold text-blue-950">
+                            {c.name}
+                          </span>
+                          <span className="block text-[11px] text-blue-700">
+                            {c.count} برگه خروج
+                            {c.lastDate ? ` | آخرین: ${formatFaDate(c.lastDate)}` : ""}
+                          </span>
+                        </button>
+                      ))
+                    )}
                   </div>
-                ))}
+                </aside>
+
+                <section className="min-w-0 space-y-3">
+                  {!doneCustomer ? (
+                    <div className="rounded-2xl border border-teal-300 bg-white p-10 text-center shadow">
+                      <p className="text-lg font-bold text-blue-800">
+                        یک مشتری را از لیست سمت راست انتخاب کنید تا همه‌ی برگه‌های خروجش نمایش داده شود
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-teal-300 bg-white p-4 shadow">
+                        <div>
+                          <h2 className="text-lg font-black text-blue-950">
+                            {doneCustomer}
+                          </h2>
+                          <p className="mt-1 text-sm font-bold text-blue-800">
+                            {doneTotals.slips} برگه خروج | {doneTotals.items} قلم |{" "}
+                            {doneTotals.qty} عدد | {doneTotals.meterage.toFixed(3)} متر
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-bold text-blue-900">
+                            تفکیک بر اساس:
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setExitGroupBy("slip")}
+                            className={`rounded-xl px-4 py-2 text-sm font-bold border ${
+                              exitGroupBy === "slip"
+                                ? "bg-teal-600 text-white border-teal-700"
+                                : "bg-white text-blue-900 border-teal-300"
+                            }`}
+                          >
+                            شماره خروج
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setExitGroupBy("order")}
+                            className={`rounded-xl px-4 py-2 text-sm font-bold border ${
+                              exitGroupBy === "order"
+                                ? "bg-teal-600 text-white border-teal-700"
+                                : "bg-white text-blue-900 border-teal-300"
+                            }`}
+                          >
+                            شماره سفارش
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void loadCustomerSlips(doneCustomer)}
+                            className="rounded-xl border border-teal-500 bg-white px-4 py-2 text-sm font-bold text-teal-800 hover:bg-teal-50"
+                          >
+                            بروزرسانی
+                          </button>
+                        </div>
+                      </div>
+
+                      {slipsLoading ? (
+                        <p className="py-10 text-center font-bold">در حال بارگذاری...</p>
+                      ) : customerSlips.length === 0 ? (
+                        <p className="py-10 text-center font-bold">
+                          برگه‌ی خروجی برای این مشتری ثبت نشده است
+                        </p>
+                      ) : exitGroupBy === "slip" ? (
+                        customerSlips.map((h) => {
+                          const open = openSlipIds.includes(h.id)
+                          const qty = (h.items || []).reduce(
+                            (s, i) => s + (i.quantity || 0),
+                            0
+                          )
+                          const m = (h.items || []).reduce(
+                            (s, i) => s + (Number(i.meterage) || 0),
+                            0
+                          )
+                          return (
+                            <div
+                              key={h.id}
+                              className="rounded-2xl border border-teal-300 bg-white shadow"
+                            >
+                              <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleOpenId(h.id)}
+                                  className="flex flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-right"
+                                >
+                                  <span className="text-lg font-black text-teal-800">
+                                    خروج {toFaDigits(h.exitNumber)}
+                                  </span>
+                                  <span className="text-sm font-bold">
+                                    {formatFaDate(h.exitDate)} — {formatFaTime(h.exitDate)}
+                                  </span>
+                                  <span className="text-sm font-semibold">
+                                    {(h.items || []).length} قلم | {qty} عدد | {m.toFixed(3)} متر
+                                  </span>
+                                  <span className="text-xs text-blue-700">
+                                    راننده: {h.driverName || "—"}
+                                  </span>
+                                  <span className="text-xs text-blue-700">
+                                    چاپ: {h.printCount}
+                                  </span>
+                                  <span className="mr-auto text-sm font-bold text-teal-700">
+                                    {open ? "بستن ▲" : "جزئیات ▼"}
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCurrentSlip(h)
+                                    setShowPrint(true)
+                                  }}
+                                  className="rounded-xl bg-teal-600 px-4 py-2 text-sm font-bold text-white hover:bg-teal-700"
+                                >
+                                  چاپ مجدد
+                                </button>
+                              </div>
+                              {open && (
+                                <div className="overflow-x-auto border-t border-teal-200 p-3">
+                                  <table className="w-full text-sm">
+                                    <thead className="bg-teal-100">
+                                      <tr>
+                                        <th className="p-2">ردیف</th>
+                                        <th className="p-2">سفارش</th>
+                                        <th className="p-2">کالا</th>
+                                        <th className="p-2">ابعاد</th>
+                                        <th className="p-2">تعداد</th>
+                                        <th className="p-2">متراژ</th>
+                                        <th className="p-2">کد نصب</th>
+                                        <th className="p-2">بارکد</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {(h.items || []).map((it, i) => (
+                                        <tr key={it.id} className="border-b">
+                                          <td className="p-2 text-center font-bold">
+                                            {i + 1}
+                                          </td>
+                                          <td className="p-2 text-center font-bold text-teal-800">
+                                            {it.orderNumber || "—"}
+                                          </td>
+                                          <td className="p-2 font-bold">
+                                            {it.productName}
+                                          </td>
+                                          <td className="p-2 text-center font-black">
+                                            {it.length ?? "—"}×{it.width ?? "—"}
+                                          </td>
+                                          <td className="p-2 text-center">
+                                            {it.quantity}
+                                          </td>
+                                          <td className="p-2 text-center">
+                                            {it.meterage != null
+                                              ? Number(it.meterage).toFixed(3)
+                                              : "—"}
+                                          </td>
+                                          <td className="p-2 text-center font-bold">
+                                            {it.installationCode || "—"}
+                                          </td>
+                                          <td className="p-2 text-center font-mono text-xs">
+                                            {it.barcode || "—"}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                  {h.driverName || h.plateNumber || h.vehicleName ? (
+                                    <p className="mt-2 text-xs font-bold text-blue-800">
+                                      راننده: {h.driverName || "—"} | ماشین:{" "}
+                                      {h.vehicleName || "—"} | پلاک: {h.plateNumber || "—"}
+                                    </p>
+                                  ) : null}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })
+                      ) : (
+                        doneOrderGroups.map((g) => {
+                          const key = `order:${g.orderNumber}`
+                          const open = openSlipIds.includes(key)
+                          const qty = g.rows.reduce(
+                            (s, r) => s + (r.item.quantity || 0),
+                            0
+                          )
+                          const m = g.rows.reduce(
+                            (s, r) => s + (Number(r.item.meterage) || 0),
+                            0
+                          )
+                          const exits = Array.from(
+                            new Set(g.rows.map((r) => toFaDigits(r.slip.exitNumber)))
+                          )
+                          return (
+                            <div
+                              key={key}
+                              className="rounded-2xl border border-teal-300 bg-white shadow"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => toggleOpenId(key)}
+                                className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-right"
+                              >
+                                <span className="text-lg font-black text-teal-800">
+                                  سفارش {g.orderNumber}
+                                </span>
+                                <span className="text-sm font-semibold">
+                                  {g.rows.length} قلم | {qty} عدد | {m.toFixed(3)} متر
+                                </span>
+                                <span className="text-xs text-blue-700">
+                                  خروج‌ها: {exits.join("، ")}
+                                </span>
+                                <span className="mr-auto text-sm font-bold text-teal-700">
+                                  {open ? "بستن ▲" : "جزئیات ▼"}
+                                </span>
+                              </button>
+                              {open && (
+                                <div className="overflow-x-auto border-t border-teal-200 p-3">
+                                  <table className="w-full text-sm">
+                                    <thead className="bg-teal-100">
+                                      <tr>
+                                        <th className="p-2">ردیف</th>
+                                        <th className="p-2">ش خروج</th>
+                                        <th className="p-2">تاریخ</th>
+                                        <th className="p-2">کالا</th>
+                                        <th className="p-2">ابعاد</th>
+                                        <th className="p-2">تعداد</th>
+                                        <th className="p-2">متراژ</th>
+                                        <th className="p-2">چاپ</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {g.rows.map((r, i) => (
+                                        <tr key={r.item.id} className="border-b">
+                                          <td className="p-2 text-center font-bold">
+                                            {i + 1}
+                                          </td>
+                                          <td className="p-2 text-center font-bold text-teal-800">
+                                            {toFaDigits(r.slip.exitNumber)}
+                                          </td>
+                                          <td className="p-2 text-center">
+                                            {formatFaDate(r.slip.exitDate)}{" "}
+                                            {formatFaTime(r.slip.exitDate)}
+                                          </td>
+                                          <td className="p-2 font-bold">
+                                            {r.item.productName}
+                                          </td>
+                                          <td className="p-2 text-center font-black">
+                                            {r.item.length ?? "—"}×{r.item.width ?? "—"}
+                                          </td>
+                                          <td className="p-2 text-center">
+                                            {r.item.quantity}
+                                          </td>
+                                          <td className="p-2 text-center">
+                                            {r.item.meterage != null
+                                              ? Number(r.item.meterage).toFixed(3)
+                                              : "—"}
+                                          </td>
+                                          <td className="p-2 text-center">
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setCurrentSlip(r.slip)
+                                                setShowPrint(true)
+                                              }}
+                                              className="text-xs font-bold text-teal-700 underline"
+                                            >
+                                              چاپ برگه
+                                            </button>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })
+                      )}
+                    </>
+                  )}
+                </section>
               </div>
             )}
           </div>
         )}
       </div>
+
+      {/* پنجره‌ی تاریخچه‌ی کامل رد شده‌های ایستگاه */}
+      {showHistory && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-3 print:hidden"
+          onClick={() => setShowHistory(false)}
+        >
+          <div
+            className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+            dir="rtl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 bg-amber-500 px-5 py-3 text-white">
+              <h2 className="text-lg font-black">
+                تاریخچه‌ی رد شده‌های ایستگاه «{selectedStationName}»
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowHistory(false)}
+                title="بستن (Esc)"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-white/25 text-xl font-black leading-none hover:bg-white/40"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="grid shrink-0 grid-cols-1 items-end gap-2 border-b border-amber-200 bg-amber-50 p-3 md:grid-cols-12">
+              <div className="md:col-span-4">
+                <label className="mb-0.5 block text-xs font-bold text-blue-900">
+                  جستجو (شماره سفارش / مشتری / کالا / بارکد)
+                </label>
+                <input
+                  value={histQ}
+                  onChange={(e) => setHistQ(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault()
+                      void fetchHistory()
+                    }
+                  }}
+                  placeholder="مثلاً 900570 یا نام مشتری"
+                  className="w-full rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-sm font-semibold"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-0.5 block text-xs font-bold text-blue-900">
+                  از تاریخ
+                </label>
+                <DatePicker
+                  value={histFrom}
+                  onChange={(v: any) => setHistFrom(v)}
+                  calendar={persian}
+                  locale={persian_fa}
+                  calendarPosition="bottom-right"
+                  inputClass="w-full rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-sm font-semibold"
+                  containerClassName="w-full"
+                  style={{ width: "100%" }}
+                  portal
+                  zIndex={1000}
+                  placeholder="انتخاب تاریخ"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-0.5 block text-xs font-bold text-blue-900">
+                  تا تاریخ
+                </label>
+                <DatePicker
+                  value={histTo}
+                  onChange={(v: any) => setHistTo(v)}
+                  calendar={persian}
+                  locale={persian_fa}
+                  calendarPosition="bottom-right"
+                  inputClass="w-full rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-sm font-semibold"
+                  containerClassName="w-full"
+                  style={{ width: "100%" }}
+                  portal
+                  zIndex={1000}
+                  placeholder="انتخاب تاریخ"
+                />
+              </div>
+              <div className="flex gap-2 md:col-span-4">
+                <button
+                  type="button"
+                  onClick={() => void fetchHistory()}
+                  disabled={histLoading}
+                  className="flex-1 rounded-xl bg-amber-500 px-4 py-1.5 text-sm font-bold text-white hover:bg-amber-600 disabled:opacity-50"
+                >
+                  {histLoading ? "..." : "جستجو"}
+                </button>
+                <button
+                  type="button"
+                  onClick={clearHistoryFilters}
+                  disabled={histLoading}
+                  className="rounded-xl border border-amber-400 bg-white px-4 py-1.5 text-sm font-bold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                >
+                  پاک کردن فیلتر
+                </button>
+              </div>
+            </div>
+
+            <p className="shrink-0 px-4 pt-2 text-xs text-blue-700">
+              {histLoading ? "در حال بارگذاری..." : `${histRows.length} مورد`}
+              {histTruncated
+                ? " — فقط جدیدترین ۴۰۰ مورد نمایش داده شده؛ برای دیدن قدیمی‌تر‌ها فیلتر بازه‌ی تاریخ یا جستجو را به‌کار ببرید"
+                : ""}
+              {" | "}
+              «برگشت» فقط وقتی فعال است که ایستگاه‌های بعدیِ آن قطعه هنوز رد نشده باشند
+            </p>
+
+            <div className="min-h-0 flex-1 overflow-auto p-3">
+              {histRows.length === 0 && !histLoading ? (
+                <p className="py-10 text-center font-bold">موردی پیدا نشد</p>
+              ) : (
+                <table className="w-full border-collapse border border-gray-400 text-sm">
+                  <thead>
+                    <tr className="bg-teal-100">
+                      <th className={thS}>ردیف</th>
+                      <th className={thS}>ش سفارش</th>
+                      <th className={thS}>مشتری</th>
+                      <th className={thS}>کالا</th>
+                      <th className={thS}>بارکد</th>
+                      <th className={thS}>ابعاد</th>
+                      <th className={thS}>رد شده</th>
+                      <th className={thS}>زمان رد</th>
+                      <th className={thS}>وضعیت</th>
+                      <th className={thS}>عملیات</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {histRows.map((r, i) => (
+                      <tr key={r.id} className="border border-gray-400 bg-white hover:bg-yellow-50">
+                        <td className="border border-gray-400 px-2 py-1 text-center font-bold">
+                          {i + 1}
+                        </td>
+                        <td className="border border-gray-400 px-2 py-1 text-center font-black text-teal-800">
+                          {r.productionItem.productionOrder.order?.orderNumber || "—"}
+                        </td>
+                        <td className="border border-gray-400 px-2 py-1 font-bold">
+                          {r.productionItem.productionOrder.order?.customer?.name || "—"}
+                        </td>
+                        <td className="border border-gray-400 px-2 py-1 font-bold">
+                          {r.productionItem.productName}
+                        </td>
+                        <td className="border border-gray-400 px-2 py-1 text-center font-mono text-xs font-bold">
+                          {r.productionItem.barcode || "—"}
+                        </td>
+                        <td className="border border-gray-400 px-2 py-1 text-center font-black">
+                          {r.productionItem.length && r.productionItem.width
+                            ? `${r.productionItem.length}×${r.productionItem.width}`
+                            : "—"}
+                        </td>
+                        <td className="border border-gray-400 px-2 py-1 text-center font-black">
+                          {r.quantityOut ?? r.productionItem.quantity}
+                          {r.status !== "تکمیل شده" && (
+                            <span className="mr-1 text-xs font-semibold text-blue-700">
+                              از {r.productionItem.quantity}
+                            </span>
+                          )}
+                        </td>
+                        <td className="border border-gray-400 px-2 py-1 text-center text-xs">
+                          {r.completedAt
+                            ? new Date(r.completedAt).toLocaleString("fa-IR")
+                            : "—"}
+                        </td>
+                        <td className="border border-gray-400 px-2 py-1 text-center">
+                          <span
+                            className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-bold ${
+                              r.status === "تکمیل شده"
+                                ? "bg-green-100 text-green-800"
+                                : "bg-blue-100 text-blue-800"
+                            }`}
+                          >
+                            {r.status === "تکمیل شده" ? "رد شده" : "رد جزئی"}
+                          </span>
+                        </td>
+                        <td className="border border-gray-400 px-2 py-1 text-center">
+                          <button
+                            type="button"
+                            disabled={scanLoading || !r.canUndo}
+                            title={
+                              r.canUndo
+                                ? "برگشت رد این ایستگاه"
+                                : `ایستگاه بعدی (${r.blockedBy || "—"}) قبلاً رد شده؛ ابتدا باید آن را برگردانید`
+                            }
+                            onClick={() => undoStation(r)}
+                            className="rounded-lg bg-amber-500 px-3 py-1 text-xs font-bold text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-gray-500"
+                          >
+                            برگشت
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {detail && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3 print:hidden">
@@ -2655,6 +3341,17 @@ if (userStation && list.length > 0) {
                       </p>
                       <p className="font-black text-blue-950 whitespace-pre-line text-base">
                         {detail.servicesText}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {detail.nextStation ? (
+                    <div className="rounded-xl border border-purple-200 bg-purple-50 p-3">
+                      <p className="text-xs text-purple-800 mb-1 font-bold">
+                        ایستگاه بعدی
+                      </p>
+                      <p className="font-black text-blue-950 text-base">
+                        {detail.nextStation}
                       </p>
                     </div>
                   ) : null}
@@ -2885,7 +3582,7 @@ if (userStation && list.length > 0) {
           >
             {(() => {
               const pi = routeItem.productionItem
-              const steps = pi.route || []
+              const steps = routeStepsOf(routeItem)
               const doneCount = steps.filter((s) => s.status === "تکمیل شده").length
               return (
                 <>
@@ -2915,7 +3612,7 @@ if (userStation && list.length > 0) {
                   </div>
                   <p className="mb-3 rounded-xl border border-teal-200 bg-teal-50 p-2 text-sm font-bold text-teal-900">
                     {steps.length === 0
-                      ? "مسیری برای این قطعه ثبت نشده است"
+                      ? "در حال دریافت مسیر... (اگر چیزی نیامد، مسیری برای این قطعه ثبت نشده است)"
                       : `${doneCount} ایستگاه از ${steps.length} ایستگاه رد شده${
                           steps.length - doneCount > 0
                             ? ` — ${steps.length - doneCount} ایستگاه باقی مانده`
@@ -3039,11 +3736,19 @@ if (userStation && list.length > 0) {
                     فرم خروج کالا
                   </h1>
                   <h2 className="font-bold">شیشه و آینه اخوان</h2>
+                  {currentSlip.customerCode ? (
+                    <p className="mt-1 text-sm font-bold">
+                      کد مشتری:{" "}
+                      <strong dir="ltr" className="font-black">
+                        {currentSlip.customerCode}
+                      </strong>
+                    </p>
+                  ) : null}
                 </div>
                 <div className="text-left" dir="rtl">
                   <p className="text-xs">شماره خروج</p>
-                  <p className={`${paper === "A4" ? "text-3xl" : "text-2xl"} font-black leading-none`}>
-                    {currentSlip.exitNumber}
+                  <p className={`${paper === "A4" ? "text-xl" : "text-lg"} font-black leading-none`}>
+                    {toFaDigits(currentSlip.exitNumber)}
                   </p>
                 </div>
               </div>
@@ -3085,10 +3790,10 @@ if (userStation && list.length > 0) {
                       <td className="border border-black p-1">
                         {it.productName}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className={`border border-black p-1 text-center ${dimCls}`}>
                         {it.length}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className={`border border-black p-1 text-center ${dimCls}`}>
                         {it.width}
                       </td>
                       <td className="border border-black p-1 text-center">
