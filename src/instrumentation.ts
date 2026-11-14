@@ -2,6 +2,17 @@
 // مسیر فایل: src/instrumentation.ts (کنار پوشه‌ی app)
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return
+  if (process.env.NEXT_PHASE === "phase-production-build") return
+
+  if (process.env.TELEPHONY_ENABLED === "true") {
+    try {
+      const { startTelephony } = await import("@/lib/telephony/bootstrap")
+      startTelephony()
+    } catch (e) {
+      console.error("[telephony] startup failed:", e)
+    }
+  }
+
   if (process.env.SEPIDAR_MOCK !== "false") return
 
   const { warmParties } = await import("@/lib/sepidar/party")

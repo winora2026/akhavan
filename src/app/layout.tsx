@@ -9,6 +9,7 @@ import "@fontsource/vazirmatn/800.css"
 
 import AppTabs from "@/components/AppTabs"
 import ChatWidget from "@/components/chat/ChatWidget"
+import IncomingCallPopup from "@/components/IncomingCallPopup"
 
 export const metadata: Metadata = {
   title: "اخوان | نرم‌افزار شیشه و آینه",
@@ -40,6 +41,7 @@ export default function RootLayout({
         <AppTabs />
         {children}
         <ChatWidget />
+        <IncomingCallPopup />
       </body>
     </html>
   )

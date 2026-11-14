@@ -14,6 +14,8 @@ const NAV = [
   { href: "/crm/calls/sales-manager", title: "مدیر فروش هوش مصنوعی" },
   { href: "/crm/calls/customers", title: "مشتریان تماس" },
   { href: "/crm/calls/outbound", title: "تماس خروجی" },
+  { href: "/crm/calls/pbx", title: "تاریخچه تلفنی" },
+  { href: "/crm/calls/settings", title: "تنظیمات داخلی" },
 ]
 
 export default function CallsLayout({

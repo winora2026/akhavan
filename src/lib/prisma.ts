@@ -6,4 +6,6 @@ const globalForPrisma = globalThis as unknown as {
 
 export const prisma = globalForPrisma.prisma ?? new PrismaClient()
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
+// در production هم یک نمونه مشترک نگه می‌داریم تا instrumentation و routeها
+// چند کلاینت جدا روی SQLite نسازند (خطای database is locked)
+globalForPrisma.prisma = prisma

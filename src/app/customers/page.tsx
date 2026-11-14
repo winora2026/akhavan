@@ -4,6 +4,8 @@ import { Suspense, useEffect, useState, useMemo, useRef } from "react"
 import { useSearchParams } from "next/navigation"
 import Link from "next/link"
 import * as XLSX from "xlsx"
+import { originateCall } from "@/lib/telephony/client"
+import { normalizePhone } from "@/lib/telephony/phone"
 
 type CustomerType = "حقیقی" | "حقوقی"
 type CustomerGroup = "نقدی" | "همکار"
@@ -378,12 +380,51 @@ function CustomersContent() {
 
   const [showBirthdayModal, setShowBirthdayModal] = useState(false)
   const [birthdayTarget, setBirthdayTarget] = useState<Customer | null>(null)
+  const [callingId, setCallingId] = useState<number | null>(null)
+
+  const deepLinkHandled = useRef(false)
 
   useEffect(() => {
-    if (searchParams.get("new") === "1" && !seedLoading) {
-      openAddModal()
+    if (seedLoading || deepLinkHandled.current) return
+    const phoneParam = searchParams.get("phone")
+    if (!phoneParam) {
+      if (searchParams.get("new") === "1") {
+        deepLinkHandled.current = true
+        openAddModal()
+      }
+      return
     }
-  }, [searchParams, seedLoading])
+    deepLinkHandled.current = true
+
+    const target = normalizePhone(phoneParam)
+    const wantNew = searchParams.get("new") === "1"
+    const match = target
+      ? data.find((c) => c.phones.some((p) => normalizePhone(p) === target))
+      : undefined
+
+    if (match && !wantNew) {
+      setSearch(toEnglishDigits(phoneParam))
+      openEditModal(match)
+      return
+    }
+
+    setEditingId(null)
+    setForm({
+      ...emptyForm,
+      code: getNextCustomerCode(data),
+      phones: [toEnglishDigits(phoneParam)],
+      socialLinks: [""],
+      tags: [],
+      photoUrl: "",
+    })
+    setTagInput("")
+    setPhotoPreview("")
+    setNationalCodeError("")
+    setPostalCodeError("")
+    setEconomicCodeError("")
+    setCompanyNationalIdError("")
+    setShowFormModal(true)
+  }, [searchParams, seedLoading, data])
 
   // خواندن lazy فایل seed مشتریان؛ import() پویا باعث می‌شود Next.js این
   // فایل را به‌صورت یک chunk جدا بسازد و فقط بعد از mount شدن صفحه،
@@ -889,6 +930,25 @@ function CustomersContent() {
     setData((prev) => prev.filter((c) => c.id !== id))
   }
 
+  const callCustomer = async (customer: Customer) => {
+    const phone = customer.phones.find((p) => p.trim())
+    if (!phone) {
+      alert("برای این مشتری شماره تماسی ثبت نشده است")
+      return
+    }
+    setCallingId(customer.id)
+    try {
+      const result = await originateCall(phone)
+      alert(
+        `تماس با ${result.phone} در حال برقراری است.\nابتدا گوشی داخلی ${result.extension} شما زنگ می‌خورد؛ پس از پاسخ، تماس با مشتری وصل می‌شود.`
+      )
+    } catch (e: any) {
+      alert(e?.message || "خطا در برقراری تماس")
+    } finally {
+      setCallingId(null)
+    }
+  }
+
   const openCreditModal = (customer: Customer) => {
     setCreditTarget(customer)
     setCreditAmount("")
@@ -1078,7 +1138,14 @@ function CustomersContent() {
                       </td>
                       <td className="p-3 font-bold text-teal-700 text-xs">{formatPrice(customer.credit)}</td>
                       <td className="p-3">
-                        <div className="flex gap-1">
+                        <div className="flex flex-wrap gap-1">
+                          <button
+                            onClick={() => callCustomer(customer)}
+                            disabled={callingId === customer.id || !customer.phones.some((p) => p.trim())}
+                            className="rounded-lg bg-emerald-500/20 hover:bg-emerald-500/40 px-2 py-1 text-xs font-bold text-emerald-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {callingId === customer.id ? "در حال تماس..." : "تماس"}
+                          </button>
                           <button
                             onClick={() => openEditModal(customer)}
                             className="rounded-lg bg-teal-500/20 hover:bg-teal-500/40 px-2 py-1 text-xs font-bold text-teal-800"

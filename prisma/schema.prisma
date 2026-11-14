@@ -27,6 +27,7 @@ model Customer {
   followUps         FollowUp[]
   deposits          CustomerDeposit[]
     voiceCalls    VoiceCall[]
+  pbxCalls      PbxCall[]
 }
 
 model Order {
@@ -263,7 +264,9 @@ model User {
   assignedFollowUps     FollowUp[]    @relation("FollowUpAssignee")
       assignedCalls VoiceCall[] @relation("VoiceCallAssignee")
     conversationMembers ConversationMember[]
-  chatMessages        ChatMessage[]       @relation("ChatSender")    
+  chatMessages        ChatMessage[]       @relation("ChatSender")
+  extension             String?       @unique // داخلی تلفنی (Issabel)
+  pbxCalls              PbxCall[]     @relation("PbxCallAgent")    
 }
 
 // ====================== برگه خروج / بارگیری ======================
@@ -577,4 +580,37 @@ model ChatMessage {
   attachmentUrl  String?
   attachmentName String?
   attachmentType String?   // image | pdf | file
+}
+
+// ====================== تلفن (Issabel / Asterisk) ======================
+model PbxCall {
+  id             String    @id @default(cuid())
+  uniqueId       String    @unique
+  direction      String    @default("INBOUND") // INBOUND | OUTBOUND | INTERNAL
+  callerNumber   String
+  callerNorm     String?
+  calleeNumber   String?
+  agentExtension String?
+  disposition    String? // ANSWERED | NO ANSWER | BUSY | FAILED | CANCEL
+  startedAt      DateTime
+  answeredAt     DateTime?
+  endedAt        DateTime?
+  durationSec    Int       @default(0)
+  billSec        Int       @default(0)
+  recordingFile  String?
+  recordingPath  String?
+  rawCdr         String?
+
+  customerId     String?
+  customer       Customer? @relation(fields: [customerId], references: [id])
+  userId         String?
+  user           User?     @relation("PbxCallAgent", fields: [userId], references: [id])
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([startedAt])
+  @@index([callerNorm])
+  @@index([agentExtension])
+  @@index([customerId])
 }
