@@ -130,8 +130,9 @@ const calcServiceUnitQty = (item: OrderItem, s: ServiceItem): string => {
   if (s.unit === "مترمربع") return fmt3((l * w) / 10000)
   if (s.unit === "محیط") return fmt3((2 * (l + w)) / 100)
   if (s.unit === "چند طول چند عرض") {
-    const lc = parseFloat(s.lengthCount || "1") || 0
-    const wc = parseFloat(s.widthCount || "1") || 0
+    // فقط داده‌های قدیمی که این فیلد را ندارند پیش‌فرض ۱ هستند؛ مقدار خالی یا صفر یعنی «بدون طول/عرض»
+    const lc = s.lengthCount === undefined ? 1 : parseFloat(s.lengthCount) || 0
+    const wc = s.widthCount === undefined ? 1 : parseFloat(s.widthCount) || 0
     return fmt3(lc * (l / 100) + wc * (w / 100))
   }
   if (s.unit === "عددی" && !String(s.unitQuantity || "").trim()) return "1"
@@ -305,7 +306,17 @@ const customersList = (customersSeedRaw as any[]).map((c: any) => {
     code: c.code || "",
     name: name,
     group: c.group || "همکار",
-    phone: pickPhone(c.mobile, c.phone, c.cellphone, c.mobileNumber, c.phoneNumber, c.tel, c.telephone),
+    // مشتریان قدیمی شماره را در آرایه‌ی phones دارند (مثلاً ["0912..."])
+    phone: pickPhone(
+      c.mobile,
+      c.phone,
+      c.cellphone,
+      c.mobileNumber,
+      c.phoneNumber,
+      c.tel,
+      c.telephone,
+      Array.isArray(c.phones) ? c.phones[0] : ""
+    ),
     normalizedName: normalizeText(name),
     normalizedCode: normalizeText(c.code || ""),
   }
@@ -467,7 +478,7 @@ export default function NewOrderClient() {
             code,
             name,
             group: r.customerGroup || "همکار",
-            phone: pickPhone(r.mobile, r.phone, r.cellphone, r.mobileNumber, r.phoneNumber, r.tel, r.profile?.mobile, r.profile?.phone),
+            phone: pickPhone(r.mobile, r.phone, r.cellphone, r.mobileNumber, r.phoneNumber, r.tel, r.profile?.mobile, r.profile?.phone, Array.isArray(r.phones) ? r.phones[0] : ""),
             normalizedName: nName,
             normalizedCode: nCode,
           })
@@ -483,6 +494,8 @@ export default function NewOrderClient() {
     }
   }, [])
   const [productionLine, setProductionLine] = useState("دکوراتیو")
+  // ارسال مستقیم به فاکتورها: بعد از ذخیره، سفارش از پیش‌فاکتورها به فاکتورها منتقل می‌شود
+  const [sendDirectToInvoice, setSendDirectToInvoice] = useState(false)
   const [customerGroup, setCustomerGroup] = useState("همکار")
   const [priority, setPriority] = useState("عادی")
   const [customerOrderNumber, setCustomerOrderNumber] = useState("—")
@@ -977,7 +990,7 @@ export default function NewOrderClient() {
         setCustomerName(order.customer?.name || "")
         setCustomerSearch(order.customer?.name || "")
         setCustomerGroup(order.customer?.customerGroup || "همکار")
-        setCustomerPhone(pickPhone(order.customer?.mobile, order.customer?.phone, order.customer?.cellphone, order.customer?.mobileNumber))
+        setCustomerPhone(pickPhone(order.customer?.mobile, order.customer?.phone, order.customer?.cellphone, order.customer?.mobileNumber, Array.isArray(order.customer?.phones) ? order.customer.phones[0] : ""))
         setPriority(order.priority || "عادی")
         if (order.salesRep) {
           setSalesRep(order.salesRep)
@@ -2246,6 +2259,39 @@ export default function NewOrderClient() {
       }
       if (result.assignedOrderNumber) setOrderNumber(String(result.assignedOrderNumber))
       if (result.assignedCustomerOrderNumber) setCustomerOrderNumber(String(result.assignedCustomerOrderNumber))
+      if (editingOrderId && result.order?.orderNumber) setOrderNumber(String(result.order.orderNumber))
+
+      // ارسال مستقیم به فاکتورها: بعد از ساخت سفارش، بلافاصله با همان مسیر معمولِ تبدیل
+      // به فاکتور منتقل می‌شود (سفارش تولید و پیامک ثبت فاکتور هم خودکار انجام می‌شود)
+      let directInvoiceNumber = ""
+      if (!editingOrderId && sendDirectToInvoice) {
+        const orderId = result.order?.id
+        if (!orderId) {
+          alert("سفارش ذخیره شد ولی شناسه‌ی آن برنگشت؛ از لیست پیش‌فاکتورها به فاکتور تبدیل کنید.")
+          router.push("/order")
+          return
+        }
+        const convertRes = await fetch("/api/orders", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: orderId,
+            status: "فاکتور",
+            orderDate: payload.orderDate,
+            deliveryDate: payload.deliveryDate,
+          }),
+        })
+        const convertResult = await convertRes.json().catch(() => ({}))
+        if (!convertRes.ok) {
+          alert(
+            `سفارش با شماره ${result.assignedOrderNumber || ""} ذخیره شد، اما ارسال مستقیم به فاکتورها انجام نشد:\n${convertResult.error || "خطای نامشخص"}\nاز لیست پیش‌فاکتورها می‌توانید آن را به فاکتور تبدیل کنید.`
+          )
+          router.push("/order")
+          return
+        }
+        directInvoiceNumber = String(convertResult.order?.orderNumber || result.assignedOrderNumber || "")
+      }
+
       // با ثبت موفق سفارش، پیش‌نویسِ محلی (جدید یا ویرایش) دیگر لازم نیست و پاک می‌شود؛
       // ذخیره‌ی خودکار هم متوقف می‌شود تا دوباره چیزی ننویسد
       try {
@@ -2254,8 +2300,18 @@ export default function NewOrderClient() {
       } catch (err) {
         console.error(err)
       }
-      alert(editingOrderId ? "سفارش با موفقیت ویرایش شد" : `سفارش با شماره ${result.assignedOrderNumber || ""} با موفقیت ذخیره شد`)
-      router.push("/order")
+      alert(
+        directInvoiceNumber
+          ? `فاکتور با شماره ${directInvoiceNumber} ثبت شد`
+          : editingOrderId
+            ? `سفارش با موفقیت ویرایش شد${
+                result.renumbered && result.order?.orderNumber
+                  ? ` — شماره سریال جدید (تغییر سری خط تولید): ${result.order.orderNumber}`
+                  : ""
+              }`
+            : `سفارش با شماره ${result.assignedOrderNumber || ""} با موفقیت ذخیره شد`
+      )
+      router.push(directInvoiceNumber ? "/invoices" : "/order")
     } catch (error) {
       console.error(error)
       alert("خطا در ارتباط با سرور")
@@ -2502,13 +2558,14 @@ export default function NewOrderClient() {
         }
       })
 
-      // ۲) خود کالا: قطعاتِ کاملاً یکسان (طول/عرض/توضیحات/خدمات یکسان) در یک سطر ادغام
-      // می‌شوند و «تعداد» به‌صورت جمع نشان داده می‌شود (مثلاً ۲ عدد به‌جای دو سطر جدا)
+      // ۲) خود کالا: قطعاتِ کاملاً یکسان (طول/عرض/کد نصب/توضیحات/خدمات یکسان) در یک سطر ادغام
+      // می‌شوند و «تعداد» به‌صورت جمع نشان داده می‌شود (مثلاً ۲ عدد به‌جای دو سطر جدا).
+      // کد نصب در کلید ادغام هست تا اقلام با کد نصب متفاوت جدا نمایش داده شوند.
       const mergedItems: { it: OrderItem; count: number }[] = []
       b.items.forEach((it) => {
-        const key = `${it.length}|${it.width}|${it.description || ""}|${JSON.stringify(it.services)}`
+        const key = `${it.length}|${it.width}|${it.installCode || ""}|${it.description || ""}|${JSON.stringify(it.services)}`
         const existing = mergedItems.find(
-          (m) => `${m.it.length}|${m.it.width}|${m.it.description || ""}|${JSON.stringify(m.it.services)}` === key
+          (m) => `${m.it.length}|${m.it.width}|${m.it.installCode || ""}|${m.it.description || ""}|${JSON.stringify(m.it.services)}` === key
         )
         if (existing) {
           existing.count += parseFloat(it.quantity) || 0
@@ -2525,7 +2582,7 @@ export default function NewOrderClient() {
           kind: "product",
           no: ++detailNo,
           title: it.productName,
-          code: it.productCode,
+          code: it.installCode || "",
           length: it.length,
           width: it.width,
           quantity: count,
@@ -2867,7 +2924,7 @@ export default function NewOrderClient() {
                 <tr className="bg-teal-700 text-white">
                   <th className="border border-teal-600 p-2 text-center font-bold">ردیف</th>
                   <th className="border border-teal-600 p-2 text-center font-bold">نام کالا یا خدمات</th>
-                  <th className="border border-teal-600 p-2 text-center font-bold">کد</th>
+                  <th className="border border-teal-600 p-2 text-center font-bold">کد نصب</th>
                   <th className="border border-teal-600 p-2 text-center font-bold">طول</th>
                   <th className="border border-teal-600 p-2 text-center font-bold">عرض</th>
                   <th className="border border-teal-600 p-2 text-center font-bold">تعداد</th>
@@ -3404,6 +3461,22 @@ export default function NewOrderClient() {
                     <p className="text-xs mt-0.5 invisible">—</p>
                   </div>
                 </div>
+
+                {/* ارسال مستقیم به فاکتورها — فقط هنگام ثبت سفارش جدید */}
+                {!editingOrderId && (
+                  <label className="mt-2 flex cursor-pointer flex-wrap items-center gap-2 rounded-xl border border-teal-500/30 bg-white/40 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={sendDirectToInvoice}
+                      onChange={(e) => setSendDirectToInvoice(e.target.checked)}
+                      className="w-4 h-4 accent-teal-600"
+                    />
+                    <span className="text-sm font-bold text-blue-950">ارسال مستقیم به فاکتورها</span>
+                    <span className="text-xs text-blue-600">
+                      (بدون ماندن در پیش‌فاکتورها؛ بعداً از صفحه‌ی فاکتورها هم قابل برگشت به پیش‌فاکتور و ویرایش است)
+                    </span>
+                  </label>
+                )}
               </div>
 
               {/* افزودن / ویرایش قلم — relative z-40 تا دراپ‌داون کالا روی جدول اقلام بیفتد */}
@@ -4748,8 +4821,8 @@ export default function NewOrderClient() {
                                 setSvcCount(s.count || "1")
                                 setSvcUnitQuantity(s.unitQuantity || "")
                                 setSvcUnitPrice(s.unitPrice)
-                                setSvcLengthCount(s.lengthCount || "1")
-                                setSvcWidthCount(s.widthCount || "1")
+                                setSvcLengthCount(s.lengthCount !== undefined ? s.lengthCount : "1")
+                                setSvcWidthCount(s.widthCount !== undefined ? s.widthCount : "1")
                               }}
                               className={`border-b border-teal-100 cursor-pointer transition-colors ${
                                 editingServiceId === s.id ? "bg-amber-100" : "hover:bg-yellow-50"

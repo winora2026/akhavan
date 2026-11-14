@@ -4,6 +4,30 @@ import { safeDate } from "@/lib/date"
 import { withTotals } from "@/lib/orderTotals"
 import { getSession } from "@/lib/auth"
 
+// ───────────── سریال شماره‌ی سفارش (هم‌راستا با src/app/api/orders/route.ts) ─────────────
+// خریداری: چهار رقمی (از ۳۳۹۶ به بعد) — اجرتی: ۹۰۰xxx (از ۹۰۰۵۷۴ به بعد)
+const PURCHASE_ORDER_NUMBER_START = 3396
+const PURCHASE_ORDER_NUMBER_MAX = 99999
+
+const RENTAL_ORDER_NUMBER_START = 900574
+const RENTAL_ORDER_NUMBER_MIN = 900000
+const RENTAL_ORDER_NUMBER_MAX = 999999
+
+async function getNextOrderNumberInSeries(isRental: boolean) {
+  const all = await prisma.order.findMany({ select: { orderNumber: true } })
+  const nums = all
+    .map((o: any) => parseInt(String(o.orderNumber), 10))
+    .filter((n: number) => !isNaN(n))
+
+  const start = isRental ? RENTAL_ORDER_NUMBER_START : PURCHASE_ORDER_NUMBER_START
+  const min = isRental ? RENTAL_ORDER_NUMBER_MIN : PURCHASE_ORDER_NUMBER_START
+  const max = isRental ? RENTAL_ORDER_NUMBER_MAX : PURCHASE_ORDER_NUMBER_MAX
+
+  const inSeries = nums.filter((n: number) => n >= min && n <= max)
+  const next = inSeries.length > 0 ? Math.max(...inSeries) + 1 : start
+  return Math.max(next, start)
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -251,7 +275,41 @@ export async function PUT(
       console.error("relink production items failed:", relinkErr)
     }
 
-    return NextResponse.json({ success: true, order: withTotals(order) })
+    // اگر خط تولید به سری دیگری منتقل شده باشد (مثلاً دکوراتیو ← اجرتی)، شماره‌ی سفارش باید
+    // از سری همان خط تولید باشد. روی فاکتورِ قطعی (status = فاکتور) شماره را عوض نمی‌کنیم.
+    let renumbered = false
+    try {
+      const isRentalLine = String(productionLine || "").trim() === "اجرتی"
+      const currentNumber = parseInt(String(existingOrder.orderNumber || ""), 10)
+      const inRentalSeries = !isNaN(currentNumber) && currentNumber >= RENTAL_ORDER_NUMBER_MIN
+      const needsRenumber =
+        existingOrder.status !== "فاکتور" && !isNaN(currentNumber) && isRentalLine !== inRentalSeries
+
+      if (needsRenumber) {
+        let candidate = await getNextOrderNumberInSeries(isRentalLine)
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            await prisma.order.update({
+              where: { id },
+              data: { orderNumber: String(candidate) },
+            })
+            order.orderNumber = String(candidate)
+            renumbered = true
+            break
+          } catch (err: any) {
+            if (err?.code !== "P2002") throw err
+            candidate += 1
+          }
+        }
+        if (!renumbered) {
+          console.error("renumber order failed: no free order number found")
+        }
+      }
+    } catch (renumberErr) {
+      console.error("renumber order failed:", renumberErr)
+    }
+
+    return NextResponse.json({ success: true, order: withTotals(order), renumbered })
   } catch (error: any) {
     console.error("Error updating order:", error)
     return NextResponse.json(
