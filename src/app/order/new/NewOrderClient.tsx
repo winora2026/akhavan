@@ -424,11 +424,6 @@ const serviceCategories: Record<string, typeof servicesList> = (() => {
   return result
 })()
 
-// نام خدمت → کد خدمت (برای نمایش ستون «کد» در ردیف خدمات پیش‌فاکتور جزئی)
-const serviceCodeByName = new Map<string, string>(
-  servicesList.map((s) => [s.name, s.code] as [string, string])
-)
-
 export default function NewOrderClient() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -2444,7 +2439,6 @@ export default function NewOrderClient() {
     // نکته: اگر کل بلوک فقط یک قطعه/یک واریانت باشد، ردیف «مجموع» اضافی نمایش داده نمی‌شود
     // چون با خود همان یک سطر یکی است.
     type DetailVariant = {
-      code: string
       quantity: number
       amount: number
       unit: string
@@ -2507,7 +2501,6 @@ export default function NewOrderClient() {
         let v = svc.variants.find((x) => x.unit === s.unit && x.unitPrice === price && x.note === (s.note || ""))
         if (!v) {
           v = {
-            code: serviceCodeByName.get(s.title) || "",
             quantity: 0,
             amount: 0,
             unit: s.unit,
@@ -2527,6 +2520,7 @@ export default function NewOrderClient() {
     let detailNo = 0
     detailBlocks.forEach((b) => {
       // ۱) خدمات این کالا — ابتدا خود ردیف‌های خدمت، سپس (اگر لازم بود) سطر «مجموع» در انتها
+      // ستون «کد نصب» فقط برای کالاست و در ردیف خدمات خالی می‌ماند
       b.services.forEach((svc) => {
         const svcName = `${svc.title} ${b.productName}`
         const prices = new Set(svc.variants.map((v) => v.unitPrice))
@@ -2535,7 +2529,7 @@ export default function NewOrderClient() {
             kind: "service",
             no: ++detailNo,
             title: svcName,
-            code: v.code,
+            code: "",
             length: "0",
             width: "0",
             quantity: v.quantity,
