@@ -33,6 +33,8 @@ const TITLE_MAP: Record<string, string> = {
   "/sms-report": "گزارش پیامک‌ها",
   "/reports": "گزارش‌ها",
   "/order/cancelled": "لغوشده‌ها",
+  "/execution/measurement": "اندازه‌گیری",
+"/execution/install": "نصب",
 }
 
 const STORAGE_KEY = "akhavan_open_tabs"

@@ -10,8 +10,25 @@ const BG_CANDIDATES = [
   "https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png",
 ]
 
+type SubItem = {
+  title: string
+  href: string
+  icon: string
+  indent?: boolean
+}
+
+type SalesRootItem = {
+  key: string
+  title: string
+  icon: string
+  href?: string
+  children?: SubItem[]
+}
+
 export default function HomePage() {
   const [showSalesMenu, setShowSalesMenu] = useState(false)
+  const [salesFlyout, setSalesFlyout] = useState<string | null>(null)
+  const [showExecutionMenu, setShowExecutionMenu] = useState(false)
   const [showProductionMenu, setShowProductionMenu] = useState(false)
   const [showFinanceMenu, setShowFinanceMenu] = useState(false)
   const [showReportsMenu, setShowReportsMenu] = useState(false)
@@ -23,7 +40,9 @@ export default function HomePage() {
     role: string
   } | null>(null)
   const [bgUrl, setBgUrl] = useState<string>(BG_CANDIDATES[0])
+
   const salesRef = useRef<HTMLDivElement>(null)
+  const executionRef = useRef<HTMLDivElement>(null)
   const productionRef = useRef<HTMLDivElement>(null)
   const financeRef = useRef<HTMLDivElement>(null)
   const reportsRef = useRef<HTMLDivElement>(null)
@@ -101,6 +120,13 @@ export default function HomePage() {
     const handleClickOutside = (e: MouseEvent) => {
       if (salesRef.current && !salesRef.current.contains(e.target as Node)) {
         setShowSalesMenu(false)
+        setSalesFlyout(null)
+      }
+      if (
+        executionRef.current &&
+        !executionRef.current.contains(e.target as Node)
+      ) {
+        setShowExecutionMenu(false)
       }
       if (
         productionRef.current &&
@@ -121,6 +147,7 @@ export default function HomePage() {
 
   const isProductionOnly = currentUser?.role === "production"
   const canOpenSales = !isProductionOnly
+  const canOpenExecution = !isProductionOnly
   const canOpenFinance = !isProductionOnly
   const canOpenReports = !isProductionOnly
 
@@ -135,6 +162,12 @@ export default function HomePage() {
       href: "#",
       icon: "M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z",
       isSales: true,
+    },
+    {
+      title: "اجرا",
+      href: "#",
+      icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
+      isExecution: true,
     },
     {
       title: "تولید",
@@ -170,56 +203,84 @@ export default function HomePage() {
     },
   ]
 
-  const salesItems = [
+  const salesRoot: SalesRootItem[] = [
     {
+      key: "orders",
+      title: "سفارشات",
+      icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2",
+      children: [
+        {
+          title: "ثبت سفارش",
+          href: "/order/new",
+          icon: "M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
+        },
+        {
+          title: "طراحی باکس",
+          href: "/box-design",
+          icon: "M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4",
+        },
+        {
+          title: "لیست پیش‌فاکتورها",
+          href: "/order",
+          icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
+        },
+        {
+          title: "پیش‌فاکتورهای لغوشده",
+          href: "/order/cancelled",
+          indent: true,
+          icon: "M6 18L18 6M6 6l12 12",
+        },
+        {
+          title: "لیست فاکتورها",
+          href: "/invoices",
+          icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
+        },
+      ],
+    },
+    {
+      key: "crm",
+      title: "CRM",
+      icon: "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z",
+      children: [
+        {
+          title: "سرنخ‌ها",
+          href: "/crm/leads",
+          icon: "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z",
+        },
+        {
+          title: "مدیریت مکالمه",
+          href: "/crm/calls/dashboard",
+          icon: "M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z",
+        },
+        {
+          title: "گزارش پیامک‌ها",
+          href: "/sms-report",
+          icon: "M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z",
+        },
+      ],
+    },
+    {
+      key: "customers",
       title: "مشتریان",
       href: "/customers",
       icon: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z",
     },
-    {
-      title: "ثبت سفارش",
-      href: "/order/new",
-      icon: "M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
-    },
-    {
-      title: "طراحی باکس",
-      href: "/box-design",
-      icon: "M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4",
-    },
-    {
-      title: "لیست پیش‌فاکتورها",
-      href: "/order",
-      icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
-    },
-    {
-      title: "لیست فاکتورها",
-      href: "/invoices",
-      icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
-    },
-    {
-      title: "پیش‌فاکتورهای لغوشده",
-      href: "/order/cancelled",
-      icon: "M6 18L18 6M6 6l12 12 M9.172 9.172a4 4 0 015.656 0M9 12h6",
-    },
-    {
-      title: "CRM · سرنخ‌ها",
-      href: "/crm/leads",
-      icon: "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z",
-    },
-           {
-      title: "CRM · مدیریت مکالمه",
-      href: "/crm/calls/dashboard",
-      icon: "M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z",
-    },
-    {
-      title: "گزارش پیامک‌ها",
-      href: "/sms-report",
-      icon: "M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z",
-    },
-        
   ]
 
-  const productionItems = [
+  const executionItems: SubItem[] = [
+    {
+      title: "اندازه‌گیری",
+      href: "/execution/measurement",
+      icon: "M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4",
+    },
+    {
+      title: "نصب",
+      href: "/execution/install",
+      icon: "M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z",
+    },
+  ]
+
+  const productionItems: SubItem[] = [
     {
       title: "مدیریت ایستگاه‌ها",
       href: "/production/stations",
@@ -247,7 +308,7 @@ export default function HomePage() {
     },
   ]
 
-  const financeItems = [
+  const financeItems: SubItem[] = [
     {
       title: "واریزی‌های مشتریان",
       href: "/finance/deposits",
@@ -265,7 +326,7 @@ export default function HomePage() {
     },
   ]
 
-  const reportsItems = [
+  const reportsItems: SubItem[] = [
     {
       title: "گزارش تولید",
       href: "/reports?tab=production",
@@ -297,6 +358,8 @@ export default function HomePage() {
 
   const closeAllMenus = () => {
     setShowSalesMenu(false)
+    setSalesFlyout(null)
+    setShowExecutionMenu(false)
     setShowProductionMenu(false)
     setShowFinanceMenu(false)
     setShowReportsMenu(false)
@@ -304,23 +367,26 @@ export default function HomePage() {
 
   const renderSubMenu = (
     open: boolean,
-    items: { title: string; href: string; icon: string }[],
+    items: SubItem[],
     onClose: () => void
   ) =>
     open ? (
       <div
         className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 min-w-[240px]"
         role="menu"
+        onMouseLeave={onClose}
       >
         <div className="rounded-2xl bg-white/95 backdrop-blur-xl border border-teal-500/30 shadow-2xl p-2">
           <div className="flex flex-col gap-1">
             {items.map((sub) => (
               <Link
-                key={sub.title}
+                key={sub.href + sub.title}
                 href={sub.href}
                 role="menuitem"
                 onClick={onClose}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-teal-50 focus:bg-teal-50 focus:outline-none focus:ring-2 focus:ring-teal-500 transition group"
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-teal-50 focus:bg-teal-50 focus:outline-none focus:ring-2 focus:ring-teal-500 transition group ${
+                  sub.indent ? "mr-4 border-r-2 border-teal-200" : ""
+                }`}
               >
                 <div className="w-10 h-10 rounded-lg bg-teal-500/15 flex items-center justify-center border border-teal-500/20 shrink-0">
                   <svg
@@ -343,6 +409,124 @@ export default function HomePage() {
               </Link>
             ))}
           </div>
+        </div>
+      </div>
+    ) : null
+
+  const renderSalesCascadingMenu = (open: boolean, onClose: () => void) =>
+    open ? (
+      <div
+        className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50"
+        role="menu"
+        onMouseLeave={() => {
+          setSalesFlyout(null)
+          onClose()
+        }}
+      >
+        <div className="flex items-end gap-1">
+          <div className="rounded-2xl bg-white/95 backdrop-blur-xl border border-teal-500/30 shadow-2xl p-2 min-w-[200px]">
+            {salesRoot.map((item) => {
+              const hasChildren = !!item.children?.length
+              const active = salesFlyout === item.key
+
+              if (!hasChildren && item.href) {
+                return (
+                  <Link
+                    key={item.key}
+                    href={item.href}
+                    onClick={() => {
+                      setSalesFlyout(null)
+                      onClose()
+                    }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-teal-50 transition"
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-teal-500/15 flex items-center justify-center border border-teal-500/20 shrink-0">
+                      <svg
+                        className="w-5 h-5 text-teal-700"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2.2}
+                          d={item.icon}
+                        />
+                      </svg>
+                    </div>
+                    <span className="text-base font-bold text-gray-800">
+                      {item.title}
+                    </span>
+                  </Link>
+                )
+              }
+
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onMouseEnter={() => setSalesFlyout(item.key)}
+                  onClick={() =>
+                    setSalesFlyout((k) => (k === item.key ? null : item.key))
+                  }
+                  className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl transition font-bold text-base ${
+                    active
+                      ? "bg-teal-600 text-white"
+                      : "text-gray-800 hover:bg-teal-50"
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span>{item.title}</span>
+                  </span>
+                  <span className="text-lg leading-none opacity-80">‹</span>
+                </button>
+              )
+            })}
+          </div>
+
+          {salesFlyout &&
+            salesRoot.find((x) => x.key === salesFlyout)?.children && (
+              <div className="rounded-2xl bg-white/95 backdrop-blur-xl border border-teal-500/30 shadow-2xl p-2 min-w-[250px]">
+                <div className="px-2 py-1 mb-1 text-xs font-black text-teal-700">
+                  {salesRoot.find((x) => x.key === salesFlyout)?.title}
+                </div>
+                {salesRoot
+                  .find((x) => x.key === salesFlyout)!
+                  .children!.map((sub) => (
+                    <Link
+                      key={sub.href + sub.title}
+                      href={sub.href}
+                      onClick={() => {
+                        setSalesFlyout(null)
+                        onClose()
+                      }}
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-teal-50 transition group ${
+                        sub.indent ? "mr-3 border-r-2 border-teal-300" : ""
+                      }`}
+                    >
+                      <div className="w-9 h-9 rounded-lg bg-teal-500/15 flex items-center justify-center border border-teal-500/20 shrink-0">
+                        <svg
+                          className="w-5 h-5 text-teal-700"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2.2}
+                            d={sub.icon}
+                          />
+                        </svg>
+                      </div>
+                      <span className="text-sm font-bold text-gray-800 group-hover:text-teal-800">
+                        {sub.title}
+                      </span>
+                    </Link>
+                  ))}
+              </div>
+            )}
         </div>
       </div>
     ) : null
@@ -454,17 +638,18 @@ export default function HomePage() {
         <div className="flex-1 min-h-[48vh] sm:min-h-[52vh]" />
 
         <div className="pb-8 px-4 sm:px-6" id="main-menu">
-          <div className="max-w-5xl mx-auto">
+          <div className="max-w-6xl mx-auto">
             <div
               className={`bg-white/45 backdrop-blur-xl border border-white/50 rounded-2xl shadow-2xl px-3 sm:px-4 py-5 ${
                 mobileOpen ? "block" : "hidden sm:block"
               }`}
             >
-              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 gap-2">
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-8 gap-2">
                 {menuItems.map((item) => {
                   const blockedForProduction =
                     isProductionOnly &&
                     (item.isSales ||
+                      (item as any).isExecution ||
                       (item as any).isFinance ||
                       (item as any).isReports ||
                       (item as any).lockedForProduction)
@@ -495,15 +680,25 @@ export default function HomePage() {
 
                   if (item.isSales) {
                     return (
-                      <div key={item.title} ref={salesRef} className="relative">
+                      <div
+                        key={item.title}
+                        ref={salesRef}
+                        className="relative"
+                        onMouseEnter={() => {
+                          if (!canOpenSales) return
+                          closeAllMenus()
+                          setShowSalesMenu(true)
+                        }}
+                      >
                         <button
                           type="button"
                           aria-haspopup={canOpenSales ? "menu" : undefined}
                           aria-expanded={canOpenSales ? showSalesMenu : false}
                           onClick={() => {
                             if (!canOpenSales) return
+                            const next = !showSalesMenu
                             closeAllMenus()
-                            setShowSalesMenu((prev) => !prev)
+                            setShowSalesMenu(next)
                           }}
                           className={menuBtnClass}
                         >
@@ -511,8 +706,58 @@ export default function HomePage() {
                           {titleSpan}
                         </button>
                         {canOpenSales &&
-                          renderSubMenu(showSalesMenu, salesItems, () =>
+                          renderSalesCascadingMenu(showSalesMenu, () => {
                             setShowSalesMenu(false)
+                            setSalesFlyout(null)
+                          })}
+                      </div>
+                    )
+                  }
+
+                  if ((item as any).isExecution) {
+                    if (blockedForProduction) {
+                      return (
+                        <button
+                          key={item.title}
+                          type="button"
+                          className={menuBtnClass}
+                        >
+                          {iconSvg}
+                          {titleSpan}
+                        </button>
+                      )
+                    }
+                    return (
+                      <div
+                        key={item.title}
+                        ref={executionRef}
+                        className="relative"
+                        onMouseEnter={() => {
+                          if (!canOpenExecution) return
+                          closeAllMenus()
+                          setShowExecutionMenu(true)
+                        }}
+                      >
+                        <button
+                          type="button"
+                          aria-haspopup="menu"
+                          aria-expanded={showExecutionMenu}
+                          onClick={() => {
+                            if (!canOpenExecution) return
+                            const next = !showExecutionMenu
+                            closeAllMenus()
+                            setShowExecutionMenu(next)
+                          }}
+                          className={menuBtnClass}
+                        >
+                          {iconSvg}
+                          {titleSpan}
+                        </button>
+                        {canOpenExecution &&
+                          renderSubMenu(
+                            showExecutionMenu,
+                            executionItems,
+                            () => setShowExecutionMenu(false)
                           )}
                       </div>
                     )
@@ -524,14 +769,19 @@ export default function HomePage() {
                         key={item.title}
                         ref={productionRef}
                         className="relative"
+                        onMouseEnter={() => {
+                          closeAllMenus()
+                          setShowProductionMenu(true)
+                        }}
                       >
                         <button
                           type="button"
                           aria-haspopup="menu"
                           aria-expanded={showProductionMenu}
                           onClick={() => {
+                            const next = !showProductionMenu
                             closeAllMenus()
-                            setShowProductionMenu((prev) => !prev)
+                            setShowProductionMenu(next)
                           }}
                           className={menuBtnClass}
                         >
@@ -565,6 +815,11 @@ export default function HomePage() {
                         key={item.title}
                         ref={financeRef}
                         className="relative"
+                        onMouseEnter={() => {
+                          if (!canOpenFinance) return
+                          closeAllMenus()
+                          setShowFinanceMenu(true)
+                        }}
                       >
                         <button
                           type="button"
@@ -572,8 +827,9 @@ export default function HomePage() {
                           aria-expanded={showFinanceMenu}
                           onClick={() => {
                             if (!canOpenFinance) return
+                            const next = !showFinanceMenu
                             closeAllMenus()
-                            setShowFinanceMenu((prev) => !prev)
+                            setShowFinanceMenu(next)
                           }}
                           className={menuBtnClass}
                         >
@@ -606,6 +862,11 @@ export default function HomePage() {
                         key={item.title}
                         ref={reportsRef}
                         className="relative"
+                        onMouseEnter={() => {
+                          if (!canOpenReports) return
+                          closeAllMenus()
+                          setShowReportsMenu(true)
+                        }}
                       >
                         <button
                           type="button"
@@ -613,8 +874,9 @@ export default function HomePage() {
                           aria-expanded={showReportsMenu}
                           onClick={() => {
                             if (!canOpenReports) return
+                            const next = !showReportsMenu
                             closeAllMenus()
-                            setShowReportsMenu((prev) => !prev)
+                            setShowReportsMenu(next)
                           }}
                           className={menuBtnClass}
                         >
@@ -665,59 +927,18 @@ export default function HomePage() {
               className="flex items-center gap-2 hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded px-1 transition"
             >
               <span>www.akhavanglass.com</span>
-              <svg
-                className="w-6 h-6 text-teal-600 shrink-0"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
-                />
-              </svg>
             </a>
-
             <a
               href="tel:02191005103"
               className="flex items-center gap-2 hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded px-1 transition"
             >
               <span>02191005103</span>
-              <svg
-                className="w-6 h-6 text-teal-600 shrink-0"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"
-                />
-              </svg>
             </a>
-
             <a
               href="tel:09129582600"
               className="flex items-center gap-2 hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded px-1 transition"
             >
               <span>09129582600</span>
-              <svg
-                className="w-6 h-6 text-teal-600 shrink-0"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
-                />
-              </svg>
             </a>
           </div>
         </div>
