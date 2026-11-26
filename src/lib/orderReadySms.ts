@@ -10,6 +10,7 @@
 
 import { prisma } from "@/lib/prisma"
 import { normalizeIranMobile, pickCustomerPhone, sendSms } from "@/lib/sms"
+import { exitPublicLink } from "@/lib/publicLinks"
 
 const HISTORY_ACTION = "پیامک آماده تحویل"
 const ST_SENDING = "در حال ارسال"
@@ -60,8 +61,14 @@ function isReadyStation(name: string) {
 }
 
 // متن پیامک
-export function buildReadyForDeliverySms(customerName: string, orderNumber: string) {
-  return `مشتری گرامی ${customerName} سفارش شماره ${orderNumber} شما در شرکت شیشه و آینه اخوان آماده تحویل می باشد. فقط تا یک هفته مسئولیت سفارش شما را بر عهده داریم، در غیر اینصورت مسئولیت مراحل بعدی تماما بر عهده شما خواهد بود.`
+// link = لینک عمومی برگه‌ی خروج/اقلام آماده‌ی تحویل (اگر تنظیم نشده باشد، پیام بدون لینک می‌رود)
+export function buildReadyForDeliverySms(
+  customerName: string,
+  orderNumber: string,
+  link?: string | null
+) {
+  const base = `مشتری گرامی ${customerName} سفارش شماره ${orderNumber} شما در شرکت شیشه و آینه اخوان آماده تحویل می باشد. فقط تا یک هفته مسئولیت سفارش شما را بر عهده داریم، در غیر اینصورت مسئولیت مراحل بعدی تماما بر عهده شما خواهد بود.`
+  return link ? `${base}\nلیست اقلام آماده تحویل: ${link}` : base
 }
 
 type HistRow = { id: string; newStatus: string | null; createdAt: Date }
@@ -172,7 +179,7 @@ async function sendForProductionOrder(
     return { status: "failed", reason: "شماره موبایل مشتری ثبت نشده" }
   }
 
-  const text = buildReadyForDeliverySms(customer?.name || "", orderNumber)
+  const text = buildReadyForDeliverySms(customer?.name || "", orderNumber, exitPublicLink(po.id))
   const result = await sendSms(mobile, text)
 
   if (!result.ok) {

@@ -114,8 +114,10 @@ export function pickCustomerPhone(customer: any): string {
 }
 
 // متن پیامک ثبت سفارش
-export function buildOrderSms(customerName: string, orderNumber: string) {
-  return `مشتری گرامی ${customerName}، سفارش شماره ${orderNumber} شما با موفقیت در شرکت شیشه و آینه اخوان ثبت شد. از اعتماد شما سپاسگزاریم.`
+// link = لینک عمومی پیش‌فاکتور (اگر تنظیم نشده باشد، پیام بدون لینک می‌رود)
+export function buildOrderSms(customerName: string, orderNumber: string, link?: string | null) {
+  const base = `مشتری گرامی ${customerName}، سفارش شماره ${orderNumber} شما با موفقیت در شرکت شیشه و آینه اخوان ثبت شد. از اعتماد شما سپاسگزاریم.`
+  return link ? `${base}\nمشاهده پیش‌فاکتور: ${link}` : base
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, ms = 15000) {

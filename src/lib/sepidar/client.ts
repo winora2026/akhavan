@@ -177,7 +177,8 @@ export async function getAll(
   params: Record<string, any> = {},
   maxPages = 200
 ) {
-  const pageSize = 50
+  // درگاه جدید ابری است و هر درخواست ~۰.۴ ثانیه تأخیر شبکه دارد؛ با ۲۰۰ ردیف در هر صفحه تعداد درخواست‌ها یک‌چهارم می‌شود
+  const pageSize = 200
   const out: any[] = []
   const isParty =
     path.includes("GetAllParty") ||

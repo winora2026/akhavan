@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma"
 import { computeOrderTotals } from "@/lib/orderTotals"
 import { getAll, sepidarGet, extractList } from "./client"
+import { warehouseOfCode } from "./warehouseMap"
 import productsSeedRaw from "@/app/products/products-seed.json"
 import servicesSeedRaw from "@/app/services/services-seed.json"
 
@@ -151,8 +152,13 @@ function suggest(list: any[], name: string) {
 export type ResolvedItem = {
   itemRef: number
   stockRef: number | null
+  /** آیتم سپیدار از نوع «کالا» است (Type=1)؛ برخلاف خدمت، بدون انبار ثبت نمی‌شود */
+  isGoods: boolean
   via: "map" | "code" | "name" | "code-lookup"
 }
+
+// آیتم‌های «کالا» در سپیدار نوع ۱ دارند؛ بقیه (خدمت) انبار نمی‌خواهند
+const isGoodsOf = (it: any) => Number(it?.Type ?? it?.type) === 1
 
 /**
  * نگاشت کالا/خدمت نرم‌افزار → آیتم سپیدار.
@@ -208,8 +214,13 @@ export async function createItemResolver() {
           await persist(productName, id)
         }
         const savedStock = saved && Number(saved.itemRef) === id ? saved.stockRef ?? null : null
-        // اولویت: انبار دستی در SepidarItemMap، بعد انبار پیش‌فرض کالا در سپیدار
-        return { itemRef: id, stockRef: savedStock ?? stockOfItem(hit), via }
+        // اولویت: انبار دستی در SepidarItemMap، بعد انبار کد کالا از خروجی انبارهای سپیدار، بعد انبار پیش‌فرض کالا در سپیدار
+        return {
+          itemRef: id,
+          stockRef: savedStock ?? warehouseOfCode(code) ?? stockOfItem(hit),
+          isGoods: isGoodsOf(hit),
+          via,
+        }
       }
       // کد در سپیدار پیدا نشد (کد قدیمی/اشتباه)؛ با نام ادامه می‌دهیم
     }
@@ -217,12 +228,14 @@ export async function createItemResolver() {
     // ۲) نگاشت ذخیره‌شده با نام
     if (saved) {
       let mapStock: number | null = saved.stockRef ?? null
+      let isGoods = false
       if (!mapStock) {
         const idx = await loadItemIndex()
         const it = idx.list.find((x) => itemIdOf(x) === Number(saved.itemRef))
-        mapStock = it ? stockOfItem(it) : null
+        mapStock = (it ? warehouseOfCode(codeOf(it)) : null) ?? (it ? stockOfItem(it) : null)
+        isGoods = isGoodsOf(it)
       }
-      return { itemRef: Number(saved.itemRef), stockRef: mapStock, via: "map" }
+      return { itemRef: Number(saved.itemRef), stockRef: mapStock, isGoods, via: "map" }
     }
 
     const index = await loadItemIndex()
@@ -233,7 +246,12 @@ export async function createItemResolver() {
       const id = itemIdOf(byName[0])
       if (id) {
         await persist(productName, id)
-        return { itemRef: id, stockRef: stockOfItem(byName[0]), via: "name" }
+        return {
+          itemRef: id,
+          stockRef: warehouseOfCode(codeOf(byName[0])) ?? stockOfItem(byName[0]),
+          isGoods: isGoodsOf(byName[0]),
+          via: "name",
+        }
       }
     }
     if (byName && byName.length > 1) {
@@ -252,7 +270,12 @@ export async function createItemResolver() {
         const id = itemIdOf(again[0])
         if (id) {
           await persist(productName, id)
-          return { itemRef: id, stockRef: stockOfItem(again[0]), via: "name" }
+          return {
+            itemRef: id,
+            stockRef: warehouseOfCode(codeOf(again[0])) ?? stockOfItem(again[0]),
+            isGoods: isGoodsOf(again[0]),
+            via: "name",
+          }
         }
       }
     }
@@ -475,10 +498,14 @@ export async function buildCreateInvoicePayload(
     rowNo++
     if (resolveItem) {
       const r = await resolveItem(name, code)
-      return { itemRef: r.itemRef, stockRef: r.stockRef }
+      return { itemRef: r.itemRef, stockRef: r.stockRef, isGoods: r.isGoods }
     }
     const map = mockMapByKey.get(nameKey(name)) as any
-    return { itemRef: Number(map?.itemRef) || rowNo, stockRef: (map?.stockRef ?? null) as number | null }
+    return {
+      itemRef: Number(map?.itemRef) || rowNo,
+      stockRef: (map?.stockRef ?? null) as number | null,
+      isGoods: false,
+    }
   }
 
   // ── مرحله ۱: گروه‌بندی اقلام (نام + کد + واحد + قیمت واحد) و خدماتشان ──
@@ -601,8 +628,10 @@ export async function buildCreateInvoicePayload(
         tax: 0,
         duty: 0,
         tracingTitle: order.orderNumber,
-        // خدمت‌هایی که در سپیدار «کالا» هستند (مثل چسب آینه) انبار می‌خواهند؛ خدمت واقعی انبار ندارد و null می‌ماند
-        stockRef: svc.stockRef ?? null,
+        // خدمت‌هایی که در سپیدار «کالا» هستند (مثل چسب آینه و فیتینگ) انبار می‌خواهند؛
+        // اگر آیتم کالا انبار پیش‌فرض نداشته باشد، مثل خود کالاها از انبار پیش‌فرض سیستم استفاده می‌شود
+        stockRef:
+          svc.stockRef ?? (svc.isGoods ? settings.defaultStockRef ?? 1 : null),
         description: [`${sg.title} ${g.name}`, sg.note].filter(Boolean).join(" | "),
       })
     }

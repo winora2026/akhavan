@@ -392,7 +392,8 @@ export default function ChatWidget() {
     )
   })
 
-  if (pathname === "/login") return null
+  // /p = صفحه‌های عمومی مشتری؛ ابزارهای داخلی (چت و تماس) نباید آنجا دیده شوند
+  if (pathname === "/login" || pathname.startsWith("/p/")) return null
 
   return (
     <>

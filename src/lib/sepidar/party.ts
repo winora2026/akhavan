@@ -117,11 +117,9 @@ function resolvePartyInfo(c: any): PartyInfo | null {
 function buildPartyPayloadWithNotes(customer: any) {
   const phoneType = Number(process.env.SEPIDAR_PHONE_TYPE || 1)
   const addressType = Number(process.env.SEPIDAR_ADDRESS_TYPE || 1)
-  // نوع طرف‌حساب (حقیقی/حقوقی) را درگاه خودش از روی «نام خانوادگی» تعیین می‌کند و فیلد type/subType تأثیری ندارد
-  // (مستندات Swagger: type = 1 وقتی lastName و lastNameEn هر دو خالی باشند، و 2 وقتی یکی‌شان مقدار داشته باشد).
-  // پس برای اینکه مشتری حقیقی «نوع ۱ = حقیقی» و کد از سری حقیقی‌ها (۵۲xxx) بگیرد، نام کامل در name می‌رود و lastName خالی می‌ماند.
-  // اگر SEPIDAR_SPLIT_NAME=true باشد، نام و نام خانوادگی جدا فرستاده می‌شود ولی سپیدار مشتری را «نوع ۲» می‌سازد.
-  const splitName = process.env.SEPIDAR_SPLIT_NAME === "true"
+  // نوع طرف‌حساب را ایجنت سمت خودش از روی lastName تعیین می‌کند و فیلد type را نادیده می‌گیرد
+  // (Swagger: ۱=حقیقی وقتی lastName/lastNameEn مقدار داشته باشد، ۲=حقوقی وقتی هر دو خالی باشند).
+  // پس برای مشتری حقیقی نام و نام خانوادگی جدا فرستاده می‌شود؛ برای حقوقی فقط companyName در name می‌رود.
   const notes: string[] = []
   const info = resolvePartyInfo(customer)
   const fullName = String(customer.name || "").trim()
@@ -155,16 +153,10 @@ function buildPartyPayloadWithNotes(customer: any) {
     if (legal) {
       name = info.companyName || fullName
     } else if (info.firstName && info.lastName) {
-      if (splitName) {
-        // نام و نام خانوادگی جدا (سپیدار این را «نوع ۲» می‌سازد)
-        name = info.firstName
-        lastName = info.lastName
-      } else {
-        // نام کامل در name، lastName خالی: سپیدار «نوع ۱ (حقیقی)» می‌سازد
-        name = `${info.firstName} ${info.lastName}`.replace(/\s+/g, " ").trim()
-      }
+      name = info.firstName
+      lastName = info.lastName
     } else {
-      // فقط یک جزء داریم؛ مثل قبل یک‌جا در نام می‌رود
+      // فقط یک جزء داریم؛ با lastName خالی ایجنت آن را «حقوقی» می‌سازد
       name = info.lastName || info.firstName || info.companyName || fullName
     }
   }
@@ -786,7 +778,7 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
     data: { sepidarPartyRef: Number(id) } as any,
   })
 
-  // کد سپیدار مرجع است: روی مشتری اخوان هم می‌نویسیم تا دو سیستم یک کد داشته باشند
+  // کد سپیدار (۱۲۳xxx) روی مشتری نوشته می‌شود تا کد اخوان و سپیدار یکی باشد
   let sepidarCode: string | null = null
   try {
     // ۱) اگر خود CreateParty کد را برگردانده باشد، همان
@@ -800,9 +792,9 @@ async function doEnsure(customerId: string): Promise<EnsureResult> {
 
     if (createdParty) {
       sepidarCode = await syncCodeFromSepidar(customerId, createdParty, { force: true })
-      // اگر سپیدار نوع را غیر از آنچه فرستادیم ثبت کرده باشد (مثلاً حقیقی → حقوقی)، کد از شمارنده‌ی نوع دیگری می‌آید؛ هشدار می‌دهیم
+      // اگر ایجنت نوع را غیر از آنچه انتظار داشتیم ثبت کرده باشد، هشدار می‌دهیم
       const gotType = Number(createdParty.type ?? createdParty.Type)
-      const wantType = (payload as any).lastName ? 2 : 1 // قاعده‌ی درگاه: lastName پر = نوع ۲، خالی = نوع ۱
+      const wantType = (payload as any).lastName ? 1 : 2 // قاعده‌ی ایجنت: lastName پر = حقیقی (۱)، خالی = حقوقی (۲)
       if (Number.isFinite(gotType) && wantType && gotType !== wantType) {
         built.notes.push(`نوع طرف‌حساب در سپیدار ${gotType} ثبت شد ولی ${wantType} فرستاده شده بود`)
       }
@@ -876,5 +868,122 @@ export async function auditCustomerCodes() {
     linkedCustomers: rows.length,
     differingCount: differing.length,
     differing: differing.slice(0, 100),
+  }
+}
+
+export type CustomerCodeMismatch = {
+  customerId: string
+  name: string
+  akhavanCode: string | null
+  sepidarCode: string
+  sepidarName: string | null
+  partyId: number | null
+}
+
+/** مشتری‌های وصل‌شده‌ای که کد اخوانشان با کد طرف‌حساب سپیدار یکی نیست (فقط گزارش) */
+export async function customerCodeMismatches() {
+  const parties = await loadParties()
+  const byId = new Map<string, PartyRow>()
+  for (const p of parties) {
+    const id = pickId(p, PARTY_ID_KEYS)
+    if (id != null) byId.set(String(id), p)
+  }
+
+  const customers = await prisma.customer.findMany({
+    where: { sepidarPartyRef: { not: null } },
+    select: { id: true, name: true, customerCode: true, sepidarPartyRef: true },
+  })
+
+  const mismatches: CustomerCodeMismatch[] = []
+  let partyNotFound = 0
+  for (const c of customers as any[]) {
+    const p = byId.get(String(c.sepidarPartyRef))
+    const sepidarCode = cleanCode(p?.dlCode ?? p?.DlCode)
+    if (!p || !sepidarCode) {
+      partyNotFound++
+      continue
+    }
+    const akhavanCode = cleanCode(c.customerCode)
+    if (akhavanCode === sepidarCode) continue
+    mismatches.push({
+      customerId: c.id,
+      name: c.name,
+      akhavanCode: akhavanCode || null,
+      sepidarCode,
+      sepidarName: partyDisplayName(p).trim() || null,
+      partyId: Number(c.sepidarPartyRef),
+    })
+  }
+
+  return { linkedCustomers: customers.length, partyNotFound, mismatches }
+}
+
+/**
+ * کد طرف‌حساب سپیدار را روی مشتری اخوان می‌نویسد تا هر دو یکی شوند.
+ * فقط ستون کد عوض می‌شود؛ نام، پروفایل، حقیقی/حقوقی و کد ملی دست نمی‌خورد.
+ * ردیف‌هایی که کدشان تکراری یا روی مشتری دیگری است نوشته نمی‌شوند و در conflicts برمی‌گردند.
+ */
+export async function alignCustomerCodes(apply: boolean) {
+  const { linkedCustomers, partyNotFound, mismatches } =
+    await customerCodeMismatches()
+
+  const all = await prisma.customer.findMany({
+    select: { id: true, customerCode: true },
+  })
+  const holdersByCode = new Map<string, string[]>()
+  for (const c of all as any[]) {
+    const code = cleanCode(c.customerCode)
+    if (!code) continue
+    const arr = holdersByCode.get(code)
+    if (arr) arr.push(c.id)
+    else holdersByCode.set(code, [c.id])
+  }
+
+  const targetCount = new Map<string, number>()
+  for (const m of mismatches) {
+    targetCount.set(m.sepidarCode, (targetCount.get(m.sepidarCode) || 0) + 1)
+  }
+
+  const fix: CustomerCodeMismatch[] = []
+  const conflicts: any[] = []
+  for (const m of mismatches) {
+    if ((targetCount.get(m.sepidarCode) || 0) > 1) {
+      conflicts.push({ ...m, reason: "چند مشتری به طرف‌حساب‌هایی با همین کد وصل‌اند" })
+      continue
+    }
+    const holders = (holdersByCode.get(m.sepidarCode) || []).filter(
+      (id) => id !== m.customerId
+    )
+    if (holders.length) {
+      conflicts.push({ ...m, reason: `کد ${m.sepidarCode} روی مشتری دیگری ثبت شده است` })
+      continue
+    }
+    fix.push(m)
+  }
+
+  let fixedCount = 0
+  if (apply) {
+    for (const m of fix) {
+      try {
+        await prisma.customer.update({
+          where: { id: m.customerId },
+          data: { customerCode: m.sepidarCode } as any,
+        })
+        fixedCount++
+      } catch (e) {
+        conflicts.push({ ...m, reason: "ثبت کد ناموفق بود (احتمالاً کد تکراری)" })
+      }
+    }
+  }
+
+  return {
+    applied: apply,
+    linkedCustomers,
+    partyNotFound,
+    mismatchCount: mismatches.length,
+    canFixCount: fix.length,
+    fixedCount,
+    fix: fix.slice(0, 200),
+    conflicts: conflicts.slice(0, 200),
   }
 }

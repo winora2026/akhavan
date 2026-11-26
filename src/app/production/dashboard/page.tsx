@@ -183,12 +183,12 @@ export default function ProductionDashboardPage() {
               <div className="rounded-xl bg-blue-50/90 border border-blue-200 p-3 text-center shadow-sm">
                 <p className="text-xs text-blue-800 mb-0.5">در حال تولید</p>
                 <p className="text-2xl font-bold text-blue-700">{data.orders.inProgress}</p>
-                <p className="text-[10px] text-blue-600">انبار محصول ۱</p>
+                <p className="text-[10px] text-blue-600">انبار کالای نیمه‌ساخته</p>
               </div>
               <div className="rounded-xl bg-green-50/90 border border-green-200 p-3 text-center shadow-sm">
                 <p className="text-xs text-green-800 mb-0.5">تکمیل‌شده</p>
                 <p className="text-2xl font-bold text-green-700">{data.orders.completed}</p>
-                <p className="text-[10px] text-green-600">انبار محصول ۲</p>
+                <p className="text-[10px] text-green-600">انبار آماده تحویل</p>
               </div>
               <div className="rounded-xl bg-emerald-50/90 border border-emerald-200 p-3 text-center shadow-sm">
                 <p className="text-xs text-emerald-800 mb-0.5">بارگیری</p>

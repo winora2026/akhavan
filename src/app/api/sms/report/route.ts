@@ -3,11 +3,14 @@ import { prisma } from "@/lib/prisma"
 import { getSession } from "@/lib/auth"
 import { buildOrderSms, normalizeIranMobile, pickCustomerPhone } from "@/lib/sms"
 import { buildReadyForDeliverySms } from "@/lib/orderReadySms"
+import { buildMeasurementSms } from "@/lib/measurementSms"
+import { exitPublicLink, orderPublicLink } from "@/lib/publicLinks"
 
 // ───────────── گزارش پیامک‌ها ─────────────
-// دو نوع پیام:
-//   order = «ثبت سفارش»  (از فیلدهای smsStatus / smsSentAt / smsError روی Order)
-//   ready = «آماده تحویل» (از ردیف‌های ProductionHistory با عنوان «پیامک آماده تحویل»)
+// سه نوع پیام:
+//   order       = «ثبت سفارش»      (از فیلدهای smsStatus / smsSentAt / smsError روی Order)
+//   ready       = «آماده تحویل»     (از ردیف‌های ProductionHistory با عنوان «پیامک آماده تحویل»)
+//   measurement = «ثبت اندازه‌گیری» (از فیلدهای smsStatus / smsSentAt روی MeasurementRequest)
 // توجه: شماره‌ی موبایل و متن پیام جداگانه ذخیره نشده‌اند؛ شماره از اطلاعات فعلی مشتری و متن از روی
 // قالب پیام ساخته می‌شود. برای «ثبت سفارش» فقط آخرین ارسال هر فاکتور نگه داشته می‌شود.
 
@@ -16,7 +19,7 @@ const MAX_ROWS = 800
 
 type ReportRow = {
   id: string
-  type: "order" | "ready"
+  type: "order" | "ready" | "measurement"
   typeLabel: string
   customerName: string
   mobile: string | null
@@ -42,7 +45,7 @@ export async function GET(req: NextRequest) {
     }
 
     const sp = new URL(req.url).searchParams
-    const type = sp.get("type") || "all" // all | order | ready
+    const type = sp.get("type") || "all" // all | order | ready | measurement
     const statusParam = sp.get("status") || "all" // all | SENT | FAILED
 
     const fromRaw = sp.get("from")
@@ -108,6 +111,13 @@ export async function GET(req: NextRequest) {
       for (const o of orders as any[]) {
         const st = (o.smsStatus as ReportRow["status"]) || "FAILED"
         const sentAt: Date | null = o.smsSentAt || o.updatedAt || null
+        // منبع ارسال (خودکار هنگام تبدیل به فاکتور / دستی از صفحه‌ی فاکتورها)
+        const sourceLabel =
+          o.smsSource === "manual"
+            ? `ارسال دستی${o.smsBy ? " — " + o.smsBy : ""}`
+            : o.smsSource === "auto"
+              ? "ارسال خودکار"
+              : null
         rows.push({
           id: `order-${o.id}`,
           type: "order",
@@ -118,8 +128,11 @@ export async function GET(req: NextRequest) {
           sentAt: sentAt ? sentAt.toISOString() : null,
           status: st,
           statusLabel: STATUS_LABEL[st] || String(st),
-          text: buildOrderSms(o.customer?.name || "", o.orderNumber),
-          note: st === "FAILED" ? o.smsError || null : null,
+          text: buildOrderSms(o.customer?.name || "", o.orderNumber, orderPublicLink(o.id)),
+          note:
+            st === "FAILED"
+              ? [sourceLabel, o.smsError].filter(Boolean).join(" — ") || null
+              : sourceLabel,
         })
       }
     }
@@ -167,8 +180,60 @@ export async function GET(req: NextRequest) {
           sentAt: h.createdAt.toISOString(),
           status: st,
           statusLabel: STATUS_LABEL[st],
-          text: buildReadyForDeliverySms(customer?.name || "", orderNumber),
+          text: buildReadyForDeliverySms(
+            customer?.name || "",
+            orderNumber,
+            h.productionOrderId ? exitPublicLink(h.productionOrderId) : null
+          ),
           note,
+        })
+      }
+    }
+
+    // ── پیام «ثبت اندازه‌گیری» ──
+    if (type === "all" || type === "measurement") {
+      const statuses =
+        statusParam === "SENT"
+          ? ["SENT"]
+          : statusParam === "FAILED"
+            ? ["FAILED"]
+            : ["SENT", "FAILED"]
+      const where: any = { smsStatus: { in: statuses } }
+      if (hasRange) {
+        where.OR = [{ smsSentAt: range }, { smsSentAt: null, updatedAt: range }]
+      }
+      const requests = await prisma.measurementRequest.findMany({
+        where,
+        orderBy: { updatedAt: "desc" },
+        take: MAX_ROWS,
+      })
+      for (const m of requests) {
+        const st: ReportRow["status"] = m.smsStatus === "SENT" ? "SENT" : "FAILED"
+        // اولین شمارهٔ موبایل معتبرِ ثبت‌شده
+        let mobile: string | null = null
+        try {
+          const arr = JSON.parse(m.phones || "[]")
+          for (const p of Array.isArray(arr) ? arr : []) {
+            const mm = normalizeIranMobile(String(p))
+            if (mm) {
+              mobile = mm
+              break
+            }
+          }
+        } catch {}
+        const sentAt: Date | null = m.smsSentAt || m.updatedAt || m.createdAt
+        rows.push({
+          id: `measurement-${m.id}`,
+          type: "measurement",
+          typeLabel: "ثبت اندازه‌گیری",
+          customerName: m.customerName,
+          mobile,
+          orderNumber: m.measurementNumber,
+          sentAt: sentAt ? sentAt.toISOString() : null,
+          status: st,
+          statusLabel: STATUS_LABEL[st],
+          text: buildMeasurementSms(m.customerName, m.measurementNumber),
+          note: "ارسال خودکار هنگام ثبت درخواست",
         })
       }
     }
@@ -182,6 +247,7 @@ export async function GET(req: NextRequest) {
       failed: limited.filter((r) => r.status === "FAILED").length,
       order: limited.filter((r) => r.type === "order").length,
       ready: limited.filter((r) => r.type === "ready").length,
+      measurement: limited.filter((r) => r.type === "measurement").length,
       truncated: rows.length > MAX_ROWS,
     }
 

@@ -8,7 +8,7 @@ import persian_fa from "react-date-object/locales/persian_fa"
 
 type Row = {
   id: string
-  type: "order" | "ready"
+  type: "order" | "ready" | "measurement"
   typeLabel: string
   customerName: string
   mobile: string | null
@@ -26,6 +26,7 @@ type Summary = {
   failed: number
   order: number
   ready: number
+  measurement: number
   truncated: boolean
 }
 
@@ -131,7 +132,7 @@ export default function SmsReportPage() {
           <div>
             <h1 className="text-2xl font-bold text-blue-950">گزارش پیامک‌ها</h1>
             <p className="mt-1 text-sm text-blue-800">
-              پیام‌هایی که برای مشتریان ارسال شده: «ثبت سفارش» و «آماده تحویل»
+              پیام‌هایی که برای مشتریان ارسال شده: «ثبت سفارش»، «آماده تحویل» و «ثبت اندازه‌گیری»
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -202,6 +203,7 @@ export default function SmsReportPage() {
                 <option value="all">همه پیام‌ها</option>
                 <option value="order">پیام ثبت سفارش</option>
                 <option value="ready">پیام آماده تحویل</option>
+                <option value="measurement">پیام ثبت اندازه‌گیری</option>
               </select>
             </div>
             <div className="md:col-span-3 flex gap-2">
@@ -237,7 +239,7 @@ export default function SmsReportPage() {
                   <th className="border border-gray-400 p-2">مشتری</th>
                   <th className="border border-gray-400 p-2">موبایل</th>
                   <th className="border border-gray-400 p-2">نوع پیام</th>
-                  <th className="border border-gray-400 p-2">ش سفارش</th>
+                  <th className="border border-gray-400 p-2">ش سفارش / اندازه‌گیری</th>
                   <th className="border border-gray-400 p-2">تاریخ ارسال</th>
                   <th className="border border-gray-400 p-2">وضعیت ارسال</th>
                   <th className="border border-gray-400 p-2">پیام</th>
@@ -255,7 +257,11 @@ export default function SmsReportPage() {
                     <td className="border border-gray-400 p-2 text-center">
                       <span
                         className={`inline-block rounded-lg px-2 py-1 text-xs font-bold ${
-                          r.type === "order" ? "bg-blue-100 text-blue-800" : "bg-purple-100 text-purple-800"
+                          r.type === "order"
+                            ? "bg-blue-100 text-blue-800"
+                            : r.type === "ready"
+                              ? "bg-purple-100 text-purple-800"
+                              : "bg-orange-100 text-orange-800"
                         }`}
                       >
                         {r.typeLabel}
@@ -280,7 +286,7 @@ export default function SmsReportPage() {
                         {r.statusLabel}
                       </span>
                     </td>
-                    <td className="border border-gray-400 p-2 text-xs max-w-[420px] leading-6">{r.text}</td>
+                    <td className="border border-gray-400 p-2 text-xs max-w-[420px] leading-6 break-all">{r.text}</td>
                     <td className="border border-gray-400 p-2 text-xs">{r.note || "—"}</td>
                   </tr>
                 ))}
@@ -306,6 +312,9 @@ export default function SmsReportPage() {
             <span>
               آماده تحویل: <span className="text-purple-700">{summary?.ready ?? 0}</span>
             </span>
+            <span>
+              ثبت اندازه‌گیری: <span className="text-orange-700">{summary?.measurement ?? 0}</span>
+            </span>
           </div>
           {summary?.truncated && (
             <p className="mt-1 text-xs font-bold text-amber-700">
@@ -313,8 +322,12 @@ export default function SmsReportPage() {
             </p>
           )}
           <p className="mt-2 text-xs text-blue-700">
-            شماره‌ی موبایل از اطلاعات فعلی مشتری و متن پیام از روی قالب ساخته می‌شود. برای «ثبت سفارش» فقط
-            آخرین ارسال هر فاکتور نگه داشته می‌شود. هزینه و تاریخ دریافت پیام در پنل sms.ir قابل مشاهده است.
+            شماره‌ی موبایل از اطلاعات فعلی مشتری و متن پیام از روی قالب ساخته می‌شود. ستون توضیح
+            برای «ثبت سفارش» منبعِ آخرین ارسال (خودکار هنگام تبدیل به فاکتور / دستی از صفحه‌ی
+            فاکتورها و توسط چه کاربری) را نشان می‌دهد؛ برای ارسال‌های قدیمی‌تر این اطلاعات ثبت نشده
+            است. برای «ثبت سفارش» فقط آخرین ارسال هر فاکتور نگه داشته می‌شود. در ردیف‌های
+            «ثبت اندازه‌گیری» ستون «ش سفارش / اندازه‌گیری» شمارهٔ درخواست اندازه‌گیری است. هزینه و تاریخ دریافت
+            پیام در پنل sms.ir قابل مشاهده است.
           </p>
         </div>
       </div>

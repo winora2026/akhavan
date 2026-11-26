@@ -239,6 +239,9 @@ const deserializeDraftDate = (iso: string | null | undefined) =>
 const orderDraftKey = (editId: string | null) => (editId ? `orderEditDraft:${editId}` : DRAFT_STORAGE_KEY)
 // پیش‌نویس‌های قدیمی‌تر از ۲۴ ساعت نادیده گرفته می‌شوند
 const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000
+// وقتی سفارش در یک تب/پنجره ثبت می‌شود با این کلید به تب‌های دیگر اطلاع داده می‌شود
+// (event مربوط فقط در تب‌های دیگر دریافت می‌شود) تا پیش‌نویس پاک‌شده دوباره ساخته نشود
+const DRAFT_CLEARED_KEY = "newOrderDraftClearedAt"
 const readDraft = (key: string) => {
   try {
     const raw = localStorage.getItem(key)
@@ -431,6 +434,8 @@ export default function NewOrderClient() {
   // پیش‌نمایش کامل پیش‌فاکتور داخل صفحه‌ی «فاکتورها» (iframe): فقط مودال پیش‌فاکتور نشان داده می‌شود
   const embedPreview = searchParams.get("preview") === "1"
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
+  // نمایش نوار اطلاع‌رسانی وقتی پیش‌نویس ذخیره‌شده هنگام باز شدن صفحه بازیابی می‌شود
+  const [draftNotice, setDraftNotice] = useState(false)
   const [orderDate, setOrderDate] = useState<any>(null)
   const [deliveryDate, setDeliveryDate] = useState<any>(null)
   // نحوه‌ی محاسبه‌ی تاریخ تحویل: "4"/"7"/"10"/"15"/"30" = خودکار بر اساس روز کاری، "manual" = انتخاب دستی
@@ -826,8 +831,10 @@ export default function NewOrderClient() {
     }
     try {
       const d = readDraft(DRAFT_STORAGE_KEY)
-      if (d) applyDraft(d)
-      else setOrderDate(new DateObject({ calendar: persian, locale: persian_fa }))
+      if (d) {
+        applyDraft(d)
+        setDraftNotice(true)
+      } else setOrderDate(new DateObject({ calendar: persian, locale: persian_fa }))
     } catch (err) {
       console.error(err)
       setOrderDate(new DateObject({ calendar: persian, locale: persian_fa }))
@@ -836,6 +843,27 @@ export default function NewOrderClient() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // اگر سفارش در تب/پنجره‌ی دیگری ثبت شود، event همان‌جا این‌جا دریافت می‌شود و ذخیره‌ی
+  // خودکار این نمونه غیرفعال می‌شود تا فرم بازمانده، پیش‌نویس پاک‌شده را دوباره نسازد
+  useEffect(() => {
+    if (editId || embedPreview) return
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === DRAFT_CLEARED_KEY) draftRestoredRef.current = false
+    }
+    window.addEventListener("storage", onStorage)
+    return () => window.removeEventListener("storage", onStorage)
+  }, [editId, embedPreview])
+
+  // دور ریختن پیش‌نویس بازیابی‌شده و شروع فرم کاملاً تازه
+  const discardDraftAndStartFresh = () => {
+    try {
+      draftRestoredRef.current = false
+      localStorage.removeItem(DRAFT_STORAGE_KEY)
+      localStorage.setItem(DRAFT_CLEARED_KEY, String(Date.now()))
+    } catch {}
+    window.location.assign("/order/new")
+  }
   // پر کردن نام مشتری از CRM (بعد از تبدیل سرنخ / دکمه ثبت پیش‌فاکتور)
   useEffect(() => {
     if (searchParams.get("fromCrm") !== "1") return
@@ -1185,7 +1213,8 @@ export default function NewOrderClient() {
   const extraAmountValue = hasExtra ? parsePrice(extraAmount) : 0
   const totalAfterExtra = totalAfterDiscount + extraAmountValue
   const vatAmount = isOfficialInvoice ? Math.round(totalAfterExtra * 0.1) : 0
-  const finalTotal = totalAfterExtra + vatAmount
+  // فقط بخش اعشاری مبلغ نهایی حذف می‌شود (برش)؛ محاسبات دست‌نخورده است
+  const finalTotal = Math.floor(totalAfterExtra + vatAmount)
 
   const quantityMismatch = manualTotalQuantity !== "" && Number(manualTotalQuantity) !== calculatedTotalQuantity
   const meterageMismatch = manualTotalMeterage !== "" && Number(manualTotalMeterage) !== Number(calculatedTotalMeterage)
@@ -2288,10 +2317,12 @@ export default function NewOrderClient() {
       }
 
       // با ثبت موفق سفارش، پیش‌نویسِ محلی (جدید یا ویرایش) دیگر لازم نیست و پاک می‌شود؛
-      // ذخیره‌ی خودکار هم متوقف می‌شود تا دوباره چیزی ننویسد
+      // ذخیره‌ی خودکار هم متوقف می‌شود تا دوباره چیزی ننویسد. برای «سفارش جدید» یک نشانه هم
+      // گذاشته می‌شود تا تب‌های دیگرِ باز، پیش‌نویس پاک‌شده را بازنویسی نکنند
       try {
         draftRestoredRef.current = false
         localStorage.removeItem(orderDraftKey(editId))
+        if (!editId) localStorage.setItem(DRAFT_CLEARED_KEY, String(Date.now()))
       } catch (err) {
         console.error(err)
       }
@@ -3138,6 +3169,30 @@ export default function NewOrderClient() {
               </button>
             </div>
           </div>
+
+          {draftNotice && !editId && (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-300 bg-amber-50/95 p-3 shadow-md">
+              <p className="text-sm font-bold text-amber-900">
+                پیش‌نویس ذخیره‌شده از سفارش قبلی بازیابی شد. برای ثبت سفارش کاملاً جدید، فرم را پاک کنید.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDraftNotice(false)}
+                  className="rounded-xl border border-amber-400 bg-white px-4 py-2 text-sm font-bold text-amber-900 hover:bg-amber-100"
+                >
+                  ادامه همین پیش‌نویس
+                </button>
+                <button
+                  type="button"
+                  onClick={discardDraftAndStartFresh}
+                  className="rounded-xl bg-red-500 px-4 py-2 text-sm font-bold text-white hover:bg-red-600"
+                >
+                  پاک کردن و شروع سفارش جدید
+                </button>
+              </div>
+            </div>
+          )}
 
           <div ref={mainPanelsRef} className="flex flex-col lg:flex-row items-stretch gap-3 lg:gap-0">
             <div

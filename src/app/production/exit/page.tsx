@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 
 type ReadyItem = {
@@ -19,6 +19,11 @@ type ReadyItem = {
   installationCode?: string | null
   servicesText?: string | null
   notes?: string | null
+  stage?: "ready" | "loading" | "pending"
+  statusText?: string | null
+  currentStation?: string | null
+  canExit?: boolean
+  canTransfer?: boolean
 }
 
 type ExitSlip = {
@@ -92,11 +97,6 @@ export default function ExitSlipPage() {
   const [plateNumber, setPlateNumber] = useState("")
   const [slipNotes, setSlipNotes] = useState("")
 
-  // حالت اسکن بارگیری
-  const [scanCode, setScanCode] = useState("")
-  const [scanMsg, setScanMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null)
-  const scanRef = useRef<HTMLInputElement>(null)
-
   const fetchReady = async (customer?: string) => {
     try {
       setLoading(true)
@@ -142,6 +142,12 @@ export default function ExitSlipPage() {
     return readyItems.filter((i) => i.customerName === lockedCustomer)
   }, [readyItems, lockedCustomer])
 
+  /** فقط اقلامی که وارد بارگیری شده‌اند قابل انتخاب‌اند؛ باقی‌مانده‌ها فقط برای اطلاع نمایش داده می‌شوند */
+  const selectableItems = useMemo(
+    () => displayItems.filter((i) => i.stage === "loading"),
+    [displayItems]
+  )
+
   const lockCustomer = async (name: string) => {
     setLockedCustomer(name)
     setCustomerQuery(name)
@@ -170,8 +176,9 @@ export default function ExitSlipPage() {
   }
 
   const toggleAll = () => {
-    if (selected.length === displayItems.length) setSelected([])
-    else setSelected(displayItems.map((i) => i.productionItemId))
+    if (selectableItems.length > 0 && selected.length === selectableItems.length)
+      setSelected([])
+    else setSelected(selectableItems.map((i) => i.productionItemId))
   }
 
   const toggleOne = (id: string) => {
@@ -292,32 +299,6 @@ export default function ExitSlipPage() {
     URL.revokeObjectURL(url)
   }
 
-  const doLoadScan = async () => {
-    const code = (scanRef.current?.value || scanCode).trim()
-    if (!code) return
-    try {
-      const res = await fetch("/api/production/exit-slips/load", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ barcode: code }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        setScanMsg({ type: "err", text: data.error || "خطا" })
-      } else {
-        setScanMsg({ type: "ok", text: data.message || "بارگیری شد" })
-        if (lockedCustomer) await fetchReady(lockedCustomer)
-        else await fetchReady()
-      }
-    } catch {
-      setScanMsg({ type: "err", text: "خطا در ارتباط" })
-    } finally {
-      setScanCode("")
-      if (scanRef.current) scanRef.current.value = ""
-      setTimeout(() => scanRef.current?.focus(), 50)
-    }
-  }
-
   const formatFa = (iso?: string | null) => {
     if (!iso) return "—"
     try {
@@ -425,7 +406,8 @@ export default function ExitSlipPage() {
           <div className="mb-4 rounded-2xl bg-white/90 border border-teal-200 p-4 shadow">
             <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
               <h2 className="font-black text-blue-950">
-                اقلام آماده خروج ({displayItems.length})
+                اقلام سفارش ({displayItems.length}) — قابل خروج:{" "}
+                {selectableItems.length}
               </h2>
               <div className="flex gap-2">
                 <button
@@ -433,7 +415,8 @@ export default function ExitSlipPage() {
                   onClick={toggleAll}
                   className="rounded-xl border px-3 py-2 text-sm font-bold"
                 >
-                  {selected.length === displayItems.length
+                  {selectableItems.length > 0 &&
+                  selected.length === selectableItems.length
                     ? "لغو انتخاب همه"
                     : "انتخاب همه"}
                 </button>
@@ -454,7 +437,7 @@ export default function ExitSlipPage() {
               </p>
             ) : displayItems.length === 0 ? (
               <p className="text-center py-8 font-bold text-blue-800">
-                قلم آماده‌ای برای این مشتری نیست
+                قلمی در تولید برای این مشتری نیست
               </p>
             ) : (
               <div className="overflow-x-auto">
@@ -469,40 +452,71 @@ export default function ExitSlipPage() {
                       <th className="p-2">متراژ</th>
                       <th className="p-2">خدمات</th>
                       <th className="p-2">بارکد</th>
+                      <th className="p-2">وضعیت</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {displayItems.map((it) => (
-                      <tr
-                        key={it.productionItemId}
-                        className="border-b border-teal-100 hover:bg-teal-50"
-                      >
-                        <td className="p-2 text-center">
-                          <input
-                            type="checkbox"
-                            checked={selected.includes(it.productionItemId)}
-                            onChange={() => toggleOne(it.productionItemId)}
-                          />
-                        </td>
-                        <td className="p-2 text-center font-bold">
-                          {it.orderNumber}
-                        </td>
-                        <td className="p-2 font-bold">{it.productName}</td>
-                        <td className="p-2 text-center">
-                          {it.length ?? "—"}×{it.width ?? "—"}
-                        </td>
-                        <td className="p-2 text-center">{it.quantity}</td>
-                        <td className="p-2 text-center">
-                          {it.meterage != null
-                            ? Number(it.meterage).toFixed(3)
-                            : "—"}
-                        </td>
-                        <td className="p-2 text-xs">{it.servicesText || "—"}</td>
-                        <td className="p-2 text-center font-mono text-xs">
-                          {it.barcode || "—"}
-                        </td>
-                      </tr>
-                    ))}
+                    {displayItems.map((it) => {
+                      const notReady = it.stage !== "loading"
+                      return (
+                        <tr
+                          key={it.productionItemId}
+                          className={`border-b border-teal-100 ${
+                            notReady
+                              ? "bg-amber-50"
+                              : "hover:bg-teal-50"
+                          }`}
+                        >
+                          <td className="p-2 text-center">
+                            <input
+                              type="checkbox"
+                              disabled={notReady}
+                              checked={selected.includes(it.productionItemId)}
+                              onChange={() => toggleOne(it.productionItemId)}
+                            />
+                          </td>
+                          <td className="p-2 text-center font-bold">
+                            {it.orderNumber}
+                          </td>
+                          <td
+                            className={`p-2 font-bold ${
+                              notReady ? "text-amber-900" : ""
+                            }`}
+                          >
+                            {it.productName}
+                          </td>
+                          <td className="p-2 text-center">
+                            {it.length ?? "—"}×{it.width ?? "—"}
+                          </td>
+                          <td className="p-2 text-center">{it.quantity}</td>
+                          <td className="p-2 text-center">
+                            {it.meterage != null
+                              ? Number(it.meterage).toFixed(3)
+                              : "—"}
+                          </td>
+                          <td className="p-2 text-xs">
+                            {it.servicesText || "—"}
+                          </td>
+                          <td className="p-2 text-center font-mono text-xs">
+                            {it.barcode || "—"}
+                          </td>
+                          <td
+                            className={`p-2 text-center text-xs font-bold ${
+                              notReady
+                                ? "text-amber-800"
+                                : it.stage === "loading"
+                                  ? "text-emerald-700"
+                                  : "text-teal-700"
+                            }`}
+                          >
+                            {it.stage === "ready"
+                              ? "در آماده تحویل — هنوز به بارگیری منتقل نشده"
+                              : it.statusText ||
+                                (notReady ? "در حال تولید" : "آماده خروج")}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -510,43 +524,6 @@ export default function ExitSlipPage() {
           </div>
         )}
 
-        {/* اسکن بارگیری اپراتور */}
-        <div className="mb-4 rounded-2xl bg-white/90 border border-teal-200 p-4 shadow">
-          <h2 className="font-black text-blue-950 mb-2">
-            اسکن بارگیری (اپراتور)
-          </h2>
-          <div className="flex gap-2">
-            <input
-              ref={scanRef}
-              value={scanCode}
-              onChange={(e) => setScanCode(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault()
-                  doLoadScan()
-                }
-              }}
-              placeholder="بارکد را اسکن کنید..."
-              className="flex-1 rounded-xl border-2 border-teal-500 px-4 py-3 font-bold"
-            />
-            <button
-              type="button"
-              onClick={doLoadScan}
-              className="rounded-xl bg-teal-600 text-white px-5 py-3 font-bold"
-            >
-              ثبت بارگیری
-            </button>
-          </div>
-          {scanMsg && (
-            <p
-              className={`mt-2 text-sm font-bold ${
-                scanMsg.type === "ok" ? "text-green-700" : "text-red-700"
-              }`}
-            >
-              {scanMsg.text}
-            </p>
-          )}
-        </div>
 
         {/* تاریخچه کوتاه */}
         <div className="mb-8 rounded-2xl bg-white/90 border border-teal-200 p-4 shadow">

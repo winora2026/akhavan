@@ -726,7 +726,7 @@ export default function ProductionWorkflowPage() {
 
   return (
     <div
-      className="h-screen overflow-hidden p-4 bg-cover bg-center bg-fixed"
+      className="app-h overflow-hidden p-4 bg-cover bg-center bg-fixed"
       style={{
         backgroundImage:
           "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",

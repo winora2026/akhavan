@@ -71,6 +71,9 @@ model Order {
   smsStatus              String?
   smsSentAt              DateTime?
   smsError               String?
+  // منبع آخرین ارسال پیامک ثبت سفارش: "auto" (هنگام تبدیل به فاکتور) یا "manual" (دکمه‌ی ارسال)
+  smsSource              String?
+  smsBy                  String?
   items                  OrderItem[]
   productionOrders       ProductionOrder[]
     // لغو پیش‌فاکتور
@@ -613,4 +616,48 @@ model PbxCall {
   @@index([callerNorm])
   @@index([agentExtension])
   @@index([customerId])
+}
+model MeasurementRequest {
+  id                 String    @id @default(cuid())
+  measurementNumber  String    @unique
+
+  // معرف و ورودی
+  introducerName     String?
+  sources            String?   // JSON آرایه: ["حضوری","اینستاگرام",...]
+
+  // مشتری
+  customerName       String
+  phones             String    // JSON آرایه شماره
+  address            String?
+  addressMedia       String?   // JSON آرایه URL عکس لوکیشن/آدرس
+
+  // نوع کار
+  workTypes          String?   // JSON: ["آینه دکوراتیو","پارتیشن",...]
+  workTypeOther      String?
+
+  // تاریخ‌ها
+  requestDate        DateTime  @default(now())
+  measurementDate    DateTime?
+
+  // وضعیت
+  status             String    @default("PENDING") // PENDING | DONE | CANCELLED
+  salesRep           String?
+  assignedTo         String?   // نصاب / اندازه‌گیر
+
+  // بعد از اندازه‌گیری
+  resultNotes        String?
+  resultMedia        String?   // JSON عکس/فیلم
+  voiceNotes         String?   // JSON فایل ویس
+
+  // لینک بعدی به پیش‌فاکتور
+  orderId            String?
+  orderNumber        String?
+
+  // پیامک
+  smsSentAt          DateTime?
+  smsStatus          String?
+
+  notes              String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 }

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma"
 import { safeDate } from "@/lib/date"
 import { withTotals } from "@/lib/orderTotals"
 import { getSession } from "@/lib/auth"
+import { syncProductionOrderFromSales } from "@/lib/createProductionOrder"
 
 // ───────────── سریال شماره‌ی سفارش (هم‌راستا با src/app/api/orders/route.ts) ─────────────
 // خریداری: چهار رقمی (از ۳۳۹۶ به بعد) — اجرتی: ۹۰۰xxx (از ۹۰۰۵۷۴ به بعد)
@@ -309,7 +310,32 @@ export async function PUT(
       console.error("renumber order failed:", renumberErr)
     }
 
-    return NextResponse.json({ success: true, order: withTotals(order), renumbered })
+    // مسیر ایستگاه‌های قطعه‌های تولید باید با خدماتِ ویرایش‌شده یکی شود؛
+    // وگرنه قطعه در کارتابل ایستگاه قدیمی (مثلاً دیاموند) باقی می‌ماند.
+    let productionSync: any = null
+    try {
+      const prod = await prisma.productionOrder.findFirst({
+        where: { orderId: id },
+        select: { id: true },
+      })
+      if (prod) {
+        const sync = await syncProductionOrderFromSales(id)
+        productionSync = sync.ok
+          ? sync
+          : { ok: false, error: sync.error }
+        if (!sync.ok) console.error("production sync after edit failed:", sync.error)
+      }
+    } catch (syncErr) {
+      console.error("production sync after edit failed:", syncErr)
+      productionSync = { ok: false, error: "خطا در همگام‌سازی تولید" }
+    }
+
+    return NextResponse.json({
+      success: true,
+      order: withTotals(order),
+      renumbered,
+      productionSync,
+    })
   } catch (error: any) {
     console.error("Error updating order:", error)
     return NextResponse.json(

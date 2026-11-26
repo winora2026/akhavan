@@ -91,8 +91,10 @@ export function mapServiceToStation(serviceName: string): string | null {
   // جاساز دستی
   if (name.includes("جاساز")) return "جاساز"
 
-  // مته عمومی / سوراخکاری (بعد از مته CNC)
-  if (name.includes("مته") || name.includes("سوراخ")) return "سوراخکاری"
+  // مته عمومی / سوراخکاری (بعد از مته CNC) — «متة» املای رایج در فاکتورهاست
+  if (name.includes("مته") || name.includes("متة") || name.includes("سوراخ")) {
+    return "سوراخکاری"
+  }
 
   if (
     name.includes("uv") ||
@@ -560,19 +562,55 @@ async function updatePieceInPlace(
 
   const keep: any[] = []
   for (const r of rows) {
-    if (
-      !wanted.includes(r.stationId) &&
-      r.status === "در انتظار" &&
-      !(r.quantityOut || 0)
-    ) {
+    if (wanted.includes(r.stationId)) {
+      keep.push(r)
+      continue
+    }
+    const out = r.quantityOut || 0
+    const active = r.status === "در انتظار" || r.status === "در حال انجام"
+
+    if (active && out === 0) {
+      // هیچ کاری ثبت نشده: ردیف کاملاً حذف می‌شود
       await prisma.productionHistory.deleteMany({
         where: { productionItemStationId: r.id },
       })
       await prisma.productionItemStation.delete({ where: { id: r.id } })
       routeChanged = true
-    } else {
-      keep.push(r)
+      continue
     }
+
+    if (r.status === "در حال انجام" || (r.status === "در انتظار" && out > 0)) {
+      // بخشی از کار در ایستگاه حذف‌شده رد شده؛ از کارتابل آن خارج می‌شود
+      // ولی سابقه‌ی رد شدن و تعدادش حفظ می‌شود
+      await prisma.productionItemStation.update({
+        where: { id: r.id },
+        data: {
+          status: "انجام در ایستگاه دیگر",
+          quantityIn: 0,
+          completedAt: new Date(),
+          sequence: 9000 + (r.sequence || 0),
+          notes: "خدمت این ایستگاه از فاکتور حذف/تغییر کرد — از مسیر فعال خارج شد",
+        },
+      })
+      await prisma.productionHistory.create({
+        data: {
+          productionOrderId: p.productionOrderId,
+          productionItemId: p.id,
+          productionItemStationId: r.id,
+          stationId: r.stationId,
+          action: "خروج ایستگاه از مسیر (تغییر خدمات فاکتور)",
+          description: `ایستگاه «${r.station.name || ""}» از مسیر قطعه حذف شد؛ تعداد رد‌شده: ${out}`,
+          oldStatus: r.status,
+          newStatus: "انجام در ایستگاه دیگر",
+          quantity: out,
+        },
+      })
+      routeChanged = true
+      continue
+    }
+
+    // تکمیل‌شده‌ها دست نمی‌خورند
+    keep.push(r)
   }
 
   const finalRows: { id?: string; stationId: string }[] = keep.map((r) => ({
@@ -680,6 +718,56 @@ async function updatePieceInPlace(
     })
   }
   return { routeChanged, relabeled: relabel }
+}
+
+/**
+ * قلم فاکتور با رکورد «ضایعات» تطبیق خورده است؛ تغییرات باید روی قطعه‌ی
+ * فعالِ برش مجدد (جایگزین) اعمال شود. اگر جایگزین فعالی نباشد null برمی‌گرداند.
+ */
+async function applyToLiveRecutChild(
+  p: any,
+  si: any,
+  allStations: { id: string; name: string }[],
+  isRental: boolean
+) {
+  const rootId = p.parentItemId || p.id
+  const children = await prisma.productionItem.findMany({
+    where: { parentItemId: rootId } as any,
+    include: {
+      stations: { include: { station: true }, orderBy: { sequence: "asc" } },
+    },
+    orderBy: { createdAt: "asc" },
+  })
+  const live = children.filter(
+    (c: any) => c.status !== SCRAPPED_STATUS && c.status !== "تکمیل‌شده"
+  )
+  if (live.length === 0) return null
+  const child = live[live.length - 1]
+
+  const newQty = Number(si.quantity || 0)
+  const meterage =
+    si.meterage != null && newQty > 0
+      ? (Number(si.meterage) * (child.quantity || 1)) / newQty
+      : child.meterage
+
+  await prisma.productionItem.update({
+    where: { id: child.id },
+    data: {
+      productName: si.productName || child.productName,
+      length: Number(si.length || 0),
+      width: Number(si.width || 0),
+      meterage,
+    },
+  })
+
+  const r = await updatePieceInPlace(
+    { ...child, length: si.length, width: si.width },
+    si,
+    allStations,
+    isRental,
+    true
+  )
+  return { child, ...r }
 }
 
 /**
@@ -852,7 +940,7 @@ export async function syncProductionOrderFromSales(
   // اصلاح در جا: همان بارکد، بدون برش مجدد
   for (const u of inplacePairs) {
     if (u.p.status === SCRAPPED_STATUS) {
-      // قطعه‌ی ضایعات‌شده از تولید خارج است؛ فقط به قلم جدید وصل می‌ماند
+      // قطعه‌ی ضایعات‌شده از تولید خارج است؛ تغییرات باید روی قطعه‌ی برش مجدد (جایگزین) بنشیند
       await prisma.productionItem.update({
         where: { id: u.p.id },
         data: { orderItemId: u.si.id },
@@ -861,9 +949,24 @@ export async function syncProductionOrderFromSales(
         where: { parentItemId: u.p.id },
         data: { orderItemId: u.si.id },
       })
-      notes.push(
-        `«${u.p.productName}» (بارکد ${u.p.barcode || "—"}) قبلاً ضایعات شده و با بارکد جدید برش مجدد خورده؛ تغییر خدمات فاکتور روی قطعه‌ی برش مجدد اعمال نشد و باید دستی بررسی شود`
+      const applied = await applyToLiveRecutChild(
+        u.p,
+        u.si,
+        allStations,
+        isRental
       )
+      if (applied) {
+        updated++
+        if (applied.relabeled) relabeled++
+        notes.push(
+          `«${u.p.productName}» ضایعات شده بود؛ تغییر خدمات فاکتور روی قطعه‌ی برش مجدد (بارکد ${applied.child.barcode || "—"}) اعمال شد`
+        )
+      } else {
+        kept++
+        notes.push(
+          `«${u.p.productName}» (بارکد ${u.p.barcode || "—"}) ضایعات شده و قطعه‌ی برش مجدد فعالی ندارد؛ تغییر خدمات ثبت شد ولی قطعه‌ی جایگزین باید دستی ثبت شود`
+        )
+      }
       continue
     }
     const r = await updatePieceInPlace(
@@ -884,14 +987,35 @@ export async function syncProductionOrderFromSales(
   // تغییر مشخصات قطعه
   for (const c of corePairs) {
     if (c.p.status === SCRAPPED_STATUS) {
+      // قطعه‌ی اصلی ضایعات شده؛ تغییر ابعاد/خدمات روی قطعه‌ی برش مجدد اعمال می‌شود
       await prisma.productionItem.update({
         where: { id: c.p.id },
         data: { orderItemId: c.si.id },
       })
-      kept++
-      notes.push(
-        `«${c.p.productName}» (بارکد ${c.p.barcode || "—"}) قبلاً ضایعات شده بود و در فاکتور تغییر کرده (ابعاد/تعداد)؛ باید دستی بررسی شود`
+      await prisma.productionItem.updateMany({
+        where: { parentItemId: c.p.id },
+        data: { orderItemId: c.si.id },
+      })
+      const applied = await applyToLiveRecutChild(
+        c.p,
+        c.si,
+        allStations,
+        isRental
       )
+      if (applied) {
+        updated++
+        if (applied.relabeled) relabeled++
+        notes.push(
+          `«${c.p.productName}» ضایعات شده بود؛ ابعاد/خدمات جدید روی قطعه‌ی برش مجدد (بارکد ${applied.child.barcode || "—"}) اعمال شد`
+        )
+      } else {
+        // جایگزین فعالی وجود ندارد؛ برای قلمِ فاکتور قطعه‌ی جدید با ابعاد جدید ساخته می‌شود
+        await createPieceWithRoute(prod.id, c.si, allStations, isRental, TAG_NEW)
+        added++
+        notes.push(
+          `«${c.p.productName}» ضایعات شده و جایگزین فعالی نداشت؛ قطعه‌ی جدید با ابعاد/خدمات اصلاح‌شده ساخته شد (بارکد جدید). این ضایعات را دوباره «برش مجدد» نکنید`
+        )
+      }
       continue
     }
     const sameShape =

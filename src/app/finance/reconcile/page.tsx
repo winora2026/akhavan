@@ -24,12 +24,14 @@ type Report = {
   itemDiff?: Bucket
   numberMismatch?: Bucket
   duplicateInSepidar?: Bucket
+  partyCodeMismatch?: Bucket & { error?: string | null }
 }
 
 type TabKey =
   | "duplicate"
   | "number"
   | "party"
+  | "code"
   | "price"
   | "date"
   | "item"
@@ -51,6 +53,11 @@ const TABS: { key: TabKey; label: string; desc: string }[] = [
     key: "party",
     label: "طرف‌حساب",
     desc: "شماره یکی است ولی طرف‌حساب فرق دارد",
+  },
+  {
+    key: "code",
+    label: "کد طرف‌حساب",
+    desc: "کد مشتری در اخوان با کد طرف‌حساب سپیدار یکی نیست (۱۲۳xxx)",
   },
   {
     key: "price",
@@ -123,6 +130,7 @@ export default function FinanceReconcilePage() {
   const [toDate, setToDate] = useState<DateObject | null>(null)
   const [loading, setLoading] = useState(false)
   const [applying, setApplying] = useState(false)
+  const [aligning, setAligning] = useState(false)
   const [report, setReport] = useState<Report | null>(null)
   const [error, setError] = useState("")
   const [tab, setTab] = useState<TabKey>("duplicate")
@@ -215,10 +223,43 @@ export default function FinanceReconcilePage() {
     }
   }
 
+  const alignCodes = async () => {
+    if (!canRun) return
+    if (
+      !confirm(
+        "کد سپیدار (سری ۱۲۳...) روی مشتری‌های مغایرت‌دار نوشته شود؟ فقط فیلد کد عوض می‌شود؛ نام، حقیقی/حقوقی و کد ملی دست نمی‌خورد."
+      )
+    )
+      return
+
+    setAligning(true)
+    setError("")
+    try {
+      const res = await fetch("/api/finance/reconcile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alignCodes: true, apply: true }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "خطا")
+      const conflicts = data.conflicts?.length || 0
+      alert(
+        `کد ${data.fixedCount} مشتری با سپیدار هم‌تراز شد.` +
+          (conflicts ? ` ${conflicts} ردیف نیاز به بررسی دستی دارد.` : "")
+      )
+      await runReport()
+    } catch (e: any) {
+      setError(e.message || "خطا")
+    } finally {
+      setAligning(false)
+    }
+  }
+
   const counts: Record<TabKey, number> = {
     duplicate: report?.duplicateInSepidar?.count || 0,
     number: report?.numberMismatch?.count || 0,
     party: report?.wrongParty?.count || 0,
+    code: report?.partyCodeMismatch?.count || 0,
     price: report?.priceDiff?.count || 0,
     date: report?.dateDiff?.count || 0,
     item: report?.itemDiff?.count || 0,
@@ -233,7 +274,9 @@ export default function FinanceReconcilePage() {
         ? report?.numberMismatch?.rows || []
         : tab === "party"
           ? report?.wrongParty?.rows || []
-          : tab === "price"
+          : tab === "code"
+            ? report?.partyCodeMismatch?.rows || []
+            : tab === "price"
             ? report?.priceDiff?.rows || []
             : tab === "date"
               ? report?.dateDiff?.rows || []
@@ -261,7 +304,8 @@ export default function FinanceReconcilePage() {
               گزارش مغایرت‌گیری
             </h1>
             <p className="text-base text-blue-900 mt-1 font-semibold">
-              شماره، طرف‌حساب، مبلغ، تاریخ، کالا و فاکتور تکراری در سپیدار
+              شماره، طرف‌حساب، کد طرف‌حساب، مبلغ، تاریخ، کالا و فاکتور تکراری
+              در سپیدار
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -335,6 +379,13 @@ export default function FinanceReconcilePage() {
             className="rounded-xl bg-amber-600 text-white font-bold px-5 py-2.5 disabled:opacity-50"
           >
             اعمال با force
+          </button>
+          <button
+            onClick={alignCodes}
+            disabled={aligning || !report || !canRun}
+            className="rounded-xl bg-indigo-700 text-white font-bold px-5 py-2.5 disabled:opacity-50"
+          >
+            {aligning ? "..." : "هم‌تراز کردن کدها با سپیدار"}
           </button>
         </div>
 
@@ -411,6 +462,12 @@ export default function FinanceReconcilePage() {
               {TABS.find((t) => t.key === tab)?.desc}
             </p>
 
+            {tab === "code" && report?.partyCodeMismatch?.error && (
+              <p className="text-sm text-red-700 mb-2 font-bold">
+                {report.partyCodeMismatch.error}
+              </p>
+            )}
+
             <div className="rounded-2xl border border-teal-500/25 overflow-auto bg-white/95 shadow-sm backdrop-blur">
               <table className="min-w-full text-base">
                 <thead className="bg-teal-700 text-white">
@@ -445,6 +502,14 @@ export default function FinanceReconcilePage() {
                         <th className="p-3">شناسه فاکتور سپیدار</th>
                       </>
                     )}
+                    {tab === "code" && (
+                      <>
+                        <th className="p-3">کد اخوان</th>
+                        <th className="p-3">کد سپیدار</th>
+                        <th className="p-3">نام طرف‌حساب سپیدار</th>
+                        <th className="p-3">شناسه طرف‌حساب</th>
+                      </>
+                    )}
                     {tab === "price" && (
                       <>
                         <th className="p-3">مبلغ اخوان</th>
@@ -471,9 +536,9 @@ export default function FinanceReconcilePage() {
                     <tr key={idx} className="border-b hover:bg-teal-50/40">
                       <td className="p-3 text-center font-bold">{idx + 1}</td>
                       <td className="p-3 text-center font-black" dir="ltr">
-                        {r.orderNumber}
+                        {r.orderNumber ?? "—"}
                       </td>
-                      <td className="p-3 font-bold">{r.customer || "—"}</td>
+                      <td className="p-3 font-bold">{r.customer || r.name || "—"}</td>
                       <td className="p-3 text-center text-sm">{r.status || "—"}</td>
                       {tab === "duplicate" && (
                         <>
@@ -518,6 +583,25 @@ export default function FinanceReconcilePage() {
                           </td>
                           <td className="p-3 text-center" dir="ltr">
                             {r.sepidarInvoiceId ?? "—"}
+                          </td>
+                        </>
+                      )}
+                      {tab === "code" && (
+                        <>
+                          <td className="p-3 text-center font-black" dir="ltr">
+                            {r.akhavanCode ?? "—"}
+                          </td>
+                          <td
+                            className="p-3 text-center font-black text-teal-800"
+                            dir="ltr"
+                          >
+                            {r.sepidarCode ?? "—"}
+                          </td>
+                          <td className="p-3 text-sm">
+                            {r.sepidarName || "—"}
+                          </td>
+                          <td className="p-3 text-center" dir="ltr">
+                            {r.partyId ?? "—"}
                           </td>
                         </>
                       )}

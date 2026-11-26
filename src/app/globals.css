@@ -62,3 +62,23 @@ html body {
     background: none !important;
   }
 }
+
+/* ارتفاع محتوای صفحه‌ها با احتساب نوار تب‌های بالا (متغیر --app-tabs-h را AppTabs تنظیم می‌کند) */
+@utility app-h {
+  height: calc(100vh - var(--app-tabs-h, 2.5rem));
+}
+@utility app-min-h {
+  min-height: calc(100vh - var(--app-tabs-h, 2.5rem));
+}
+@utility app-h-inset {
+  height: calc(100vh - var(--app-tabs-h, 2.5rem) - 2rem);
+}
+@utility app-min-h-inset {
+  min-height: calc(100vh - var(--app-tabs-h, 2.5rem) - 2rem);
+}
+@utility app-h-inset-sm {
+  height: calc(100vh - var(--app-tabs-h, 2.5rem) - 1.5rem);
+}
+@utility app-max-h-inset {
+  max-height: calc(100vh - var(--app-tabs-h, 2.5rem) - 1rem);
+}

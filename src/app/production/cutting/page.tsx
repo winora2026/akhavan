@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react"
 import Link from "next/link"
+import { qzAvailable, qzPrintPdf } from "@/lib/qzPrint"
 
 type CuttingItem = {
   itemStationId: string
@@ -35,7 +36,7 @@ type CuttingItem = {
   servicesText?: string
   pieceNumber?: string | number | null
   installationCode?: string | null
-  // قطعه‌ی سفارش اجرتی بدون «اجرت برش»: فقط لیبل دارد، نه برگه‌ی برنامه‌ریزی
+  // قطعه‌ی سفارش اجرتی بدون «اجرت برش»: به‌طور پیش‌فرض فقط لیبل؛ برگه‌ی برنامه‌ریزی هم قابل چاپ است
   labelOnly?: boolean
   // قطعه‌ی سفارش اجرتی (سریال ۹۰۰xxx): در تب «اجرتی» نمایش داده می‌شود
   isRental?: boolean
@@ -102,7 +103,12 @@ type SortKey =
   | "labelStatus"
   | "labelPrintCount"
 
-type ViewKey = "queue" | "rental" | "waste"
+type ViewKey =
+  | "queue"
+  | "rental"
+  | "unprintedQueue"
+  | "unprintedRental"
+  | "waste"
 type ReportPaper = "A4" | "A5" | "A5L"
 
 // وضعیت ثبت چاپ لیبل‌های پیش‌نمایش:
@@ -479,6 +485,27 @@ export default function CuttingPlanningPage() {
   const [labelReprintReason, setLabelReprintReason] =
     useState<string>("پارگی لیبل")
 
+  // چاپ مستقیم لیبل با QZ Tray روی پرینتر لیبل (فقط کاربر تعیین‌شده در تنظیمات سرور)
+  const [qzLabelPrinter, setQzLabelPrinter] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch("/api/print/config")
+        if (!res.ok) return
+        const data = await res.json().catch(() => ({}))
+        if (!data.enabled || !data.labelPrinter) return
+        if (await qzAvailable()) {
+          if (!cancelled) setQzLabelPrinter(data.labelPrinter)
+        }
+      } catch {}
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const [sortKey, setSortKey] = useState<SortKey>("orderNumber")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
 
@@ -718,20 +745,32 @@ export default function CuttingPlanningPage() {
     [exactProductNames]
   )
 
+  // تب‌های «چاپ‌نشده»: همان صف برش / اجرتی ولی فقط قطعاتی که لیبلشان هنوز چاپ نشده
+  const isUnprintedView = view === "unprintedQueue" || view === "unprintedRental"
+  const isRentalView = view === "rental" || view === "unprintedRental"
+
   // تعداد قطعات هر تب (برای نمایش روی دکمه‌ی تب)
   const queueCount = useMemo(
     () => items.filter((i) => !i.isRental).length,
     [items]
   )
   const rentalCount = useMemo(
-    () => items.filter((i) => i.isRental).length,
+    () => items.filter((i) => !!i.isRental).length,
+    [items]
+  )
+  const unprintedQueueCount = useMemo(
+    () => items.filter((i) => !i.isRental && i.labelStatus === "چاپ‌نشده").length,
+    [items]
+  )
+  const unprintedRentalCount = useMemo(
+    () => items.filter((i) => !!i.isRental && i.labelStatus === "چاپ‌نشده").length,
     [items]
   )
 
   const filtered = useMemo(() => {
     // تب «اجرتی» فقط سفارش‌های اجرتی را نشان می‌دهد و «صف برش» فقط بقیه را
     let list = items.filter((i) =>
-      view === "rental" ? !!i.isRental : !i.isRental
+      view === "rental" || view === "unprintedRental" ? !!i.isRental : !i.isRental
     )
     const qProduct = productName
     const qSearch = normalizeText(search)
@@ -739,8 +778,10 @@ export default function CuttingPlanningPage() {
     if (qProduct.trim()) {
       list = list.filter((i) => matchProduct(i.productName || "", qProduct))
     }
-    if (labelStatus !== "همه") {
-      list = list.filter((i) => i.labelStatus === labelStatus)
+    // در تب‌های چاپ‌نشده، وضعیت برچسب همیشه «چاپ‌نشده» است
+    const statusFilter = isUnprintedView ? "چاپ‌نشده" : labelStatus
+    if (statusFilter !== "همه") {
+      list = list.filter((i) => i.labelStatus === statusFilter)
     }
     if (changeOnly) {
       list = list.filter((i) => !!i.changeTag)
@@ -830,13 +871,16 @@ export default function CuttingPlanningPage() {
     [items]
   )
 
-  // قطعات «فقط لیبل» (اجرتیِ بدون اجرت برش) وارد برگه‌ی برنامه‌ریزی نمی‌شوند
+  // در تب «اجرتی» هر قطعه‌ی انتخاب‌شده (با اجرت برش یا بدون آن) وارد برگه‌ی برنامه‌ریزی می‌شود؛
+  // در بقیه‌ی تب‌ها قطعات «فقط لیبل» همچنان حذف می‌شوند.
   const reportRows = useMemo(
     () =>
       filtered.filter(
-        (i) => selectedIds.includes(i.productionItemId) && !i.labelOnly
+        (i) =>
+          selectedIds.includes(i.productionItemId) &&
+          (isRentalView || !i.labelOnly)
       ),
-    [filtered, selectedIds]
+    [filtered, selectedIds, isRentalView]
   )
 
   const totalQuantity = useMemo(
@@ -1302,6 +1346,44 @@ export default function CuttingPlanningPage() {
 
   const handlePrintBrowser = () => window.print()
 
+  /** چاپ مستقیم لیبل‌ها با QZ Tray روی پرینتر لیبل — بدون پنجره‌ی چاپ مرورگر */
+  const printLabelsViaQz = async () => {
+    if (!qzLabelPrinter) return
+    const styles = Array.from(document.querySelectorAll("style"))
+      .map((s) => s.outerHTML)
+      .join("")
+    const rootEl = document.querySelector(".label-print-root")
+    if (!rootEl) {
+      alert("پیش‌نمایش لیبل پیدا نشد")
+      return
+    }
+    const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8">${styles}</head><body>${rootEl.outerHTML}</body></html>`
+    try {
+      const res = await fetch("/api/print/render-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          html,
+          pageWmm: LABEL_H_MM,
+          pageHmm: LABEL_W_MM,
+        }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || "خطا در ساخت PDF لیبل")
+      }
+      const pdf = await res.blob()
+      await qzPrintPdf(pdf, qzLabelPrinter)
+      await commitLabelPrint()
+    } catch (e: any) {
+      console.error(e)
+      alert(
+        `${e?.message || "چاپ مستقیم انجام نشد"}\n\nپنجره‌ی چاپ مرورگر باز می‌شود؛ از همان‌جا چاپ کن.`
+      )
+      window.print()
+    }
+  }
+
   const exportReportExcel = () => {
     if (reportRows.length === 0) {
       alert("ردیفی برای خروجی نیست")
@@ -1624,7 +1706,7 @@ export default function CuttingPlanningPage() {
 
   return (
     <div
-      className="print-root min-h-screen p-4 bg-cover bg-center bg-fixed"
+      className="print-root app-min-h p-4 bg-cover bg-center bg-fixed"
       style={{
         backgroundImage:
           "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
@@ -1638,7 +1720,7 @@ export default function CuttingPlanningPage() {
 
       {/* بخش اصلی: ارتفاعش به اندازه‌ی پنجره است تا فقط جدول اسکرول شود و عنوان‌ها ثابت بمانند */}
       <div className={`cutting-main relative z-10 max-w-[1600px] mx-auto flex flex-col print:hidden ${
-          view === "waste" ? "min-h-[calc(100vh-2rem)]" : "h-[calc(100vh-2rem)]"
+          view === "waste" ? "app-min-h-inset" : "app-h-inset"
         }`}>
         <div className="mb-4 shrink-0 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-teal-500/10 backdrop-blur-2xl p-5 shadow-lg border border-teal-500/20">
           <div>
@@ -1694,6 +1776,28 @@ export default function CuttingPlanningPage() {
           </button>
           <button
             type="button"
+            onClick={() => switchView("unprintedQueue")}
+            className={`rounded-xl px-5 py-2.5 font-bold border ${
+              view === "unprintedQueue"
+                ? "bg-rose-600 text-white border-rose-700"
+                : "bg-white/50 text-blue-900 border-teal-500/30 hover:bg-white/70"
+            }`}
+          >
+            چاپ‌نشده صف برش ({unprintedQueueCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => switchView("unprintedRental")}
+            className={`rounded-xl px-5 py-2.5 font-bold border ${
+              view === "unprintedRental"
+                ? "bg-rose-600 text-white border-rose-700"
+                : "bg-white/50 text-blue-900 border-teal-500/30 hover:bg-white/70"
+            }`}
+          >
+            چاپ‌نشده اجرتی ({unprintedRentalCount})
+          </button>
+          <button
+            type="button"
             onClick={() => switchView("waste")}
             className={`rounded-xl px-5 py-2.5 font-bold border ${
               view === "waste"
@@ -1707,8 +1811,14 @@ export default function CuttingPlanningPage() {
 
         {view === "rental" && (
           <p className="mb-3 shrink-0 text-xs font-semibold text-purple-800">
-            سفارش‌های اجرتی: قطعاتی که «اجرت برش» دارند هم لیبل و هم برگه‌ی برنامه‌ریزی می‌گیرند؛ بقیه
-            (برچسب «فقط لیبل») فقط لیبل. با رد شدن اولین ایستگاه هر قطعه، از این لیست خارج می‌شود.
+            سفارش‌های اجرتی: هر قطعه‌ی انتخاب‌شده — با «اجرت برش» یا بدون آن — هم لیبل می‌گیرد و هم
+            برگه‌ی برنامه‌ریزی‌اش قابل چاپ است. با رد شدن اولین ایستگاه هر قطعه، از این لیست خارج
+            می‌شود.
+          </p>
+        )}
+        {isUnprintedView && (
+          <p className="mb-3 shrink-0 text-xs font-semibold text-rose-800">
+            فقط قطعاتی که لیبلشان هنوز چاپ نشده است؛ بعد از ثبت چاپ خودکار از این لیست خارج می‌شوند.
           </p>
         )}
 
@@ -1739,8 +1849,14 @@ export default function CuttingPlanningPage() {
                 وضعیت برچسب
               </label>
               <select
-                value={labelStatus}
+                value={isUnprintedView ? "چاپ‌نشده" : labelStatus}
                 onChange={(e) => setLabelStatus(e.target.value)}
+                disabled={isUnprintedView}
+                title={
+                  isUnprintedView
+                    ? "در تب‌های چاپ‌نشده، وضعیت برچسب روی «چاپ‌نشده» است"
+                    : undefined
+                }
                 className="w-full rounded-xl border border-teal-500/30 bg-white/50 px-4 py-2.5 text-sm font-semibold text-blue-950 focus:border-teal-500 focus:outline-none"
               >
                 <option value="همه">همه</option>
@@ -1803,20 +1919,24 @@ export default function CuttingPlanningPage() {
                 alert("حداقل یک مورد را انتخاب کنید")
                 return
               }
-              const labelOnlyCount = items.filter(
-                (i) => selectedIds.includes(i.productionItemId) && i.labelOnly
-              ).length
-              if (labelOnlyCount === selectedIds.length) {
-                alert("قطعات انتخاب‌شده «فقط لیبل» هستند و برگه‌ی برنامه‌ریزی ندارند")
-                return
-              }
-              if (
-                labelOnlyCount > 0 &&
-                !confirm(
-                  `${labelOnlyCount} قطعه‌ی «فقط لیبل» از برگه‌ی برنامه‌ریزی حذف می‌شود. ادامه می‌دهید؟`
+              // در تب‌های «اجرتی» برگه‌ی برنامه‌ریزی برای همه‌ی قطعات انتخاب‌شده چاپ می‌شود،
+              // حتی قطعاتی که «اجرت برش» ندارند («فقط لیبل»).
+              if (!isRentalView) {
+                const labelOnlyCount = items.filter(
+                  (i) => selectedIds.includes(i.productionItemId) && i.labelOnly
+                ).length
+                if (labelOnlyCount === selectedIds.length) {
+                  alert("قطعات انتخاب‌شده «فقط لیبل» هستند و برگه‌ی برنامه‌ریزی ندارند")
+                  return
+                }
+                if (
+                  labelOnlyCount > 0 &&
+                  !confirm(
+                    `${labelOnlyCount} قطعه‌ی «فقط لیبل» از برگه‌ی برنامه‌ریزی حذف می‌شود. ادامه می‌دهید؟`
+                  )
                 )
-              )
-                return
+                  return
+              }
               setShowReportPreview(true)
             }}
             disabled={selectedIds.length === 0}
@@ -1873,7 +1993,9 @@ export default function CuttingPlanningPage() {
             <p className="text-center text-blue-700 py-16 text-xl font-bold">
               {view === "rental"
                 ? "قطعه‌ی اجرتی‌ای در انتظار رد شدن اولین ایستگاه نیست"
-                : "قطعه‌ای برای برش یافت نشد"}
+                : isUnprintedView
+                  ? "قطعه‌ای با لیبل چاپ‌نشده در این بخش نیست"
+                  : "قطعه‌ای برای برش یافت نشد"}
             </p>
           ) : (
             <div className="flex-1 min-h-0 overflow-auto rounded-xl">
@@ -1982,7 +2104,7 @@ export default function CuttingPlanningPage() {
                       )}
                       {item.labelOnly && (
                         <span className="mr-2 rounded-full bg-purple-100 px-2 py-0.5 text-xs font-bold text-purple-800">
-                          فقط لیبل
+                          {isRentalView ? "بدون اجرت برش" : "فقط لیبل"}
                         </span>
                       )}
                     </td>
@@ -2553,10 +2675,14 @@ export default function CuttingPlanningPage() {
               </h2>
               <div className="flex gap-2">
                 <button
-                  onClick={handlePrintBrowser}
+                  onClick={
+                    qzLabelPrinter
+                      ? () => void printLabelsViaQz()
+                      : handlePrintBrowser
+                  }
                   className="rounded-xl bg-teal-500 hover:bg-teal-600 px-5 py-2.5 text-white font-bold"
                 >
-                  چاپ
+                  {qzLabelPrinter ? `چاپ با ${qzLabelPrinter}` : "چاپ"}
                 </button>
                 <button
                   onClick={closeLabelPreview}

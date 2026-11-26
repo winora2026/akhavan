@@ -78,7 +78,6 @@ type SortKey =
 const DEFAULT_EXPERTS = [
   "خانم حسینی",
   "خانم قنبرنژاد",
-  "مائده عباس زاده",
   "مجتبی خاجی",
 ]
 
@@ -570,11 +569,12 @@ export default function InvoicesPage() {
   }
 
   // قیمت کل: برای فاکتور رسمی، مبلغ قابل پرداخت با ارزش افزوده؛ برای غیررسمی همان جمع اقلام
+  // بخش اعشاری نمایش داده نمی‌شود (برش) چون مبلغ اعشاری در تبدیل به سپیدار مشکل می‌سازد
   const getTotalPrice = (order: OrderFromApi) => {
     const subtotal = getSubtotal(order)
-    if (!order.isOfficialInvoice) return subtotal
-    if (typeof order.finalTotal === "number") return order.finalTotal
-    return subtotal - (order.discountAmount || 0) + getVatAmount(order)
+    if (!order.isOfficialInvoice) return Math.floor(subtotal)
+    if (typeof order.finalTotal === "number") return Math.floor(order.finalTotal)
+    return Math.floor(subtotal - (order.discountAmount || 0) + getVatAmount(order))
   }
 
   const toggleSort = (key: SortKey) => {
@@ -605,6 +605,8 @@ export default function InvoicesPage() {
             item.customerOrderNumber,
             item.salesRep,
             getInvoiceExpert(item),
+            item.notes,
+            ...(item.items || []).map((i) => i.productName),
           ]
             .filter(Boolean)
             .join(" ")
@@ -826,7 +828,7 @@ export default function InvoicesPage() {
 
   return (
     <div
-      className="min-h-screen lg:h-screen lg:overflow-hidden p-4 bg-cover bg-center bg-fixed"
+      className="min-h-screen lg:app-h lg:overflow-hidden p-4 bg-cover bg-center bg-fixed"
       style={{
         backgroundImage:
           "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",

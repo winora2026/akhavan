@@ -9,6 +9,7 @@ import {
   sendSms,
   seedDebug,
 } from "@/lib/sms"
+import { orderPublicLink } from "@/lib/publicLinks"
 
 export async function POST(req: NextRequest) {
   try {
@@ -92,7 +93,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `شماره «${rawPhone}» یک موبایل معتبر نیست` }, { status: 400 })
     }
 
-    const text = buildOrderSms(order.customer?.name || "", order.orderNumber)
+    const text = buildOrderSms(
+      order.customer?.name || "",
+      order.orderNumber,
+      orderPublicLink(order.id)
+    )
     const result = await sendSms(mobile, text)
 
     if (!result.ok) {
@@ -102,6 +107,9 @@ export async function POST(req: NextRequest) {
           // اگر قبلاً با موفقیت رفته بود، وضعیتِ «ارسال‌شده» حفظ می‌شود و فقط پیام خطا ثبت می‌شود
           smsStatus: order.smsStatus === "SENT" ? "SENT" : "FAILED",
           smsError: result.error.slice(0, 300),
+          ...(order.smsStatus === "SENT"
+            ? {}
+            : { smsSource: "manual", smsBy: session.displayName || session.username || null }),
         },
       })
       return NextResponse.json({ error: result.error }, { status: 502 })
@@ -114,7 +122,13 @@ export async function POST(req: NextRequest) {
 
     await prisma.order.update({
       where: { id: order.id },
-      data: { smsStatus: "SENT", smsSentAt: new Date(), smsError: null },
+      data: {
+        smsStatus: "SENT",
+        smsSentAt: new Date(),
+        smsError: null,
+        smsSource: "manual",
+        smsBy: session.displayName || session.username || null,
+      },
     })
     return NextResponse.json({ ok: true, text })
   } catch (error: any) {

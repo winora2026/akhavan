@@ -11,6 +11,7 @@
 
 import { prisma } from "@/lib/prisma"
 import { buildOrderSms, normalizeIranMobile, pickCustomerPhone, sendSms } from "@/lib/sms"
+import { orderPublicLink } from "@/lib/publicLinks"
 
 export type RegisteredSmsResult = {
   status: "sent" | "mock" | "skipped" | "failed"
@@ -47,7 +48,7 @@ export async function notifyOrderRegistered(orderId: string): Promise<Registered
         status: "فاکتور",
         OR: [{ smsStatus: null }, { smsStatus: "FAILED" }],
       },
-      data: { smsStatus: "SENDING", smsError: null },
+      data: { smsStatus: "SENDING", smsError: null, smsSource: "auto" },
     })
     if (claim.count === 0) {
       return { status: "skipped", reason: "قبلاً ارسال شده، در حال ارسال است یا فاکتور نیست" }
@@ -79,7 +80,11 @@ export async function notifyOrderRegistered(orderId: string): Promise<Registered
       return { status: "failed", reason: "شماره موبایل برای این مشتری ثبت نشده" }
     }
 
-    const text = buildOrderSms(order.customer?.name || "", order.orderNumber)
+    const text = buildOrderSms(
+      order.customer?.name || "",
+      order.orderNumber,
+      orderPublicLink(order.id)
+    )
     const result = await sendSms(mobile, text)
 
     if (!result.ok) {
@@ -96,7 +101,7 @@ export async function notifyOrderRegistered(orderId: string): Promise<Registered
 
     await prisma.order.update({
       where: { id: orderId },
-      data: { smsStatus: "SENT", smsSentAt: new Date(), smsError: null },
+      data: { smsStatus: "SENT", smsSentAt: new Date(), smsError: null, smsSource: "auto", smsBy: null },
     })
     claimed = false
     return { status: "sent" }

@@ -65,6 +65,9 @@ const PERSIAN_MONTHS = [
 
 const PERSIAN_DATE_REGEX = /^\d{3,4}\/\d{1,2}\/\d{1,2}$/
 
+// کاربر مجاز برای حذف کامل پیش‌فاکتورهای لغو‌شده
+const DELETE_USER = "مجتبی خاجی"
+
 const parseOrderDate = (dateStr: string | null | undefined): Date | null => {
   if (!dateStr) return null
   if (PERSIAN_DATE_REGEX.test(dateStr)) {
@@ -102,6 +105,30 @@ const formatDate = (dateStr: string | null | undefined) => {
 const formatPrice = (n: number) =>
   Math.round(n || 0).toLocaleString("fa-IR")
 
+/** یکسان‌سازی متن برای جستجو: نیم‌فاصله، ي/ك عربی، ة، ارقام فارسی/عربی */
+const normalizeText = (value: string | null | undefined) => {
+  if (!value) return ""
+  return String(value)
+    .replace(/[\u200c\u200d\u200f\u200e\u0640]/g, " ")
+    .replace(/[يى]/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/[ةۀ]/g, "ه")
+    .replace(/[أإآٱ]/g, "ا")
+    .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .trim()
+}
+
+/** همه‌ی کلمه‌های جستجو (به هر ترتیبی) داخل متن باشند */
+function faMatches(haystack: string, query: string) {
+  const tokens = normalizeText(query).split(" ").filter(Boolean)
+  if (!tokens.length) return true
+  const h = normalizeText(haystack)
+  return tokens.every((t) => h.includes(t))
+}
+
 const getTotalPrice = (order: OrderFromApi) =>
   order.items?.reduce((s, i) => s + (i.totalPrice || 0), 0) || 0
 
@@ -132,6 +159,11 @@ export default function CancelledPreInvoicesPage() {
   const [detail, setDetail] = useState<OrderFromApi | null>(null)
   const [restoreItem, setRestoreItem] = useState<OrderFromApi | null>(null)
   const [restoring, setRestoring] = useState(false)
+  // حذف کامل پیش‌فاکتور لغو‌شده — فقط برای کاربر مجتبی خاجی
+  const [canDelete, setCanDelete] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  // دبل‌کلیک روی ردیف = پیش‌نمایش پیش‌فاکتور (مثل لیست پیش‌فاکتورها و فاکتورها)
+  const [previewId, setPreviewId] = useState<string | null>(null)
 
   const load = async () => {
     try {
@@ -149,7 +181,63 @@ export default function CancelledPreInvoicesPage() {
 
   useEffect(() => {
     load()
+    ;(async () => {
+      try {
+        const res = await fetch("/api/auth/me")
+        if (!res.ok) return
+        const data = await res.json().catch(() => ({}))
+        const u = data?.user || {}
+        if (u.username === DELETE_USER || u.displayName === DELETE_USER) {
+          setCanDelete(true)
+        }
+      } catch {}
+    })()
   }, [])
+
+  useEffect(() => {
+    if (!previewId) return
+    const onMessage = (e: MessageEvent) => {
+      if (
+        e.origin === window.location.origin &&
+        e.data?.type === "invoice-preview-close"
+      ) {
+        setPreviewId(null)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPreviewId(null)
+    }
+    window.addEventListener("message", onMessage)
+    window.addEventListener("keydown", onKey)
+    return () => {
+      window.removeEventListener("message", onMessage)
+      window.removeEventListener("keydown", onKey)
+    }
+  }, [previewId])
+
+  /** حذف کامل پیش‌فاکتور لغو‌شده (غیرقابل بازگشت) — فقط کاربر مجاز */
+  const deleteOrder = async (item: OrderFromApi) => {
+    if (!canDelete || deletingId) return
+    if (
+      !confirm(
+        `پیش‌فاکتور لغو‌شده ${item.orderNumber} (${item.customer?.name || "—"}) برای همیشه حذف شود؟`
+      )
+    )
+      return
+    if (!confirm("این حذف قابل بازگشت نیست. مطمئن هستید؟")) return
+    try {
+      setDeletingId(item.id)
+      const res = await fetch(`/api/orders/${item.id}`, { method: "DELETE" })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || "خطا در حذف")
+      setOrders((prev) => prev.filter((o) => o.id !== item.id))
+      alert(`پیش‌فاکتور ${item.orderNumber} حذف شد`)
+    } catch (e: any) {
+      alert(e?.message || "خطا در حذف")
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -166,16 +254,24 @@ export default function CancelledPreInvoicesPage() {
   const filtered = useMemo(() => {
     let result = orders.filter((o) => o.status === "لغو شده")
 
-    const q = search.trim().toLowerCase()
-    if (q) {
-      result = result.filter(
-        (item) =>
-          item.customer?.name?.toLowerCase().includes(q) ||
-          item.orderNumber?.toLowerCase().includes(q) ||
-          (item.customerOrderNumber || "").toLowerCase().includes(q) ||
-          (item.cancelledBy || "").toLowerCase().includes(q) ||
-          (item.cancelReason || "").toLowerCase().includes(q) ||
-          (item.salesRep || "").toLowerCase().includes(q)
+    if (search.trim()) {
+      result = result.filter((item) =>
+        faMatches(
+          [
+            item.customer?.name,
+            item.customer?.customerCode,
+            item.orderNumber,
+            item.customerOrderNumber,
+            item.cancelledBy,
+            item.cancelReason,
+            item.salesRep,
+            item.notes,
+            ...(item.items || []).map((i) => i.productName),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          search
+        )
       )
     }
 
@@ -467,7 +563,9 @@ export default function CancelledPreInvoicesPage() {
                 {filtered.map((item, index) => (
                   <tr
                     key={item.id}
-                    className="border-b border-amber-100 hover:bg-amber-50/50"
+                    onDoubleClick={() => setPreviewId(item.id)}
+                    title="دبل‌کلیک: پیش‌نمایش پیش‌فاکتور"
+                    className="border-b border-amber-100 hover:bg-amber-50/50 cursor-pointer"
                   >
                     <td className="p-3 text-center font-bold sticky right-0 bg-white z-10">
                       {index + 1}
@@ -507,7 +605,10 @@ export default function CancelledPreInvoicesPage() {
                     <td className="p-3 text-center text-xs">
                       {item.salesRep || "—"}
                     </td>
-                    <td className="p-3 text-center whitespace-nowrap">
+                    <td
+                      className="p-3 text-center whitespace-nowrap"
+                      onDoubleClick={(e) => e.stopPropagation()}
+                    >
                       <div className="flex flex-wrap gap-1 justify-center">
                         <button
                           type="button"
@@ -523,6 +624,16 @@ export default function CancelledPreInvoicesPage() {
                         >
                           بازگردانی
                         </button>
+                        {canDelete && (
+                          <button
+                            type="button"
+                            disabled={deletingId === item.id}
+                            onClick={() => void deleteOrder(item)}
+                            className="rounded-lg bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-2.5 py-1 text-xs font-bold"
+                          >
+                            {deletingId === item.id ? "..." : "حذف"}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -635,6 +746,32 @@ export default function CancelledPreInvoicesPage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* پیش‌نمایش با دبل‌کلیک روی ردیف */}
+      {previewId && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+          <iframe
+            key={previewId}
+            src={`/order/new?edit=${previewId}&preview=1`}
+            title="پیش‌نمایش پیش‌فاکتور"
+            className="h-full w-full border-0"
+            style={{ background: "transparent" }}
+          />
+          <button
+            type="button"
+            onClick={() => setPreviewId(null)}
+            className="fixed top-3 left-3 z-[60] rounded-xl bg-black/60 hover:bg-black/80 px-4 py-2 text-sm font-bold text-white shadow-lg"
+          >
+            بستن پیش‌نمایش
+          </button>
+          <Link
+            href={`/order/new?edit=${previewId}`}
+            className="fixed bottom-3 left-1/2 z-[60] -translate-x-1/2 rounded-xl bg-blue-600 hover:bg-blue-700 px-5 py-2 text-sm font-bold text-white shadow-lg"
+          >
+            باز کردن برای ویرایش
+          </Link>
         </div>
       )}
 

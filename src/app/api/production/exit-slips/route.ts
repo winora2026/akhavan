@@ -26,6 +26,13 @@ function textVariants(q: string) {
   return Array.from(new Set([base, arabic, persian])).filter(Boolean)
 }
 
+function isLoadingName(name: string) {
+  return (name || "")
+    .replace(/[\u200c\u200f\u200e]/g, "")
+    .toLowerCase()
+    .includes("بارگیری")
+}
+
 /** کد مشتری هر برگه را از جدول مشتری می‌آورد (برای چاپ بالای برگه‌ی خروج) */
 async function withCustomerCodes<
   T extends { customerId: string | null; customerName: string }
@@ -200,6 +207,42 @@ export async function POST(req: Request) {
       )
     }
 
+    // فقط اقلامی قابل خروج‌اند که واقعاً به ایستگاه بارگیری منتقل شده باشند
+    const loadingStations = await prisma.productionStation.findMany()
+    const loadingIds = loadingStations
+      .filter((s) => isLoadingName(s.name))
+      .map((s) => s.id)
+    if (loadingIds.length === 0) {
+      return NextResponse.json(
+        { error: "ایستگاه بارگیری تعریف نشده" },
+        { status: 400 }
+      )
+    }
+    const loadingRows = await prisma.productionItemStation.findMany({
+      where: {
+        productionItemId: { in: productionItemIds },
+        stationId: { in: loadingIds },
+      },
+      select: { productionItemId: true, status: true },
+    })
+    const loadStatus = new Map<string, string>()
+    for (const r of loadingRows) loadStatus.set(r.productionItemId, r.status)
+    const notLoaded = productionItems.filter((item) => {
+      const st = loadStatus.get(item.id)
+      return !st || st === "در انتظار"
+    })
+    if (notLoaded.length > 0) {
+      const names = notLoaded
+        .map((i) => i.barcode || i.productName)
+        .join("، ")
+      return NextResponse.json(
+        {
+          error: `این اقلام هنوز به بارگیری منتقل نشده‌اند: ${names}`,
+        },
+        { status: 400 }
+      )
+    }
+
     const itemsData = productionItems.map((item) => {
       const order = item.productionOrder?.order
       const salesItem =
@@ -260,6 +303,60 @@ export async function POST(req: Request) {
 
     if (!slip) {
       throw lastError || new Error("ساخت شماره خروج ناموفق بود")
+    }
+
+    // مرحله‌ی جداگانه‌ی «رد بارگیری» حذف شده: با صدور برگه، بارگیری خودکار ثبت می‌شود
+    const loadedAt = new Date()
+    if (loadingIds.length > 0) {
+      for (const item of productionItems) {
+        const loadRow = await prisma.productionItemStation.findFirst({
+          where: { productionItemId: item.id, stationId: { in: loadingIds } },
+        })
+        if (loadRow && loadRow.status !== "تکمیل شده") {
+          const qty = loadRow.quantityIn ?? item.quantity ?? 1
+          await prisma.productionItemStation.update({
+            where: { id: loadRow.id },
+            data: {
+              status: "تکمیل شده",
+              quantityOut: qty,
+              quantityIn: 0,
+              startedAt: loadRow.startedAt || loadedAt,
+              completedAt: loadedAt,
+            },
+          })
+          await prisma.productionHistory.create({
+            data: {
+              productionOrderId: item.productionOrderId,
+              productionItemId: item.id,
+              productionItemStationId: loadRow.id,
+              stationId: loadRow.stationId,
+              action: "بارگیری - صدور برگه خروج",
+              description: `برگه خروج شماره ${slip.exitNumber} صادر شد`,
+              oldStatus: loadRow.status,
+              newStatus: "تکمیل شده",
+              quantity: qty,
+            },
+          })
+        }
+
+        const allRows = await prisma.productionItemStation.findMany({
+          where: { productionItemId: item.id },
+          select: { status: true },
+        })
+        const allDone = allRows.every(
+          (s) => s.status === "تکمیل شده" || s.status === "انجام در ایستگاه دیگر"
+        )
+        if (allDone) {
+          await prisma.productionItem.update({
+            where: { id: item.id },
+            data: { status: "تکمیل‌شده", currentStationId: null },
+          })
+        }
+      }
+      await prisma.exitSlipItem.updateMany({
+        where: { exitSlipId: slip.id },
+        data: { loadedAt },
+      })
     }
 
     const [slipWithCode] = await withCustomerCodes([slip])

@@ -6,7 +6,8 @@ const SECRET = new TextEncoder().encode(
   process.env.AUTH_SECRET || "akhavan-secret-change-me-in-production-32chars"
 )
 
-const PUBLIC = ["/login", "/api/auth/login", "/api/auth/seed"]
+// /p = صفحه‌های عمومی مشتری (پیش‌فاکتور و برگه‌ی خروج) که با لینک امضاشده باز می‌شوند
+const PUBLIC = ["/login", "/api/auth/login", "/api/auth/seed", "/p"]
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl

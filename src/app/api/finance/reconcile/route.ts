@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSession } from "@/lib/auth"
 import { reconcileSepidarInvoices } from "@/lib/sepidar/reconcile"
+import { alignCustomerCodes } from "@/lib/sepidar/party"
 
 export async function GET(req: NextRequest) {
   try {
@@ -54,6 +55,12 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json().catch(() => ({}))
+
+    if (body.alignCodes) {
+      const result = await alignCustomerCodes(Boolean(body.apply))
+      return NextResponse.json(result)
+    }
+
     const from = body.from as string | undefined
     const to = body.to as string | undefined
     const days = Number(body.days || 45)

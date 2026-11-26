@@ -49,7 +49,9 @@ export function computeOrderTotals(order: TotalsInput): OrderTotals {
   const base = afterDiscount + extra
   const vat = order.isOfficialInvoice ? Math.round(base * VAT_RATE) : 0
 
-  return { subtotal, discount, afterDiscount, extra, vat, finalTotal: base + vat }
+  // فقط بخش اعشاریِ مبلغ نهایی حذف می‌شود (برش، نه گرد کردن) چون مبلغ اعشاری در تبدیل به سپیدار مشکل می‌سازد.
+  // بقیه‌ی محاسبات (جمع، تخفیف، اضافات، ارزش افزوده) دست‌نخورده است.
+  return { subtotal, discount, afterDiscount, extra, vat, finalTotal: Math.floor(base + vat) }
 }
 
 // سفارش را با فیلدهای مبلغ (subtotalAmount / totalAfterDiscount / extraAmountValue / vatAmount / finalTotal) برمی‌گرداند

@@ -69,7 +69,6 @@ type StatusFilter = "pre" | "invoice" | "all"
 const DEFAULT_EXPERTS = [
   "خانم حسینی",
   "خانم قنبرنژاد",
-  "مائده عباس زاده",
   "مجتبی خاجی",
 ]
 
@@ -510,17 +509,28 @@ export default function PreInvoicesPage() {
       })
     }
 
-    const q = search.trim().toLowerCase()
-    if (q) {
-      result = result.filter(
-        (item) =>
-          item.customer?.name?.toLowerCase().includes(q) ||
-          getCustomerCode(item).toLowerCase().includes(q) ||
-          item.orderNumber?.toLowerCase().includes(q) ||
-          (item.customerOrderNumber || "").toLowerCase().includes(q) ||
-          (item.salesRep || "").toLowerCase().includes(q) ||
-          (item.convertedBy || "").toLowerCase().includes(q)
-      )
+    if (search.trim()) {
+      // همه‌ی کلمه‌های جستجو (به هر ترتیبی) — با یکسان‌سازی نیم‌فاصله/ي و ك/ارقام فارسی
+      const tokens = normalizeText(search).split(" ").filter(Boolean)
+      result = result.filter((item) => {
+        const haystack = normalizeText(
+          [
+            item.customer?.name,
+            getCustomerCode(item),
+            item.customer?.customerCode,
+            item.orderNumber,
+            item.customerOrderNumber,
+            item.salesRep,
+            item.convertedBy,
+            item.notes,
+            item.cancelReason,
+            ...(item.items || []).map((i) => i.productName),
+          ]
+            .filter(Boolean)
+            .join(" ")
+        )
+        return tokens.every((t) => haystack.includes(t))
+      })
     }
 
     if (fromDate) {
@@ -738,7 +748,7 @@ export default function PreInvoicesPage() {
 
   return (
     <div
-      className="min-h-screen p-3 md:p-4 bg-cover bg-center bg-fixed"
+      className="app-min-h p-3 md:p-4 bg-cover bg-center bg-fixed"
       dir="rtl"
       style={{
         fontFamily: "Vazirmatn, Tahoma, sans-serif",
@@ -747,7 +757,7 @@ export default function PreInvoicesPage() {
       }}
     >
       <div className="pointer-events-none fixed inset-0 bg-black/20" />
-      <div className="relative z-10 max-w-[1800px] mx-auto flex flex-col lg:h-[calc(100vh-1.5rem)] lg:overflow-hidden">
+      <div className="relative z-10 max-w-[1800px] mx-auto flex flex-col lg:app-h-inset-sm lg:overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 lg:shrink-0">
           <div>
             <h1 className="text-2xl md:text-3xl font-black text-blue-950">

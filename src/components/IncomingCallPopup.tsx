@@ -132,6 +132,9 @@ export default function IncomingCallPopup() {
 
   if (calls.length === 0) return null
 
+  // صفحه‌های عمومی مشتری (/p) نباید پاپ‌آپ تماس داخلی داشته باشند
+  if (typeof window !== "undefined" && window.location.pathname.startsWith("/p/")) return null
+
   const dismiss = (id: string) => {
     dismissedRef.current.add(id)
     setCalls((prev) => prev.filter((c) => c.id !== id))

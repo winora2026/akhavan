@@ -23,6 +23,17 @@ type RouteStep = {
   operatorId: string | null
 }
 
+/** اطلاعات قلم سفارش تولید (برای نمایش وضعیت همه‌ی قطعات در کارتابل آماده تحویل) */
+type OrderItemInfo = {
+  id: string
+  productName: string
+  barcode: string | null
+  length: number | null
+  width: number | null
+  quantity: number
+  stations: RouteStep[]
+}
+
 type QueueItem = {
   id: string
   sequence: number
@@ -169,6 +180,12 @@ type ReadyItem = {
   installationCode?: string | null
   servicesText?: string | null
   notes?: string | null
+  /** ready = عبورکرده از آماده تحویل؛ loading = منتقل‌شده/در بارگیری؛ pending = هنوز در ایستگاه‌های قبلی */
+  stage?: "ready" | "loading" | "pending"
+  statusText?: string | null
+  currentStation?: string | null
+  canExit?: boolean
+  canTransfer?: boolean
 }
 
 type ExitSlip = {
@@ -369,6 +386,46 @@ function stationMatches(userStation: string, stationName: string) {
   return false
 }
 
+/**
+ * هویت هر تب جدا از کوکی ورود: ایستگاه از پارامتر ?station= لینک می‌آید و
+ * اسم اپراتور آخرِ هر ایستگاه در همین مرورگر ذخیره می‌شود؛
+ * این‌طوری ورود کاربران مختلف در تب‌های دیگر اسم/ایستگاه این تب را عوض نمی‌کند.
+ */
+function operatorStorageKey(stationName: string) {
+  return `sq-op-${norm(stationName)}`
+}
+function readSavedOperator(stationName: string) {
+  try {
+    return (localStorage.getItem(operatorStorageKey(stationName)) || "").trim()
+  } catch {
+    return ""
+  }
+}
+function saveOperatorName(stationName: string, name: string) {
+  try {
+    if (stationName && name) {
+      localStorage.setItem(operatorStorageKey(stationName), name)
+    }
+  } catch {}
+}
+function findStationByParam(
+  param: string,
+  list: Station[]
+): Station | null {
+  const p = (param || "").trim()
+  if (!p) return null
+  const byId = list.find((s) => s.id === p)
+  if (byId) return byId
+  const pn = norm(p)
+  const exact = list.find((s) => norm(s.name) === pn)
+  if (exact) return exact
+  const candidates = list.filter((s) => stationMatches(p, s.name))
+  if (candidates.length === 0) return null
+  // کوتاه‌ترین نام (تراش → تراش ۱، نه تراش الگویی)
+  candidates.sort((x, y) => norm(x.name).length - norm(y.name).length)
+  return candidates[0]
+}
+
 /** فقط متن مربوط به آرم استاندارد از خدمات/توضیحات */
 function extractArmNote(servicesText?: string | null, notes?: string | null) {
   const blob = `${servicesText || ""} ${notes || ""}`
@@ -383,6 +440,10 @@ export default function StationQueuePage() {
   const [stations, setStations] = useState<Station[]>([])
   const [selectedStationId, setSelectedStationId] = useState("")
   const [stationLocked, setStationLocked] = useState(false)
+  // منبع قفل: login (از یوزر) یا link (از پارامتر ?station= همین تب)
+  const [stationLockSource, setStationLockSource] = useState<
+    "login" | "link" | null
+  >(null)
   const [queue, setQueue] = useState<QueueItem[]>([])
   const [summary, setSummary] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(false)
@@ -396,12 +457,18 @@ export default function StationQueuePage() {
   const [itemSort, setItemSort] = useState<SortState>(null)
   // انتخاب چند قلم برای رد گروهی داخل یک سفارش
   const [checkedIds, setCheckedIds] = useState<string[]>([])
+  // انتخاب چند ردیف سفارش (صفحه‌ی اول) برای رد گروهی همه‌ی اقلامشان
+  const [checkedGroupKeys, setCheckedGroupKeys] = useState<string[]>([])
   const [batchBusy, setBatchBusy] = useState(false)
   // پنجره‌ی روند کاری یک قطعه
   const [routeItem, setRouteItem] = useState<QueueItem | null>(null)
   // مسیر ایستگاه‌های قطعه‌ها به تفکیک سفارش تولید (اگر API کارتابل مسیر را نفرستد، از API جزئیات سفارش خوانده می‌شود)
   const [routeCache, setRouteCache] = useState<
     Record<string, Record<string, RouteStep[]>>
+  >({})
+  // مشخصات همه‌ی قطعات هر سفارش تولید (برای نمایش قطعات ناآماده در کارتابل آماده تحویل)
+  const [orderItemsCache, setOrderItemsCache] = useState<
+    Record<string, Record<string, OrderItemInfo>>
   >({})
   const routeFetchedRef = useRef<Set<string>>(new Set())
 
@@ -461,8 +528,11 @@ export default function StationQueuePage() {
   const [customerQuery, setCustomerQuery] = useState("")
   const [lockedCustomer, setLockedCustomer] = useState<string | null>(null)
   const [readyItems, setReadyItems] = useState<ReadyItem[]>([])
+
+  // انتقال به بارگیری از داخل سفارش در کارتابل انبار آماده تحویل
   const [exitLoading, setExitLoading] = useState(false)
   const [selectedExitIds, setSelectedExitIds] = useState<string[]>([])
+  const [transferBusy, setTransferBusy] = useState(false)
   const [showDriverModal, setShowDriverModal] = useState(false)
   const [savingExit, setSavingExit] = useState(false)
   const [currentSlip, setCurrentSlip] = useState<ExitSlip | null>(null)
@@ -503,6 +573,9 @@ export default function StationQueuePage() {
   const selectedStationName =
     stations.find((s) => s.id === selectedStationId)?.name || "—"
   const isLoadingStation = norm(selectedStationName).includes("بارگیری")
+  const isReadyWhStation =
+    norm(selectedStationName).includes("آماده تحویل") ||
+    norm(selectedStationName) === norm("انبار محصول دو")
   const todayFa = new Date().toLocaleDateString("fa-IR")
   // حالت کارتابل: صفحه ثابت و فقط جدول اسکرول می‌شود (تب خروج مثل قبل)
   const queueMode = !(mainTab === "exit" && isLoadingStation)
@@ -515,20 +588,27 @@ export default function StationQueuePage() {
         : s
 
   useEffect(() => {
+    // ایستگاهِ همین تب (لینک میانبر) — مستقل از کوکی ورود مروگر
+    let stationParam = ""
+    try {
+      stationParam = (
+        new URLSearchParams(window.location.search).get("station") || ""
+      ).trim()
+    } catch {}
     ;(async () => {
       try {
         const res = await fetch("/api/auth/me")
         if (!res.ok) {
-          await fetchStations(null)
+          await fetchStations(null, stationParam)
           return
         }
         const data = await res.json()
         const user: SessionUser | null = data.user || null
         if (user?.displayName) setOperatorName(user.displayName)
-        await fetchStations(user)
+        await fetchStations(user, stationParam)
       } catch (e) {
         console.error(e)
-        await fetchStations(null)
+        await fetchStations(null, stationParam)
       }
     })()
   }, [])
@@ -555,16 +635,34 @@ export default function StationQueuePage() {
     return () => clearInterval(t)
   }, [selectedStationId])
 
+  // اسم اپراتور هر ایستگاه در همین مرورگر ذخیره می‌شود (جدا برای هر تب/ایستگاه)
   useEffect(() => {
-    if (!isLoadingStation) {
-      setMainTab("queue")
-      return
-    }
-    if (mainTab === "exit") {
+    if (!stationLocked) return
+    const st = stations.find((s) => s.id === selectedStationId)
+    const nm = operatorName.trim()
+    if (st && nm) saveOperatorName(st.name, nm)
+  }, [operatorName, selectedStationId, stations, stationLocked])
+
+  useEffect(() => {
+    if (isLoadingStation) {
+      // کارتابل اسکن/رد بارگیری حذف شده؛ فقط تب برگه خروج می‌ماند
+      if (mainTab !== "exit") {
+        setMainTab("exit")
+        return
+      }
       fetchExitReady()
       fetchExitHistory()
+      return
     }
-  }, [isLoadingStation, mainTab])
+    if (isReadyWhStation) {
+      if (mainTab === "exit") {
+        setMainTab("queue")
+        return
+      }
+      return
+    }
+    setMainTab("queue")
+  }, [isLoadingStation, isReadyWhStation, mainTab])
 
   // تاریخچه‌ی خروج: لیست مشتری‌های دارای سابقه (با جستجوی نام، روی همه‌ی سوابق)
   useEffect(() => {
@@ -733,7 +831,7 @@ export default function StationQueuePage() {
     return () => window.removeEventListener("keydown", onKey, true)
   }, [mainTab, confirmData, showDriverModal, showPrint, mapPreviewUrl, showHistory, detail])
 
-  const fetchStations = async (user: SessionUser | null) => {
+  const fetchStations = async (user: SessionUser | null, linkStation = "") => {
     try {
       const res = await fetch("/api/production/stations")
       if (!res.ok) return
@@ -743,35 +841,54 @@ export default function StationQueuePage() {
       )
       setStations(list)
 
-            const userStation = (user?.stationName || "").trim()
-if (userStation && list.length > 0) {
-  const userStationNorm = norm(userStation)
+      // ۱) ایستگاه از لینک همین تب (?station=نام-یا-شناسه)
+      if (linkStation) {
+        const byLink = findStationByParam(linkStation, list)
+        if (byLink) {
+          setSelectedStationId(byLink.id)
+          setStationLocked(true)
+          setStationLockSource("link")
+          const saved = readSavedOperator(byLink.name)
+          // تبِ لینکی نباید اسم یوزرِ کوکی (تب‌های دیگر) را به ارث ببرد
+          setOperatorName(saved)
+          return
+        }
+      }
 
-  // اول دقیق
-  let match =
-    list.find((s) => norm(s.name) === userStationNorm) || null
+      // ۲) ایستگاهِ کاربرِ واردشده
+      const userStation = (user?.stationName || "").trim()
+      if (userStation && list.length > 0) {
+        const userStationNorm = norm(userStation)
 
-  if (!match) {
-    const candidates = list.filter((s) =>
-      stationMatches(userStation, s.name)
-    )
-    if (candidates.length > 0) {
-      // کوتاه‌ترین نام (تراش → تراش ۱، نه تراش الگویی)
-      candidates.sort(
-        (x, y) => norm(x.name).length - norm(y.name).length
-      )
-      match = candidates[0]
-    }
-  }
+        // اول دقیق
+        let match = list.find((s) => norm(s.name) === userStationNorm) || null
 
-  if (match) {
-    setSelectedStationId(match.id)
-    setStationLocked(true)
-    return
-  }
-}
+        if (!match) {
+          const candidates = list.filter((s) =>
+            stationMatches(userStation, s.name)
+          )
+          if (candidates.length > 0) {
+            // کوتاه‌ترین نام (تراش → تراش ۱، نه تراش الگویی)
+            candidates.sort(
+              (x, y) => norm(x.name).length - norm(y.name).length
+            )
+            match = candidates[0]
+          }
+        }
+
+        if (match) {
+          setSelectedStationId(match.id)
+          setStationLocked(true)
+          setStationLockSource("login")
+          // اسم اپراتورِ قبلیِ همین ایستگاه (تا ورود کاربران دیگر در تب‌های دیگر آن را عوض نکند)
+          const saved = readSavedOperator(match.name)
+          if (saved) setOperatorName(saved)
+          return
+        }
+      }
       // ادمین / فروش بدون ایستگاه → کشویی آزاد
       setStationLocked(false)
+      setStationLockSource(null)
       if (list.length > 0) {
         const cut = list.find((s) => norm(s.name) === "برش")
         setSelectedStationId(cut?.id || list[0].id)
@@ -866,8 +983,9 @@ if (userStation && list.length > 0) {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "خطا")
       const map: Record<string, RouteStep[]> = {}
+      const infoMap: Record<string, OrderItemInfo> = {}
       for (const it of Array.isArray(data.items) ? data.items : []) {
-        map[it.id] = (Array.isArray(it.stations) ? it.stations : [])
+        const steps = (Array.isArray(it.stations) ? it.stations : [])
           .slice()
           .sort((a: any, b: any) => (a.sequence ?? 0) - (b.sequence ?? 0))
           .map((s: any) => ({
@@ -880,8 +998,19 @@ if (userStation && list.length > 0) {
             completedAt: s.completedAt ?? null,
             operatorId: s.operatorId ?? null,
           }))
+        map[it.id] = steps
+        infoMap[it.id] = {
+          id: it.id,
+          productName: it.productName || "—",
+          barcode: it.barcode ?? null,
+          length: it.length ?? null,
+          width: it.width ?? null,
+          quantity: it.quantity ?? 1,
+          stations: steps,
+        }
       }
       setRouteCache((p) => ({ ...p, [productionOrderId]: map }))
+      setOrderItemsCache((p) => ({ ...p, [productionOrderId]: infoMap }))
     } catch (e) {
       console.error(e)
       routeFetchedRef.current.delete(productionOrderId)
@@ -912,6 +1041,41 @@ if (userStation && list.length > 0) {
       .filter((s) => s.sequence > curSeq && !(skipPair && isBevelName(s.name)))
       .sort((a, b) => a.sequence - b.sequence)
     return later[0] || null
+  }
+
+  const isReadyWhName = (name: string) => {
+    const n = norm(name)
+    return n.includes("آماده تحویل") || n === norm("انبار محصول دو")
+  }
+  const isLoadingName = (name: string) => norm(name).includes("بارگیری")
+  const stepClosed = (status: string) =>
+    status === "تکمیل شده" || status === "انجام در ایستگاه دیگر"
+  // تراش ۱ و تراش ۲ موازی‌اند؛ تکمیل یکی یعنی هر دو (برای داده‌های قدیمی که دومی استمپ نشده)
+  const isBevelLike = (name: string) => {
+    const c = norm(name).replace(/\s+/g, "")
+    return c.startsWith("تراش") && !c.includes("الگویی")
+  }
+  const stepClosedIn = (steps: RouteStep[], s: RouteStep) =>
+    stepClosed(s.status) ||
+    (isBevelLike(s.name) &&
+      steps.some((o) => o.id !== s.id && isBevelLike(o.name) && stepClosed(o.status)))
+
+  /** وضعیت خودکار یک قطعه در کارتابل آماده تحویل (بدون هیچ رد کردنی) */
+  const readinessOf = (steps: RouteStep[]) => {
+    if (steps.length === 0)
+      return { text: "در حال بررسی", tone: "pending" as const }
+    const load = steps.find((s) => isLoadingName(s.name))
+    if (load && (load.status === "در حال انجام" || stepClosed(load.status)))
+      return { text: "در بارگیری", tone: "loading" as const }
+    const blockers = steps.filter(
+      (s) =>
+        !isReadyWhName(s.name) &&
+        !isLoadingName(s.name) &&
+        !stepClosedIn(steps, s)
+    )
+    if (blockers.length > 0)
+      return { text: `در انتظار ${blockers[0].name}`, tone: "pending" as const }
+    return { text: "آماده انتقال به بارگیری", tone: "ready" as const }
   }
 
   // ----- خروج -----
@@ -1002,18 +1166,31 @@ if (userStation && list.length > 0) {
     [readyItems, exitedItemIds]
   )
 
+  /** در کارتابل بارگیری فقط مشتری‌هایی که قلمی به بارگیری منتقل شده نشان داده می‌شوند */
+  const loadingCustomers = useMemo(() => {
+    const map = new Map<
+      string,
+      { name: string; phone?: string | null; id?: string | null }
+    >()
+    for (const it of readyItems) {
+      if (it.stage !== "loading") continue
+      if (!map.has(it.customerName))
+        map.set(it.customerName, {
+          name: it.customerName,
+          phone: it.customerPhone,
+          id: it.customerId,
+        })
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      a.name.localeCompare(b.name, "fa")
+    )
+  }, [readyItems])
+
   const filteredCustomers = useMemo(() => {
     const q = norm(customerQuery)
     const source =
       exitFilter === "pending"
-        ? Array.from(
-            new Map(
-              pendingReadyItems.map((i) => [
-                i.customerName,
-                { name: i.customerName, phone: i.customerPhone },
-              ])
-            ).values()
-          )
+        ? loadingCustomers
         : Array.from(
             new Map(
               exitHistory.map((h) => [
@@ -1024,12 +1201,46 @@ if (userStation && list.length > 0) {
           )
     if (!q) return source.slice(0, 25)
     return source.filter((c) => norm(c.name).includes(q)).slice(0, 25)
-  }, [customerQuery, exitFilter, pendingReadyItems, exitHistory])
+  }, [customerQuery, exitFilter, exitHistory, loadingCustomers])
 
   const displayPendingItems = useMemo(() => {
     if (!lockedCustomer) return []
     return pendingReadyItems.filter((i) => i.customerName === lockedCustomer)
   }, [pendingReadyItems, lockedCustomer])
+
+  /** در کارتابل بارگیری فقط قطعاتی که واقعاً وارد بارگیری شده‌اند قابل صدورند */
+  const displayExitItems = useMemo(
+    () => displayPendingItems.filter((i) => i.stage === "loading"),
+    [displayPendingItems]
+  )
+
+  const sendToLoading = async (ids: string[]): Promise<boolean> => {
+    if (ids.length === 0) return false
+    if (
+      !confirm(`${ids.length} قلم به کارتابل ایستگاه بارگیری منتقل شود؟`)
+    )
+      return false
+    try {
+      setTransferBusy(true)
+      const res = await fetch("/api/production/exit-slips/send-loading", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productionItemIds: ids,
+          operatorName: operatorName || undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "خطا در انتقال")
+      alert(data.message || "به بارگیری منتقل شد")
+      return true
+    } catch (e: any) {
+      alert(e.message || "خطا در انتقال")
+      return false
+    } finally {
+      setTransferBusy(false)
+    }
+  }
 
   /** جمع‌های مشتری انتخاب‌شده در تاریخچه‌ی خروج */
   const doneTotals = useMemo(() => {
@@ -1086,11 +1297,16 @@ if (userStation && list.length > 0) {
   }
 
   const createSlip = async () => {
-    if (!lockedCustomer || selectedExitIds.length === 0) return
+    const ids = selectedExitIds.filter((id) =>
+      displayPendingItems.some(
+        (i) => i.productionItemId === id && i.stage === "loading"
+      )
+    )
+    if (!lockedCustomer || ids.length === 0) return
     try {
       setSavingExit(true)
       const sample = displayPendingItems.find((i) =>
-        selectedExitIds.includes(i.productionItemId)
+        ids.includes(i.productionItemId)
       )
       const res = await fetch("/api/production/exit-slips", {
         method: "POST",
@@ -1099,7 +1315,7 @@ if (userStation && list.length > 0) {
           customerName: lockedCustomer,
           customerId: sample?.customerId,
           customerPhone: sample?.customerPhone,
-          productionItemIds: selectedExitIds,
+          productionItemIds: ids,
           driverName,
           driverNationalId,
           driverPhone,
@@ -1206,24 +1422,26 @@ if (userStation && list.length > 0) {
   const filtered = useMemo(() => {
     let result = queue
     if (productFilter.trim()) {
-      const p = productFilter.trim().toLowerCase()
+      const p = norm(productFilter)
       result = result.filter((q) =>
-        q.productionItem.productName.toLowerCase().includes(p)
+        norm(q.productionItem.productName).includes(p)
       )
     }
     if (search.trim()) {
-      const s = search.trim().toLowerCase()
-      result = result.filter(
-        (q) =>
-          q.productionItem.productionOrder.order?.orderNumber
-            ?.toLowerCase()
-            .includes(s) ||
-          q.productionItem.productionOrder.order?.customer?.name
-            ?.toLowerCase()
-            .includes(s) ||
-          q.productionItem.productName?.toLowerCase().includes(s) ||
-          (q.productionItem.barcode || "").toLowerCase().includes(s)
-      )
+      const tokens = norm(search).split(" ").filter(Boolean)
+      result = result.filter((q) => {
+        const haystack = norm(
+          [
+            q.productionItem.productionOrder.order?.orderNumber,
+            q.productionItem.productionOrder.order?.customer?.name,
+            q.productionItem.productName,
+            q.productionItem.barcode,
+          ]
+            .filter(Boolean)
+            .join(" ")
+        )
+        return tokens.every((t) => haystack.includes(t))
+      })
     }
     return result
   }, [queue, productFilter, search])
@@ -1323,12 +1541,16 @@ if (userStation && list.length > 0) {
     ? orderGroups.find((g) => g.key === openOrderKey) || null
     : null
 
-  // وقتی وارد یک سفارش می‌شویم، مسیر ایستگاه‌های اقلامش (اگر از API کارتابل نیامده) خوانده می‌شود
+  // وقتی وارد یک سفارش می‌شویم، مسیر ایستگاه‌های اقلامش خوانده می‌شود
+  // (در آماده تحویل همیشه لازم است تا وضعیت همه‌ی قطعات، حتی ناآماده‌ها، نمایش داده شود)
   useEffect(() => {
     if (!openGroup) return
     const ids = new Set<string>()
     for (const r of openGroup.rows) {
-      if (!(r.productionItem.route && r.productionItem.route.length > 0)) {
+      if (
+        isReadyWhStation ||
+        !(r.productionItem.route && r.productionItem.route.length > 0)
+      ) {
         ids.add(r.productionItem.productionOrder.id)
       }
     }
@@ -1372,6 +1594,17 @@ if (userStation && list.length > 0) {
     )
   }, [orderGroups, orderSort])
 
+  // ردیف‌های سفارش انتخاب‌شده در صفحه‌ی اول + همه‌ی اقلامشان (فقط دارای بارکد)
+  const checkedGroups = sortedGroups.filter((g) =>
+    checkedGroupKeys.includes(g.key)
+  )
+  const checkedGroupRows = checkedGroups
+    .flatMap((g) => g.rows)
+    .filter((r) => cleanBarcode(r.productionItem.barcode || ""))
+  const allGroupsChecked =
+    sortedGroups.length > 0 &&
+    sortedGroups.every((g) => checkedGroupKeys.includes(g.key))
+
   const sortedRows = useMemo(() => {
     const rows = openGroup?.rows || []
     if (!itemSort) return rows
@@ -1408,6 +1641,54 @@ if (userStation && list.length > 0) {
     }
     return [...rows].sort((a, b) => compareValues(val(a), val(b), itemSort.dir))
   }, [openGroup, itemSort])
+
+  // قطعات همین سفارش که هنوز به آماده تحویل نرسیده‌اند (از روی جزئیات سفارش تولید)
+  const openProdOrderId =
+    sortedRows[0]?.productionItem.productionOrder.id ||
+    openGroup?.rows[0]?.productionItem.productionOrder.id ||
+    ""
+  const pendingOrderItems = useMemo<OrderItemInfo[]>(() => {
+    if (!isReadyWhStation || !openProdOrderId) return []
+    const all = orderItemsCache[openProdOrderId] || {}
+    const shown = new Set(
+      queue
+        .filter(
+          (r) => r.productionItem.productionOrder.id === openProdOrderId
+        )
+        .map((r) => r.productionItem.id)
+    )
+    return Object.values(all).filter((it) => !shown.has(it.id))
+  }, [isReadyWhStation, openProdOrderId, orderItemsCache, queue])
+
+  // فقط قطعات آماده‌ی همین سفارش در این ایستگاه (برای انتقال یکجای کل سفارش)
+  const openOrderReadyRows = useMemo(() => {
+    const on = openGroup?.orderNumber
+    if (!on) return []
+    return queue.filter(
+      (r) =>
+        (r.productionItem.productionOrder.order?.orderNumber || "—") === on &&
+        readinessOf(routeStepsOf(r)).tone === "ready"
+    )
+  }, [queue, openGroup, routeCache])
+
+  const transferOpenOrder = async () => {
+    if (openOrderReadyRows.length === 0) return
+    const ok = await sendToLoading(
+      openOrderReadyRows.map((r) => r.productionItem.id)
+    )
+    if (!ok) return
+    setOpenOrderKey(null)
+    setSelectedRowId(null)
+    await fetchQueue(true)
+  }
+
+  // انتقال تکیِ قطعه‌ی آماده‌ای که ردیفش در صف این ایستگاه نیست (داده‌های قبلی)
+  const transferPendingItem = async (productionItemId: string) => {
+    const ok = await sendToLoading([productionItemId])
+    if (!ok) return
+    await fetchQueue(true)
+    if (openProdOrderId) await loadOrderRoutes(openProdOrderId, true)
+  }
 
   const toggleSortState = (
     setter: (s: SortState) => void,
@@ -1562,6 +1843,13 @@ if (userStation && list.length > 0) {
       setLastResult({ type: "err", text: "ایستگاه را انتخاب کنید" })
       return
     }
+    if (isReadyWhStation) {
+      setLastResult({
+        type: "err",
+        text: "در کارتابل آماده تحویل اسکن/رد لازم نیست؛ از دکمهٔ «انتقال به بارگیری» استفاده کنید",
+      })
+      return
+    }
 
     // اسکن جدید وسط پردازش قبلی: گم نمی‌شود، بعد از پایان قبلی اجرا می‌شود
     if (scanBusyRef.current) {
@@ -1610,6 +1898,19 @@ if (userStation && list.length > 0) {
         setLastResult({ type: "err", text: data.error || "خطا در اسکن" })
         setBarcode("")
         if (inputRef.current) inputRef.current.value = ""
+        return
+      }
+      // رد ناقص: برای باقی‌مانده‌ی همان قطعه دوباره تعداد پرسیده می‌شود
+      if (Number(data.remaining) > 0) {
+        holdPending = true
+        setLastResult({ type: "ok", text: data.message || "رد شد" })
+        setConfirmData({ ...data, quantity: Number(data.remaining) })
+        setPartialQty(String(data.remaining))
+        // بارکد از اینپوت پاک می‌شود تا اسکن دوباره، باقی‌مانده را بدون پاپ‌اپ رد نکند؛
+        // خود مودال بارکد را در confirmData نگه می‌دارد
+        setBarcode("")
+        if (inputRef.current) inputRef.current.value = ""
+        await fetchQueue(true)
         return
       }
       // رد انجام شد — پنجره‌ی اطلاع‌رسانی
@@ -1716,6 +2017,7 @@ if (userStation && list.length > 0) {
 
   /** رد گروهی: همه‌ی قلم‌های انتخاب‌شده (با کل تعداد باقی‌مانده‌شان) پشت‌سرهم رد می‌شوند */
   const passChecked = async () => {
+    if (isReadyWhStation) return
     if (batchBusy || scanBusyRef.current) return
     const list = checkedRows.filter((r) => cleanBarcode(r.productionItem.barcode || ""))
     if (list.length === 0) {
@@ -1782,6 +2084,74 @@ if (userStation && list.length > 0) {
     const next = pendingScanRef.current
     pendingScanRef.current = null
     if (next) setTimeout(() => doScanRef.current?.(false, null, next), 80)
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
+  /** رد گروهی از صفحه‌ی اول: همه‌ی اقلام ردیف‌های سفارش انتخاب‌شده (با کل تعداد باقی‌مانده) رد می‌شوند */
+  const passCheckedGroups = async () => {
+    if (batchBusy || scanBusyRef.current) return
+    if (checkedGroupRows.length === 0) {
+      alert("ردیف انتخاب‌شده‌ی دارای بارکد وجود ندارد")
+      return
+    }
+    const orderNumbers = Array.from(
+      new Set(checkedGroups.map((g) => g.orderNumber))
+    )
+    if (
+      !confirm(
+        `${checkedGroupRows.length} قلم از ${orderNumbers.length} سفارش در ایستگاه «${selectedStationName}» رد شود؟`
+      )
+    )
+      return
+
+    scanBusyRef.current = true
+    setBatchBusy(true)
+    setScanLoading(true)
+    setLastResult(null)
+    let ok = 0
+    const failed: string[] = []
+    for (const row of checkedGroupRows) {
+      const code = cleanBarcode(row.productionItem.barcode || "")
+      const qty = row.quantityIn ?? row.productionItem.quantity ?? 1
+      const label = `${row.productionItem.productionOrder.order?.orderNumber || ""} / ${row.productionItem.productName}`
+      try {
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS)
+        const res = await fetch("/api/production/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            barcode: code,
+            stationId: selectedStationId,
+            operatorName: operatorName || undefined,
+            confirmed: true,
+            quantityDone: qty > 0 ? qty : undefined,
+          }),
+          signal: controller.signal,
+        })
+        clearTimeout(timer)
+        const data = await res.json().catch(() => ({}))
+        if (res.ok && !data.needsConfirmation) ok++
+        else failed.push(`${label}: ${data.error || "خطا"}`)
+      } catch {
+        failed.push(`${label}: خطا در ارتباط`)
+      }
+    }
+    scanBusyRef.current = false
+    setBatchBusy(false)
+    setScanLoading(false)
+    setCheckedGroupKeys([])
+    await fetchQueue(true)
+    setLastResult(
+      failed.length > 0
+        ? {
+            type: "err",
+            text: `${ok} قلم رد شد؛ ${failed.length} قلم رد نشد — ${failed
+              .slice(0, 3)
+              .join(" | ")}`,
+          }
+        : { type: "ok", text: `${ok} قلم از ${orderNumbers.length} سفارش با هم رد شد` }
+    )
     setTimeout(() => inputRef.current?.focus(), 50)
   }
 
@@ -1888,7 +2258,7 @@ if (userStation && list.length > 0) {
   return (
     <div
       className={`${
-        queueMode ? "h-screen overflow-hidden" : "min-h-screen"
+        queueMode ? "app-h overflow-hidden" : "min-h-screen"
       } p-4 print:bg-white print:p-0 ${
         mainTab === "exit" && isLoadingStation
           ? "bg-white"
@@ -1919,11 +2289,15 @@ if (userStation && list.length > 0) {
               </h1>
               <p className="text-[11px] text-blue-700">
                 {todayFa}
-                {stationLocked ? " — ایستگاه قفل (بر اساس ورود شما)" : ""}
+                {stationLocked
+                  ? stationLockSource === "link"
+                    ? " — ایستگاه قفل (طبق لینک همین تب)"
+                    : " — ایستگاه قفل (بر اساس ورود شما)"
+                  : ""}
               </p>
             </div>
 
-            {(!isLoadingStation || mainTab === "queue") && (
+            {mainTab === "queue" && (
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-sm text-blue-800">
                   سفارش <b className="text-teal-700">{totals.orders}</b>
@@ -1950,7 +2324,7 @@ if (userStation && list.length > 0) {
             )}
 
             <div className="mr-auto flex flex-wrap items-center gap-1.5">
-              {(!isLoadingStation || mainTab === "queue") && (
+              {mainTab === "queue" && (
                 <>
                   <button
                     type="button"
@@ -2003,7 +2377,7 @@ if (userStation && list.length > 0) {
               </Link>
             </div>
           </div>
-          {(!isLoadingStation || mainTab === "queue") && filterActive && summary && (
+          {mainTab === "queue" && filterActive && summary && (
             <p className="mt-1 text-xs text-blue-700">
               فیلتر فعال است — کل صف این ایستگاه (بدون فیلتر): {summary.count} قطعه |{" "}
               {summary.totalQuantity} عدد | {Number(summary.totalMeterage).toFixed(3)} متر
@@ -2011,34 +2385,7 @@ if (userStation && list.length > 0) {
           )}
         </div>
 
-        {isLoadingStation && (
-          <div className="mb-2 shrink-0 flex gap-2">
-            <button
-              type="button"
-              onClick={() => setMainTab("queue")}
-              className={`rounded-xl px-5 py-2.5 font-bold border ${
-                mainTab === "queue"
-                  ? "bg-teal-600 text-white border-teal-700"
-                  : "bg-white text-blue-900 border-teal-300"
-              }`}
-            >
-              کارتابل بارگیری
-            </button>
-            <button
-              type="button"
-              onClick={() => setMainTab("exit")}
-              className={`rounded-xl px-5 py-2.5 font-bold border ${
-                mainTab === "exit"
-                  ? "bg-teal-600 text-white border-teal-700"
-                  : "bg-white text-blue-900 border-teal-300"
-              }`}
-            >
-              برگه خروج
-            </button>
-          </div>
-        )}
-
-        {(!isLoadingStation || mainTab === "queue") && (
+        {mainTab === "queue" && (
           <>
             <div className="mb-1.5 shrink-0 rounded-2xl bg-white/95 shadow-md px-3 py-2 border border-teal-300">
               <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
@@ -2068,6 +2415,16 @@ if (userStation && list.length > 0) {
                     </select>
                   )}
                 </div>
+                {isReadyWhStation ? (
+                  <div className="md:col-span-9">
+                    <div className="rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-bold leading-relaxed text-emerald-900">
+                      وضعیت هر قطعه خودکار از روی ایستگاه‌ها خوانده می‌شود.
+                      داخل سفارش، دکمهٔ «انتقال به بارگیری» قطعات آماده را یکجا
+                      به بارگیری می‌فرستد؛ مرحلهٔ «رد» در این کارتابل حذف شده است.
+                    </div>
+                  </div>
+                ) : (
+                  <>
                 <div className="md:col-span-5">
                   <label className="mb-0.5 block text-xs font-bold text-blue-900">
                     اسکن بارکد
@@ -2113,13 +2470,15 @@ if (userStation && list.length > 0) {
                     {scanLoading ? "..." : "ثبت"}
                   </button>
                 </div>
+                  </>
+                )}
               </div>
-              {lastResult?.type === "err" && (
+              {!isReadyWhStation && lastResult?.type === "err" && (
                 <div className="mt-1.5 rounded-xl bg-red-100 border border-red-300 px-3 py-1.5 font-bold text-red-800 text-sm">
                   {lastResult.text}
                 </div>
               )}
-              {lastResult?.type === "ok" && (
+              {!isReadyWhStation && lastResult?.type === "ok" && (
                 <div className="mt-1.5 rounded-xl bg-green-100 border border-green-300 px-3 py-1.5 font-bold text-green-800 text-sm">
                   {lastResult.text}
                 </div>
@@ -2193,6 +2552,19 @@ if (userStation && list.length > 0) {
                         >
                           → بازگشت به لیست
                         </button>
+                        {isReadyWhStation && (
+                          <button
+                            type="button"
+                            disabled={
+                              openOrderReadyRows.length === 0 || transferBusy
+                            }
+                            onClick={() => void transferOpenOrder()}
+                            className="rounded-lg bg-blue-600 px-3 py-1 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+                            title="همه‌ی قطعات آماده‌ی این سفارش یکجا به بارگیری منتقل شوند"
+                          >
+                            انتقال به بارگیری ({openOrderReadyRows.length})
+                          </button>
+                        )}
                         <span className="text-base font-black text-blue-950">
                           سفارش {openGroup.orderNumber} — {openGroup.productSummary}
                         </span>
@@ -2215,6 +2587,14 @@ if (userStation && list.length > 0) {
                       </div>
                     </div>
                     <div className="mb-1 shrink-0 flex flex-wrap items-center gap-2">
+                      {isReadyWhStation ? (
+                        <p className="text-xs font-bold leading-relaxed text-emerald-800">
+                          وضعیت هر قطعه زیر به‌صورت خودکار از ایستگاه‌ها محاسبه
+                          می‌شود؛ قطعات آماده با دکمهٔ بالا یکجا به بارگیری
+                          منتقل می‌شوند و قطعات ناآماده اینجا می‌مانند.
+                        </p>
+                      ) : (
+                        <>
                       <p className="text-[11px] leading-tight text-blue-700">
                         دکمه‌ی «رد» یا اسکن بارکد = رد ایستگاه | تیک چند قلم + «رد گروهی» = رد
                         همه‌ی انتخاب‌شده‌ها با هم | «نمایش» = جزئیات و نقشه بدون رد | «روند» = مسیر
@@ -2238,21 +2618,25 @@ if (userStation && list.length > 0) {
                           ? "در حال رد..."
                           : `رد گروهی (${checkedRows.length} قلم)`}
                       </button>
+                        </>
+                      )}
                     </div>
                     <div className="flex-1 min-h-0 overflow-auto">
                     <table className="w-full border-collapse border border-gray-400 text-sm">
                       <thead>
                         <tr className="border border-gray-400 bg-teal-100">
-                          <th className={thS}>
-                            <input
-                              type="checkbox"
-                              checked={allChecked}
-                              onChange={toggleAllChecked}
-                              disabled={scanLoading || batchBusy}
-                              className="h-4 w-4 cursor-pointer"
-                              title="انتخاب همه"
-                            />
-                          </th>
+                          {!isReadyWhStation && (
+                            <th className={thS}>
+                              <input
+                                type="checkbox"
+                                checked={allChecked}
+                                onChange={toggleAllChecked}
+                                disabled={scanLoading || batchBusy}
+                                className="h-4 w-4 cursor-pointer"
+                                title="انتخاب همه"
+                              />
+                            </th>
+                          )}
                           <th className={thS}>ردیف</th>
                           {sortTh("کالا", "productName", itemSort, setItemSort)}
                           {sortTh("بارکد", "barcode", itemSort, setItemSort)}
@@ -2280,18 +2664,20 @@ if (userStation && list.length > 0) {
                             }`}
                             onClick={() => setSelectedRowId(row.id)}
                           >
-                            <td
-                              className="border border-gray-400 px-2 py-1 text-center"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checkedIds.includes(row.id)}
-                                onChange={() => toggleChecked(row.id)}
-                                disabled={scanLoading || batchBusy}
-                                className="h-4 w-4 cursor-pointer"
-                              />
-                            </td>
+                            {!isReadyWhStation && (
+                              <td
+                                className="border border-gray-400 px-2 py-1 text-center"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checkedIds.includes(row.id)}
+                                  onChange={() => toggleChecked(row.id)}
+                                  disabled={scanLoading || batchBusy}
+                                  className="h-4 w-4 cursor-pointer"
+                                />
+                              </td>
+                            )}
                             <td className="border border-gray-400 px-2 py-1 text-center font-bold">
                               {index + 1}
                             </td>
@@ -2350,9 +2736,28 @@ if (userStation && list.length > 0) {
                               {row.productionItem.notes || "—"}
                             </td>
                             <td className="border border-gray-400 px-2 py-1 text-center">
-                              <span className="whitespace-nowrap rounded-full bg-yellow-100 px-3 py-1 text-xs font-bold">
-                                {statusLabel(row.status)}
-                              </span>
+                              {isReadyWhStation ? (
+                                (() => {
+                                  const ready = readinessOf(routeStepsOf(row))
+                                  const cls =
+                                    ready.tone === "ready"
+                                      ? "bg-emerald-100 text-emerald-800"
+                                      : ready.tone === "loading"
+                                        ? "bg-teal-100 text-teal-800"
+                                        : "bg-amber-100 text-amber-800"
+                                  return (
+                                    <span
+                                      className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-bold ${cls}`}
+                                    >
+                                      {ready.text}
+                                    </span>
+                                  )
+                                })()
+                              ) : (
+                                <span className="whitespace-nowrap rounded-full bg-yellow-100 px-3 py-1 text-xs font-bold">
+                                  {statusLabel(row.status)}
+                                </span>
+                              )}
                             </td>
                             <td className="border border-gray-400 px-2 py-1 text-center">
                               <div className="flex flex-wrap justify-center gap-1">
@@ -2382,18 +2787,22 @@ if (userStation && list.length > 0) {
                                 >
                                   نمایش
                                 </button>
-                                <button
-                                  type="button"
-                                  disabled={scanLoading}
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    completeByRow(row)
-                                  }}
-                                  className="rounded-lg bg-green-600 px-2 py-1 text-xs font-bold text-white hover:bg-green-700 disabled:opacity-50"
-                                >
-                                  رد
-                                </button>
-                                {row.canUndo && (row.quantityOut || 0) > 0 && (
+                                {!isReadyWhStation && (
+                                  <button
+                                    type="button"
+                                    disabled={scanLoading}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      completeByRow(row)
+                                    }}
+                                    className="rounded-lg bg-green-600 px-2 py-1 text-xs font-bold text-white hover:bg-green-700 disabled:opacity-50"
+                                  >
+                                    رد
+                                  </button>
+                                )}
+                                {!isReadyWhStation &&
+                                  row.canUndo &&
+                                  (row.quantityOut || 0) > 0 && (
                                   <button
                                     type="button"
                                     disabled={scanLoading}
@@ -2413,12 +2822,99 @@ if (userStation && list.length > 0) {
                       </tbody>
                     </table>
                     </div>
+                    {isReadyWhStation && (
+                      <div className="mt-1 shrink-0 rounded-xl border border-gray-300 bg-gray-50 px-2 py-1">
+                        <p className="mb-1 text-xs font-black text-gray-700">
+                          قطعات دیگر این سفارش (هنوز وارد صف آماده تحویل نشده‌اند
+                          یا قبلاً عبور کرده‌اند)
+                        </p>
+                        {!orderItemsCache[openProdOrderId] ? (
+                          <p className="text-xs font-bold text-gray-500">
+                            در حال بارگذاری...
+                          </p>
+                        ) : pendingOrderItems.length === 0 ? (
+                          <p className="text-xs font-bold text-gray-500">
+                            همهٔ قطعات این سفارش در لیست بالا هستند.
+                          </p>
+                        ) : (
+                          <div className="max-h-40 overflow-auto">
+                            <table className="w-full border-collapse border border-gray-300 text-xs">
+                              <thead>
+                                <tr className="bg-gray-200 text-gray-700">
+                                  <th className="border border-gray-300 px-2 py-0.5">کالا</th>
+                                  <th className="border border-gray-300 px-2 py-0.5">بارکد</th>
+                                  <th className="border border-gray-300 px-2 py-0.5">طول</th>
+                                  <th className="border border-gray-300 px-2 py-0.5">عرض</th>
+                                  <th className="border border-gray-300 px-2 py-0.5">تعداد</th>
+                                  <th className="border border-gray-300 px-2 py-0.5">وضعیت</th>
+                                  <th className="border border-gray-300 px-2 py-0.5">عملیات</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {pendingOrderItems.map((it) => {
+                                  const ready = readinessOf(it.stations)
+                                  const cls =
+                                    ready.tone === "ready"
+                                      ? "bg-emerald-100 text-emerald-800"
+                                      : ready.tone === "loading"
+                                        ? "bg-teal-100 text-teal-800"
+                                        : "bg-amber-100 text-amber-800"
+                                  return (
+                                    <tr key={it.id} className="bg-white">
+                                      <td className="border border-gray-300 px-2 py-0.5 font-bold">
+                                        {it.productName}
+                                      </td>
+                                      <td className="border border-gray-300 px-2 py-0.5 text-center font-mono">
+                                        {it.barcode || "—"}
+                                      </td>
+                                      <td className="border border-gray-300 px-2 py-0.5 text-center">
+                                        {it.length ?? "—"}
+                                      </td>
+                                      <td className="border border-gray-300 px-2 py-0.5 text-center">
+                                        {it.width ?? "—"}
+                                      </td>
+                                      <td className="border border-gray-300 px-2 py-0.5 text-center">
+                                        {it.quantity}
+                                      </td>
+                                      <td className="border border-gray-300 px-2 py-0.5 text-center">
+                                        <span
+                                          className={`whitespace-nowrap rounded-full px-2 py-0.5 font-bold ${cls}`}
+                                        >
+                                          {ready.text}
+                                        </span>
+                                      </td>
+                                      <td className="border border-gray-300 px-2 py-0.5 text-center">
+                                        {ready.tone === "ready" ? (
+                                          <button
+                                            type="button"
+                                            disabled={transferBusy}
+                                            onClick={() =>
+                                              void transferPendingItem(it.id)
+                                            }
+                                            className="rounded-lg bg-blue-600 px-2 py-0.5 font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+                                          >
+                                            انتقال
+                                          </button>
+                                        ) : (
+                                          "—"
+                                        )}
+                                      </td>
+                                    </tr>
+                                  )
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="py-12 text-center">
                     <p className="mb-4 text-lg font-bold text-teal-800">
-                      همه‌ی اقلام این کالا از سفارش {openOrderKey.split("||")[0]} در این ایستگاه رد شد (یا با فیلتر فعلی
-                      نمایش داده نمی‌شود)
+                      {isReadyWhStation
+                        ? `همه‌ی قطعات قابل نمایش سفارش ${openOrderKey.split("||")[0]} از انبار آماده تحویل عبور کرده‌اند (به بارگیری منتقل شده‌اند یا خارج شده‌اند)`
+                        : `همه‌ی اقلام این کالا از سفارش ${openOrderKey.split("||")[0]} در این ایستگاه رد شد (یا با فیلتر فعلی نمایش داده نمی‌شود)`}
                     </p>
                     <button
                       type="button"
@@ -2434,13 +2930,45 @@ if (userStation && list.length > 0) {
               ) : (
                 /* ---------- لیست سفارش‌ها (هر سفارش یک ردیف) ---------- */
                 <div className="h-full flex flex-col">
-                  <p className="mb-1 shrink-0 text-[11px] text-blue-700">
-                    کلیک روی هر سفارش = ورود به اقلام همان سفارش، سپس دکمه‌ی «رد» روی قلم یا اسکن بارکد برای رد
-                  </p>
+                  <div className="mb-1 shrink-0 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[11px] leading-tight text-blue-700">
+                      {isReadyWhStation
+                        ? "روی هر سفارش کلیک کنید تا وضعیت خودکار هر قطعه را ببینید؛ قطعات آماده داخل صفحه‌ی سفارش یکجا به بارگیری منتقل می‌شوند."
+                        : "کلیک روی هر سفارش = ورود به اقلام همان سفارش، سپس دکمه‌ی «رد» روی قلم یا اسکن بارکد برای رد | تیک یک یا چند ردیف + «رد گروهی» = رد همه‌ی اقلام آن‌ها با هم"}
+                    </p>
+                    {!isReadyWhStation && (
+                      <button
+                        type="button"
+                        disabled={scanLoading || batchBusy || checkedGroupRows.length === 0}
+                        onClick={passCheckedGroups}
+                        className="rounded-lg bg-green-600 px-4 py-1.5 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-50"
+                      >
+                        {batchBusy
+                          ? "در حال رد..."
+                          : `رد گروهی (${checkedGroupRows.length} قلم)`}
+                      </button>
+                    )}
+                  </div>
                   <div className="flex-1 min-h-0 overflow-auto">
                   <table className="w-full border-collapse border border-gray-400 text-sm">
                     <thead>
                       <tr className="border border-gray-400 bg-teal-100">
+                        {!isReadyWhStation && (
+                          <th className={thS}>
+                            <input
+                              type="checkbox"
+                              title="انتخاب همه"
+                              checked={allGroupsChecked}
+                              onChange={(e) =>
+                                setCheckedGroupKeys(
+                                  e.target.checked
+                                    ? sortedGroups.map((g) => g.key)
+                                    : []
+                                )
+                              }
+                            />
+                          </th>
+                        )}
                         <th className={thS}>ردیف</th>
                         {sortTh("شماره سفارش", "orderNumber", orderSort, setOrderSort)}
                         {sortTh("نام مشتری", "customerName", orderSort, setOrderSort)}
@@ -2465,6 +2993,22 @@ if (userStation && list.length > 0) {
                             setSelectedRowId(null)
                           }}
                         >
+                          <td className="border border-gray-400 px-2 py-1 text-center">
+                            {!isReadyWhStation && (
+                              <input
+                                type="checkbox"
+                                checked={checkedGroupKeys.includes(g.key)}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) =>
+                                  setCheckedGroupKeys((prev) =>
+                                    e.target.checked
+                                      ? [...prev, g.key]
+                                      : prev.filter((k) => k !== g.key)
+                                  )
+                                }
+                              />
+                            )}
+                          </td>
                           <td className="border border-gray-400 px-2 py-1 text-center font-bold">
                             {i + 1}
                           </td>
@@ -2541,7 +3085,7 @@ if (userStation && list.length > 0) {
                     : "bg-white border-orange-300"
                 }`}
               >
-                خروج‌نخورده
+                اقلام سفارش (باقی‌مانده)
               </button>
               <button
                 type="button"
@@ -2600,17 +3144,19 @@ if (userStation && list.length > 0) {
               <div className="rounded-2xl border bg-white p-4 shadow">
                 <div className="flex flex-wrap justify-between gap-2 mb-3">
                   <h2 className="font-black">
-                    خروج‌نخورده — {lockedCustomer} (
-                    {displayPendingItems.length})
+                    اقلام سفارش {lockedCustomer} ({displayPendingItems.length})
+                    {" — "}قابل خروج: {displayExitItems.length}
                   </h2>
-                  <button
-                    type="button"
-                    disabled={!selectedExitIds.length}
-                    onClick={() => setShowDriverModal(true)}
-                    className="rounded-xl bg-green-600 text-white px-4 py-2 font-bold disabled:opacity-50"
-                  >
-                    صدور برگه ({selectedExitIds.length})
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={selectedExitIds.length === 0}
+                      onClick={() => setShowDriverModal(true)}
+                      className="rounded-xl bg-green-600 text-white px-4 py-2 font-bold disabled:opacity-50"
+                    >
+                      صدور برگه ({selectedExitIds.length})
+                    </button>
+                  </div>
                 </div>
                 {exitLoading ? (
                   <p className="text-center py-8 font-bold">...</p>
@@ -2623,15 +3169,17 @@ if (userStation && list.length > 0) {
                             type="checkbox"
                             title="انتخاب همه"
                             checked={
-                              displayPendingItems.length > 0 &&
-                              displayPendingItems.every((i) =>
+                              displayExitItems.length > 0 &&
+                              displayExitItems.every((i) =>
                                 selectedExitIds.includes(i.productionItemId)
                               )
                             }
                             onChange={(e) =>
                               setSelectedExitIds(
                                 e.target.checked
-                                  ? displayPendingItems.map((i) => i.productionItemId)
+                                  ? displayExitItems.map(
+                                      (i) => i.productionItemId
+                                    )
                                   : []
                               )
                             }
@@ -2643,46 +3191,77 @@ if (userStation && list.length > 0) {
                         <th className="p-2">تعداد</th>
                         <th className="p-2">متراژ</th>
                         <th className="p-2">کد نصب</th>
+                        <th className="p-2">وضعیت</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {displayPendingItems.map((it) => (
-                        <tr key={it.productionItemId} className="border-b">
-                          <td className="p-2 text-center">
-                            <input
-                              type="checkbox"
-                              checked={selectedExitIds.includes(
-                                it.productionItemId
-                              )}
-                              onChange={() =>
-                                setSelectedExitIds((prev) =>
-                                  prev.includes(it.productionItemId)
-                                    ? prev.filter(
-                                        (x) => x !== it.productionItemId
-                                      )
-                                    : [...prev, it.productionItemId]
-                                )
-                              }
-                            />
-                          </td>
-                          <td className="p-2 text-center font-bold">
-                            {it.orderNumber}
-                          </td>
-                          <td className="p-2 font-bold">{it.productName}</td>
-                          <td className="p-2 text-center">
-                            {it.length}×{it.width}
-                          </td>
-                          <td className="p-2 text-center">{it.quantity}</td>
-                          <td className="p-2 text-center">
-                            {it.meterage != null
-                              ? Number(it.meterage).toFixed(3)
-                              : "—"}
-                          </td>
-                          <td className="p-2 text-center font-bold">
-                            {it.installationCode || "—"}
-                          </td>
-                        </tr>
-                      ))}
+                      {displayPendingItems.map((it) => {
+                        const notReady = it.stage !== "loading"
+                        const needsTransfer = it.stage === "ready"
+                        return (
+                          <tr
+                            key={it.productionItemId}
+                            className={`border-b ${
+                              notReady ? "bg-amber-50" : ""
+                            }`}
+                          >
+                            <td className="p-2 text-center">
+                              <input
+                                type="checkbox"
+                                disabled={notReady}
+                                checked={selectedExitIds.includes(
+                                  it.productionItemId
+                                )}
+                                onChange={() =>
+                                  setSelectedExitIds((prev) =>
+                                    prev.includes(it.productionItemId)
+                                      ? prev.filter(
+                                          (x) => x !== it.productionItemId
+                                        )
+                                      : [...prev, it.productionItemId]
+                                  )
+                                }
+                              />
+                            </td>
+                            <td className="p-2 text-center font-bold">
+                              {it.orderNumber}
+                            </td>
+                            <td
+                              className={`p-2 font-bold ${
+                                notReady ? "text-amber-900" : ""
+                              }`}
+                            >
+                              {it.productName}
+                            </td>
+                            <td className="p-2 text-center">
+                              {it.length}×{it.width}
+                            </td>
+                            <td className="p-2 text-center">{it.quantity}</td>
+                            <td className="p-2 text-center">
+                              {it.meterage != null
+                                ? Number(it.meterage).toFixed(3)
+                                : "—"}
+                            </td>
+                            <td className="p-2 text-center font-bold">
+                              {it.installationCode || "—"}
+                            </td>
+                            <td
+                              className={`p-2 text-center text-xs font-bold ${
+                                notReady
+                                  ? "text-amber-800"
+                                  : it.stage === "loading"
+                                    ? "text-emerald-700"
+                                    : "text-teal-700"
+                              }`}
+                            >
+                              {needsTransfer
+                                ? "در آماده تحویل — هنوز به بارگیری منتقل نشده"
+                                : it.statusText ||
+                                  (notReady ? "در حال تولید" : "آماده خروج")}
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 )}
@@ -2706,7 +3285,7 @@ if (userStation && list.length > 0) {
             {/* ---------- تاریخچه‌ی خروج: لیست مشتری‌ها (فریز) + برگه‌های مشتری انتخاب‌شده ---------- */}
             {exitFilter === "done" && (
               <div className="grid items-start gap-4 lg:grid-cols-[320px_1fr]">
-                <aside className="flex max-h-[calc(100vh-1rem)] flex-col rounded-2xl border border-teal-300 bg-white p-3 shadow lg:sticky lg:top-2">
+                <aside className="flex app-max-h-inset flex-col rounded-2xl border border-teal-300 bg-white p-3 shadow lg:sticky lg:top-2">
                   <label className="mb-1 block text-sm font-bold text-blue-900">
                     جستجوی مشتری (همه‌ی سوابق خروج)
                   </label>
@@ -3465,6 +4044,11 @@ if (userStation && list.length > 0) {
             <p className="text-sm text-blue-800 mb-2">
               سفارش {confirmData.orderNumber} — {confirmData.customerName}
             </p>
+            {confirmData.message ? (
+              <p className="text-sm font-bold text-teal-800 bg-teal-50 border border-teal-200 rounded-lg px-3 py-2 mb-2">
+                {confirmData.message}
+              </p>
+            ) : null}
             {confirmData.mapImageUrl ? (
               <img
                 src={confirmData.mapImageUrl}

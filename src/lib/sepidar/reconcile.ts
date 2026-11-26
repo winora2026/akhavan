@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma"
 import { computeOrderTotals } from "@/lib/orderTotals"
 import { getAll } from "./client"
+import { customerCodeMismatches } from "./party"
 
 const INVOICES_PATH = "/api/sepidar/v1/Sales/GetAllInvoices"
 
@@ -371,6 +372,11 @@ export async function reconcileSepidarInvoices(opts: {
     sentCount > 0 &&
     missingInSepidar.length / sentCount > 0.5
 
+  const codeCheck = await customerCodeMismatches().catch((e) => {
+    console.error("reconcile party codes:", e)
+    return null
+  })
+
   let applied = false
   let refused: string | null = null
 
@@ -446,6 +452,11 @@ export async function reconcileSepidarInvoices(opts: {
     duplicateInSepidar: {
       count: duplicateRows.length,
       rows: duplicateRows.slice(0, 200),
+    },
+    partyCodeMismatch: {
+      count: codeCheck?.mismatches.length ?? 0,
+      rows: (codeCheck?.mismatches ?? []).slice(0, 200),
+      error: codeCheck ? null : "خواندن کدهای طرف‌حساب سپیدار ممکن نشد",
     },
   }
 }

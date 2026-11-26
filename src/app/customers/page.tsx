@@ -482,6 +482,8 @@ function CustomersContent() {
 
   const filtered = useMemo(() => {
     const q = normalizeFa(debouncedSearch.trim())
+    // همه‌ی کلمه‌های جستجو باید پیدا شوند (به هر ترتیبی): «عباس زاده» = «زاده عباس»
+    const qTokens = q.split(" ").filter(Boolean)
     const fCode = normalizeFa(colFilters.code.trim())
     const fName = normalizeFa(colFilters.name.trim())
     const fNational = normalizeFa(colFilters.nationalCode.trim())
@@ -492,14 +494,17 @@ function CustomersContent() {
     return searchIndex
       .filter((x) => {
         const matchSearch =
-          !q ||
-          x.name.includes(q) ||
-          x.code.includes(q) ||
-          x.nationalCode.includes(q) ||
-          x.companyNationalId.includes(q) ||
-          x.phones.some((p) => p.includes(q)) ||
-          x.social.some((s) => s.includes(q)) ||
-          x.tags.some((t) => t.includes(q))
+          !qTokens.length ||
+          qTokens.every(
+            (t) =>
+              x.name.includes(t) ||
+              x.code.includes(t) ||
+              x.nationalCode.includes(t) ||
+              x.companyNationalId.includes(t) ||
+              x.phones.some((p) => p.includes(t)) ||
+              x.social.some((s) => s.includes(t)) ||
+              x.tags.some((tag) => tag.includes(t))
+          )
 
         const matchGroup = groupFilter === "all" || x.item.group === groupFilter
 

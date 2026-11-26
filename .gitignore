@@ -47,3 +47,10 @@ next-env.d.ts
 prisma/dev.db 
 prisma/*.db 
 prisma/*.db-journal 
+
+# local artifacts (kept on disk, not tracked)
+/public/installers/
+*.bak
+*.bak-*
+prisma/*.bak*
+.chrome/

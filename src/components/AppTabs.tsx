@@ -32,6 +32,8 @@ const TITLE_MAP: Record<string, string> = {
   "/finance/reconcile": "مغایرت‌گیری",
   "/sms-report": "گزارش پیامک‌ها",
   "/reports": "گزارش‌ها",
+  "/execution/measurement": "اندازه‌گیری",
+  "/execution/install": "نصب",
   "/order/cancelled": "لغوشده‌ها",
 }
 
@@ -77,7 +79,18 @@ export default function AppTabs() {
     })
   }, [pathname])
 
-  if (pathname === "/login" || tabs.length === 0) return null
+  // ارتفاع نوار تب‌ها را برای بقیه‌ی صفحه‌ها مشخص می‌کند تا محتوا از کادر صفحه بیرون نزند
+  useEffect(() => {
+    const hidden =
+      pathname === "/login" || pathname.startsWith("/p/") || tabs.length === 0
+    document.documentElement.style.setProperty(
+      "--app-tabs-h",
+      hidden ? "0px" : "2.5rem"
+    )
+  }, [pathname, tabs.length])
+
+  // /p = صفحه‌های عمومی مشتری؛ نوار تب‌های داخلی نباید آنجا دیده شود
+  if (pathname === "/login" || pathname.startsWith("/p/") || tabs.length === 0) return null
 
   const persist = (next: Tab[]) => {
     setTabs(next)
@@ -118,7 +131,7 @@ export default function AppTabs() {
 
   return (
     <div
-      className="sticky top-0 z-[40] bg-white/90 backdrop-blur border-b border-teal-200 px-2 py-1.5 flex gap-1 overflow-x-auto print:hidden"
+      className="sticky top-0 z-[40] h-10 bg-white/90 backdrop-blur border-b border-teal-200 px-2 flex items-center gap-1 overflow-x-auto print:hidden"
       dir="rtl"
       role="tablist"
       aria-label="صفحات باز"
