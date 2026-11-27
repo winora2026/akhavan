@@ -718,64 +718,108 @@ model InstallationJob {
 
 // ====================== منابع انسانی ======================
 model Employee {
-  id             String   @id @default(cuid())
-  personnelCode  String   @unique // هم‌تراز با شماره پرسنلی دستگاه
-  firstName      String
-  lastName       String
-  displayName    String
-  groupName      String? // کارمندان، توافقی نوری، ...
-  phone          String?
-  userId         String?  @unique // اتصال به User اخوان (اختیاری)
-  isActive       Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id              String    @id @default(cuid())
+  personnelCode   String    @unique
+  deviceCode      String? // کد روی دستگاه
+  firstName       String
+  lastName        String
+  displayName     String
+  fatherName      String?
+  nationalId      String?
+  mobile          String?
+  phone           String?
+  email           String?
+  gender          String? // مرد | زن
+  birthDate       DateTime?
+  hireDate        DateTime?
+  endDate         DateTime?
+  employmentType  String? // رسمی | قراردادی | روزمزد | ...
+  jobTitle        String?
+  department      String?
+  groupName       String?
+  shiftName       String?
+  managerName     String?
+  address         String?
+  emergencyPhone  String?
+  bankAccount     String?
+  userId          String?   @unique
+  photoUrl        String?
+  isActive        Boolean   @default(true)
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  leaveRequests  LeaveRequest[]
-  leaveBalances  LeaveBalance[]
-  attendanceLogs AttendanceLog[]
+  leaveRequests   LeaveRequest[]
+  leaveBalances   LeaveBalance[]
+  attendanceLogs  AttendanceLog[]
 }
 
 model LeaveRequest {
-  id            String    @id @default(cuid())
-  employeeId    String
-  employee      Employee  @relation(fields: [employeeId], references: [id])
-  type          String // استحقاقی | استعلاجی | تشویقی | بدون حقوق | مأموریت | سایر
-  startDate     DateTime
-  endDate       DateTime
-  days          Float     @default(1)
-  description   String?
-  status        String    @default("PENDING") // PENDING | APPROVED | REJECTED | CANCELLED
-  requestedBy   String? // نام نمایشی ثبت‌کننده
-  reviewedBy    String?
-  reviewedAt    DateTime?
-  reviewNote    String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id              String    @id @default(cuid())
+  employeeId      String
+  employee        Employee  @relation(fields: [employeeId], references: [id])
+
+  // استحقاقی | استعلاجی | تشویقی | بدون‌حقوق | مأموریت | ساعتی | سایر
+  type            String
+  // DAILY | HOURLY
+  durationType    String    @default("DAILY")
+
+  startDate       DateTime
+  endDate         DateTime
+  // برای ساعتی: "08:00" تا "12:00"
+  startTime       String?
+  endTime         String?
+  // روز یا ساعت اعشاری (مثلاً 0.5 روز / 2.5 ساعت)
+  amount          Float     @default(1)
+  amountUnit      String    @default("DAY") // DAY | HOUR
+
+  description     String?
+  attachmentUrl   String?
+
+  status          String    @default("PENDING") // PENDING APPROVED REJECTED CANCELLED
+  requestedBy     String?
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  reviewNote      String?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([employeeId, status])
+  @@index([startDate, endDate])
 }
 
 model LeaveBalance {
-  id            String   @id @default(cuid())
-  employeeId    String
-  employee      Employee @relation(fields: [employeeId], references: [id])
-  year          Int // شمسی مثل 1405
-  entitledDays  Float    @default(0) // استحقاقی سال
-  usedDays      Float    @default(0)
-  remainingDays Float    @default(0)
-  updatedAt     DateTime @updatedAt
+  id              String   @id @default(cuid())
+  employeeId      String
+  employee        Employee @relation(fields: [employeeId], references: [id])
+  year            Int // 1405
+  leaveType       String   @default("استحقاقی") // تفکیک نوع مانده
+  entitled        Float    @default(0) // روز
+  used            Float    @default(0)
+  remaining       Float    @default(0)
+  entitledHours   Float    @default(0)
+  usedHours       Float    @default(0)
+  remainingHours  Float    @default(0)
+  updatedAt       DateTime @updatedAt
 
-  @@unique([employeeId, year])
+  @@unique([employeeId, year, leaveType])
 }
 
 model AttendanceLog {
   id            String   @id @default(cuid())
   employeeId    String
   employee      Employee @relation(fields: [employeeId], references: [id])
-  date          DateTime // روز
-  checkIn       String? // "08:21"
+  date          DateTime
+  checkIn       String?
   checkOut      String?
+  workMinutes   Int?
+  delayMinutes  Int?
+  earlyMinutes  Int?
+  overtimeMin   Int?
+  shiftName     String?
   deviceName    String?
-  source        String   @default("MANUAL") // MANUAL | IMPORT | API
-  rawStatus     String? // ورود | خروج
+  source        String   @default("MANUAL") // MANUAL IMPORT API
   notes         String?
   createdAt     DateTime @default(now())
 

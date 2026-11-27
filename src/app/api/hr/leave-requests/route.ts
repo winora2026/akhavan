@@ -3,21 +3,41 @@ import { prisma } from "@/lib/prisma"
 import { getSession } from "@/lib/auth"
 import { safeDate } from "@/lib/date"
 
-function dayCount(start: Date, end: Date) {
+function daysBetween(start: Date, end: Date) {
   const s = new Date(start)
   s.setHours(0, 0, 0, 0)
   const e = new Date(end)
   e.setHours(0, 0, 0, 0)
-  const diff = Math.round((e.getTime() - s.getTime()) / 86400000) + 1
-  return diff > 0 ? diff : 1
+  return Math.max(1, Math.round((e.getTime() - s.getTime()) / 86400000) + 1)
+}
+
+function hoursBetween(startTime: string, endTime: string) {
+  const [sh, sm] = startTime.split(":").map(Number)
+  const [eh, em] = endTime.split(":").map(Number)
+  const a = sh * 60 + (sm || 0)
+  const b = eh * 60 + (em || 0)
+  const diff = (b - a) / 60
+  return diff > 0 ? Math.round(diff * 100) / 100 : 0
+}
+
+async function resolveEmployee(session: {
+  id: string
+  displayName: string
+  role: string
+}) {
+  return prisma.employee.findFirst({
+    where: {
+      OR: [{ userId: session.id }, { displayName: session.displayName }],
+      isActive: true,
+    },
+  })
 }
 
 export async function GET(req: NextRequest) {
   try {
     const session = await getSession()
-    if (!session) {
-      return NextResponse.json({ error: "وارد شوید" }, { status: 401 })
-    }
+    if (!session) return NextResponse.json({ error: "وارد شوید" }, { status: 401 })
+
     const { searchParams } = new URL(req.url)
     const status = searchParams.get("status") || "ALL"
     const mine = searchParams.get("mine") === "1"
@@ -27,26 +47,29 @@ export async function GET(req: NextRequest) {
     if (status !== "ALL") where.status = status
 
     if (mine || !isManager) {
-      const emp = await prisma.employee.findFirst({
-        where: {
-          OR: [
-            { userId: session.id },
-            { displayName: session.displayName },
-          ],
-        },
-      })
+      const emp = await resolveEmployee(session)
       if (!emp) return NextResponse.json({ items: [] })
       where.employeeId = emp.id
     }
 
     const items = await prisma.leaveRequest.findMany({
       where,
-      include: { employee: true },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            displayName: true,
+            personnelCode: true,
+            department: true,
+            groupName: true,
+            mobile: true,
+          },
+        },
+      },
       orderBy: { createdAt: "desc" },
     })
     return NextResponse.json({ items })
   } catch (e: any) {
-    console.error(e)
     return NextResponse.json({ error: e.message }, { status: 500 })
   }
 }
@@ -54,59 +77,71 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const session = await getSession()
-    if (!session) {
-      return NextResponse.json({ error: "وارد شوید" }, { status: 401 })
-    }
+    if (!session) return NextResponse.json({ error: "وارد شوید" }, { status: 401 })
+
     const body = await req.json()
     const type = String(body.type || "").trim()
-    const startDate = body.startDate ? safeDate(body.startDate) : null
-    const endDate = body.endDate ? safeDate(body.endDate) : null
-    if (!type || !startDate || !endDate) {
+    const durationType = body.durationType === "HOURLY" ? "HOURLY" : "DAILY"
+    const startDate = safeDate(body.startDate)
+    if (!type || !startDate) {
+      return NextResponse.json({ error: "نوع و تاریخ الزامی است" }, { status: 400 })
+    }
+
+    let employee = await resolveEmployee(session)
+    // مدیر می‌تواند برای پرسنل دیگر ثبت کند
+    if (body.employeeId && ["admin", "finance"].includes(session.role)) {
+      employee = await prisma.employee.findUnique({ where: { id: body.employeeId } })
+    }
+    if (!employee) {
       return NextResponse.json(
-        { error: "نوع و بازه تاریخ الزامی است" },
+        { error: "پرسنل شما در سیستم تعریف نشده. از مدیر بخواهید شما را در لیست پرسنل ثبت کند." },
         { status: 400 }
       )
     }
 
-    let employee = await prisma.employee.findFirst({
-      where: {
-        OR: [
-          { userId: session.id },
-          { displayName: session.displayName },
-        ],
-      },
-    })
+    let endDate = body.endDate ? safeDate(body.endDate) : startDate
+    let startTime: string | null = null
+    let endTime: string | null = null
+    let amount = 1
+    let amountUnit: "DAY" | "HOUR" = "DAY"
 
-    // اگر پرسنل وصل نبود، با نام کاربر یک رکورد ساده بساز (ادمین بعداً کد پرسنلی بدهد)
-    if (!employee) {
-      const code = `T-${Date.now().toString().slice(-6)}`
-      const parts = session.displayName.trim().split(/\s+/)
-      const firstName = parts[0] || session.displayName
-      const lastName = parts.slice(1).join(" ") || "—"
-      employee = await prisma.employee.create({
-        data: {
-          personnelCode: code,
-          firstName,
-          lastName,
-          displayName: session.displayName,
-          userId: session.id,
-        },
-      })
+    if (durationType === "HOURLY") {
+      startTime = String(body.startTime || "").trim()
+      endTime = String(body.endTime || "").trim()
+      if (!/^\d{1,2}:\d{2}$/.test(startTime) || !/^\d{1,2}:\d{2}$/.test(endTime)) {
+        return NextResponse.json(
+          { error: "برای مرخصی ساعتی، ساعت شروع و پایان لازم است (مثلاً 08:00)" },
+          { status: 400 }
+        )
+      }
+      endDate = startDate
+      amount = hoursBetween(startTime, endTime)
+      amountUnit = "HOUR"
+      if (amount <= 0) {
+        return NextResponse.json({ error: "بازه ساعتی نامعتبر است" }, { status: 400 })
+      }
+    } else {
+      endDate = endDate || startDate
+      amount =
+        typeof body.amount === "number" && body.amount > 0
+          ? body.amount
+          : daysBetween(startDate!, endDate!)
+      amountUnit = "DAY"
     }
-
-    const days =
-      typeof body.days === "number" && body.days > 0
-        ? body.days
-        : dayCount(startDate, endDate)
 
     const item = await prisma.leaveRequest.create({
       data: {
         employeeId: employee.id,
         type,
-        startDate,
-        endDate,
-        days,
+        durationType,
+        startDate: startDate!,
+        endDate: endDate!,
+        startTime,
+        endTime,
+        amount,
+        amountUnit,
         description: body.description?.trim() || null,
+        attachmentUrl: body.attachmentUrl || null,
         status: "PENDING",
         requestedBy: session.displayName,
       },

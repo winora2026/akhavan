@@ -8,9 +8,7 @@ export async function PATCH(
 ) {
   try {
     const session = await getSession()
-    if (!session) {
-      return NextResponse.json({ error: "وارد شوید" }, { status: 401 })
-    }
+    if (!session) return NextResponse.json({ error: "وارد شوید" }, { status: 401 })
     const { id } = await params
     const body = await req.json()
     const action = String(body.action || "").toUpperCase()
@@ -19,17 +17,11 @@ export async function PATCH(
       where: { id },
       include: { employee: true },
     })
-    if (!existing) {
-      return NextResponse.json({ error: "یافت نشد" }, { status: 404 })
-    }
+    if (!existing) return NextResponse.json({ error: "یافت نشد" }, { status: 404 })
 
-    // لغو توسط خود درخواست‌دهنده
     if (action === "CANCEL") {
       if (existing.status !== "PENDING") {
-        return NextResponse.json(
-          { error: "فقط درخواست در انتظار قابل لغو است" },
-          { status: 400 }
-        )
+        return NextResponse.json({ error: "فقط در انتظار قابل لغو است" }, { status: 400 })
       }
       const item = await prisma.leaveRequest.update({
         where: { id },
@@ -39,7 +31,6 @@ export async function PATCH(
       return NextResponse.json({ success: true, item })
     }
 
-    // تأیید / رد فقط مدیر
     if (!["admin", "finance"].includes(session.role)) {
       return NextResponse.json({ error: "دسترسی مدیر لازم است" }, { status: 403 })
     }
@@ -47,10 +38,7 @@ export async function PATCH(
       return NextResponse.json({ error: "عملیات نامعتبر" }, { status: 400 })
     }
     if (existing.status !== "PENDING") {
-      return NextResponse.json(
-        { error: "این درخواست قبلاً بررسی شده" },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: "قبلاً بررسی شده" }, { status: 400 })
     }
 
     const status = action === "APPROVE" ? "APPROVED" : "REJECTED"
@@ -65,25 +53,54 @@ export async function PATCH(
       include: { employee: true },
     })
 
-    // در صورت تأیید استحقاقی، مانده را کم کن (اگر رکورد مانده باشد)
-    if (status === "APPROVED" && existing.type.includes("استحقاقی")) {
-      const bal = await prisma.leaveBalance.findUnique({
+    if (status === "APPROVED") {
+      const year = 1405
+      const leaveType = existing.type.includes("استحقاقی")
+        ? "استحقاقی"
+        : existing.type.includes("استعلاجی")
+          ? "استعلاجی"
+          : "استحقاقی"
+
+      let bal = await prisma.leaveBalance.findUnique({
         where: {
-          employeeId_year: {
+          employeeId_year_leaveType: {
             employeeId: existing.employeeId,
-            year: 1405,
+            year,
+            leaveType,
           },
         },
       })
-      if (bal) {
-        const used = bal.usedDays + existing.days
-        await prisma.leaveBalance.update({
-          where: { id: bal.id },
+      if (!bal && leaveType === "استحقاقی") {
+        bal = await prisma.leaveBalance.create({
           data: {
-            usedDays: used,
-            remainingDays: Math.max(0, bal.entitledDays - used),
+            employeeId: existing.employeeId,
+            year,
+            leaveType,
+            entitled: 30,
+            remaining: 30,
           },
         })
+      }
+      if (bal) {
+        if (existing.amountUnit === "HOUR") {
+          const usedH = bal.usedHours + existing.amount
+          await prisma.leaveBalance.update({
+            where: { id: bal.id },
+            data: {
+              usedHours: usedH,
+              remainingHours: Math.max(0, bal.entitledHours - usedH),
+            },
+          })
+        } else {
+          const used = bal.used + existing.amount
+          await prisma.leaveBalance.update({
+            where: { id: bal.id },
+            data: {
+              used,
+              remaining: Math.max(0, bal.entitled - used),
+            },
+          })
+        }
       }
     }
 

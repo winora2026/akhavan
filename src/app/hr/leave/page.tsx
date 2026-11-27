@@ -6,6 +6,9 @@ import DatePicker from "react-multi-date-picker"
 import persian from "react-date-object/calendars/persian"
 import persian_fa from "react-date-object/locales/persian_fa"
 
+const BG =
+  "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')"
+
 const LEAVE_TYPES = [
   "مرخصی استحقاقی",
   "مرخصی استعلاجی",
@@ -14,20 +17,6 @@ const LEAVE_TYPES = [
   "مأموریت",
   "سایر",
 ]
-
-type Row = {
-  id: string
-  type: string
-  startDate: string
-  endDate: string
-  days: number
-  description?: string | null
-  status: string
-  requestedBy?: string | null
-  reviewedBy?: string | null
-  reviewNote?: string | null
-  employee?: { displayName: string; personnelCode: string }
-}
 
 const STATUS_FA: Record<string, string> = {
   PENDING: "در انتظار تأیید",
@@ -45,12 +34,15 @@ function formatFa(d?: string) {
   }
 }
 
-export default function MyLeavePage() {
-  const [items, setItems] = useState<Row[]>([])
+export default function LeavePage() {
+  const [items, setItems] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [durationType, setDurationType] = useState<"DAILY" | "HOURLY">("DAILY")
   const [type, setType] = useState(LEAVE_TYPES[0])
   const [start, setStart] = useState<any>(null)
   const [end, setEnd] = useState<any>(null)
+  const [startTime, setStartTime] = useState("08:00")
+  const [endTime, setEndTime] = useState("12:00")
   const [description, setDescription] = useState("")
   const [saving, setSaving] = useState(false)
 
@@ -71,7 +63,8 @@ export default function MyLeavePage() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!start || !end) return alert("تاریخ شروع و پایان را انتخاب کنید")
+    if (!start) return alert("تاریخ را انتخاب کنید")
+    if (durationType === "DAILY" && !end) return alert("تاریخ پایان را انتخاب کنید")
     setSaving(true)
     try {
       const res = await fetch("/api/hr/leave-requests", {
@@ -79,18 +72,22 @@ export default function MyLeavePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type,
-          startDate: start.toDate?.() ? start.toDate().toISOString() : start,
-          endDate: end.toDate?.() ? end.toDate().toISOString() : end,
+          durationType,
+          startDate: start.toDate().toISOString(),
+          endDate:
+            durationType === "DAILY"
+              ? end.toDate().toISOString()
+              : start.toDate().toISOString(),
+          startTime: durationType === "HOURLY" ? startTime : undefined,
+          endTime: durationType === "HOURLY" ? endTime : undefined,
           description,
         }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || "خطا")
+      if (!res.ok) throw new Error(data.error)
       setDescription("")
-      setStart(null)
-      setEnd(null)
       load()
-      alert("درخواست ثبت شد و برای مدیر ارسال گردید")
+      alert("درخواست ثبت شد")
     } catch (err: any) {
       alert(err.message)
     } finally {
@@ -98,44 +95,57 @@ export default function MyLeavePage() {
     }
   }
 
-  const cancel = async (id: string) => {
-    if (!confirm("لغو درخواست؟")) return
-    const res = await fetch(`/api/hr/leave-requests/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "CANCEL" }),
-    })
-    if (!res.ok) {
-      const d = await res.json()
-      return alert(d.error || "خطا")
-    }
-    load()
-  }
-
   return (
-    <div className="min-h-screen p-4 md:p-6 bg-slate-50" dir="rtl">
+    <div
+      className="min-h-screen p-4 md:p-6 bg-cover bg-center bg-fixed"
+      dir="rtl"
+      style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif", backgroundImage: BG }}
+    >
       <div className="max-w-4xl mx-auto">
-        <div className="flex items-center gap-3 mb-4">
-          <Link href="/" className="rounded-xl border px-4 py-2 font-bold">
+        <div className="flex flex-wrap gap-3 items-center mb-4">
+          <Link href="/" className="rounded-xl bg-white/90 border border-teal-200 px-4 py-2 font-bold">
             بازگشت
           </Link>
-          <h1 className="text-xl font-black">درخواست مرخصی / مأموریت</h1>
-          <Link
-            href="/hr/approvals"
-            className="mr-auto text-sm font-bold text-teal-700 underline"
-          >
+          <h1 className="text-xl font-black text-blue-950">درخواست مرخصی / مأموریت</h1>
+          <Link href="/hr/employees" className="text-sm font-bold text-teal-800 underline">پرسنل</Link>
+          <Link href="/hr/approvals" className="text-sm font-bold text-teal-800 underline mr-auto">
             کارتابل مدیر
           </Link>
         </div>
 
         <form
           onSubmit={submit}
-          className="rounded-2xl bg-white border p-4 mb-6 shadow-sm space-y-3"
+          className="rounded-2xl bg-white/90 backdrop-blur border border-teal-200 p-5 mb-5 shadow space-y-3"
         >
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setDurationType("DAILY")}
+              className={`flex-1 rounded-xl py-2.5 font-bold border ${
+                durationType === "DAILY"
+                  ? "bg-teal-600 text-white border-teal-700"
+                  : "bg-white text-blue-900 border-teal-200"
+              }`}
+            >
+              مرخصی روزانه
+            </button>
+            <button
+              type="button"
+              onClick={() => setDurationType("HOURLY")}
+              className={`flex-1 rounded-xl py-2.5 font-bold border ${
+                durationType === "HOURLY"
+                  ? "bg-teal-600 text-white border-teal-700"
+                  : "bg-white text-blue-900 border-teal-200"
+              }`}
+            >
+              مرخصی ساعتی
+            </button>
+          </div>
+
           <div>
             <label className="text-xs font-bold">نوع</label>
             <select
-              className="w-full rounded-xl border px-3 py-2 font-semibold"
+              className="w-full rounded-xl border border-teal-300 px-3 py-2 font-semibold"
               value={type}
               onChange={(e) => setType(e.target.value)}
             >
@@ -144,87 +154,112 @@ export default function MyLeavePage() {
               ))}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-bold">از تاریخ</label>
-              <DatePicker
-                value={start}
-                onChange={setStart}
-                calendar={persian}
-                locale={persian_fa}
-                inputClass="w-full rounded-xl border px-3 py-2"
-                calendarPosition="bottom-right"
-              />
+
+          {durationType === "DAILY" ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold">از تاریخ</label>
+                <DatePicker
+                  value={start}
+                  onChange={setStart}
+                  calendar={persian}
+                  locale={persian_fa}
+                  inputClass="w-full rounded-xl border border-teal-300 px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold">تا تاریخ</label>
+                <DatePicker
+                  value={end}
+                  onChange={setEnd}
+                  calendar={persian}
+                  locale={persian_fa}
+                  inputClass="w-full rounded-xl border border-teal-300 px-3 py-2"
+                />
+              </div>
             </div>
-            <div>
-              <label className="text-xs font-bold">تا تاریخ</label>
-              <DatePicker
-                value={end}
-                onChange={setEnd}
-                calendar={persian}
-                locale={persian_fa}
-                inputClass="w-full rounded-xl border px-3 py-2"
-                calendarPosition="bottom-right"
-              />
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs font-bold">تاریخ</label>
+                <DatePicker
+                  value={start}
+                  onChange={setStart}
+                  calendar={persian}
+                  locale={persian_fa}
+                  inputClass="w-full rounded-xl border border-teal-300 px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold">از ساعت</label>
+                <input
+                  type="time"
+                  className="w-full rounded-xl border border-teal-300 px-3 py-2"
+                  value={startTime}
+                  onChange={(e) => setStartTime(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold">تا ساعت</label>
+                <input
+                  type="time"
+                  className="w-full rounded-xl border border-teal-300 px-3 py-2"
+                  value={endTime}
+                  onChange={(e) => setEndTime(e.target.value)}
+                />
+              </div>
             </div>
-          </div>
+          )}
+
           <div>
             <label className="text-xs font-bold">توضیحات</label>
             <textarea
-              className="w-full rounded-xl border px-3 py-2"
+              className="w-full rounded-xl border border-teal-300 px-3 py-2"
               rows={2}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
           </div>
+
           <button
             disabled={saving}
-            className="rounded-xl bg-teal-600 text-white font-bold px-5 py-2.5 disabled:opacity-50"
+            className="rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold px-6 py-2.5 disabled:opacity-50"
           >
             {saving ? "..." : "ثبت درخواست"}
           </button>
         </form>
 
-        <div className="rounded-2xl bg-white border shadow-sm overflow-x-auto">
+        <div className="rounded-2xl bg-white/90 border border-teal-200 shadow overflow-x-auto">
           {loading ? (
-            <p className="p-4 text-center">...</p>
-          ) : items.length === 0 ? (
-            <p className="p-4 text-center text-gray-500">درخواستی ثبت نشده</p>
+            <p className="p-6 text-center font-bold">در حال بارگذاری...</p>
           ) : (
             <table className="w-full text-sm">
               <thead className="bg-teal-700 text-white">
                 <tr>
                   <th className="p-2">نوع</th>
-                  <th className="p-2">از</th>
-                  <th className="p-2">تا</th>
-                  <th className="p-2">روز</th>
+                  <th className="p-2">حالت</th>
+                  <th className="p-2">بازه</th>
+                  <th className="p-2">مقدار</th>
                   <th className="p-2">وضعیت</th>
-                  <th className="p-2">عملیات</th>
                 </tr>
               </thead>
               <tbody>
                 {items.map((r) => (
-                  <tr key={r.id} className="border-b odd:bg-slate-50">
+                  <tr key={r.id} className="border-b odd:bg-white even:bg-teal-50/40">
                     <td className="p-2 font-bold">{r.type}</td>
-                    <td className="p-2 text-center">{formatFa(r.startDate)}</td>
-                    <td className="p-2 text-center">{formatFa(r.endDate)}</td>
-                    <td className="p-2 text-center">{r.days}</td>
                     <td className="p-2 text-center">
-                      {STATUS_FA[r.status] || r.status}
-                      {r.reviewNote ? (
-                        <div className="text-xs text-gray-500">{r.reviewNote}</div>
-                      ) : null}
+                      {r.durationType === "HOURLY" ? "ساعتی" : "روزانه"}
                     </td>
-                    <td className="p-2 text-center">
-                      {r.status === "PENDING" && (
-                        <button
-                          className="text-red-600 text-xs font-bold"
-                          onClick={() => cancel(r.id)}
-                        >
-                          لغو
-                        </button>
-                      )}
+                    <td className="p-2 text-center text-xs">
+                      {formatFa(r.startDate)}
+                      {r.durationType === "HOURLY"
+                        ? ` | ${r.startTime}–${r.endTime}`
+                        : ` تا ${formatFa(r.endDate)}`}
                     </td>
+                    <td className="p-2 text-center font-bold">
+                      {r.amount} {r.amountUnit === "HOUR" ? "ساعت" : "روز"}
+                    </td>
+                    <td className="p-2 text-center">{STATUS_FA[r.status] || r.status}</td>
                   </tr>
                 ))}
               </tbody>
