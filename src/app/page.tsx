@@ -408,7 +408,7 @@ export default function HomePage() {
   ) =>
     open ? (
       <div
-        className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 min-w-[240px]"
+        className="z-50 w-full min-w-[240px] mt-1 static lg:absolute lg:top-0 lg:right-full lg:mr-2 lg:mt-0 lg:w-auto"
         role="menu"
         onMouseLeave={onClose}
       >
@@ -452,14 +452,14 @@ export default function HomePage() {
   const renderSalesCascadingMenu = (open: boolean, onClose: () => void) =>
     open ? (
       <div
-        className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50"
+        className="z-50 w-full mt-1 static lg:absolute lg:top-0 lg:right-full lg:mr-2 lg:mt-0 lg:w-auto"
         role="menu"
         onMouseLeave={() => {
           setSalesFlyout(null)
           onClose()
         }}
       >
-        <div className="flex items-end gap-1">
+        <div className="flex flex-col lg:flex-row items-stretch lg:items-start gap-1">
           <div className="rounded-2xl bg-white/95 backdrop-blur-xl border border-teal-500/30 shadow-2xl p-2 min-w-[200px]">
             {salesRoot.map((item) => {
               const hasChildren = !!item.children?.length
@@ -568,7 +568,7 @@ export default function HomePage() {
     ) : null
 
   const menuBtnClass =
-    "w-full flex flex-col items-center gap-2.5 px-1 py-3 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
+    "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-white/40 focus:bg-white/40 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
 
   return (
     <div
@@ -592,96 +592,94 @@ export default function HomePage() {
 
       <div className="pointer-events-none fixed inset-0 bg-black/5" />
 
-      <div className="relative z-10 app-min-h flex flex-col">
-        <header className="pt-4 px-4 sm:px-8 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-            {currentUser ? (
-              <div className="rounded-2xl bg-white/80 border border-teal-500/30 px-5 py-2.5 shadow">
-                <p className="text-2xl sm:text-3xl font-black text-blue-950 leading-tight">
-                  {currentUser.displayName}
-                </p>
-                <p className="text-base font-bold text-teal-700">
-                  {roleLabel(currentUser.role)}
-                </p>
-              </div>
-            ) : (
-              <div className="text-base text-gray-600 font-bold">
-                در حال دریافت کاربر...
-              </div>
-            )}
-
-            <div className="rounded-2xl bg-white/80 border border-teal-500/30 px-5 py-2.5 shadow">
-              <p className="text-sm font-bold text-blue-800 mb-0.5">سال مالی</p>
-              {editingFiscal ? (
-                <div className="flex items-center gap-2">
-                  <input
-                    autoFocus
-                    defaultValue={fiscalYear}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        saveFiscalYear((e.target as HTMLInputElement).value)
-                      }
-                      if (e.key === "Escape") {
-                        e.stopPropagation()
-                        setEditingFiscal(false)
-                      }
-                    }}
-                    className="w-28 rounded-lg border border-teal-500 px-2 py-1 text-xl font-black text-blue-950 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const el = document.activeElement as HTMLInputElement
-                      saveFiscalYear(el?.value || fiscalYear)
-                    }}
-                    className="text-base font-bold text-teal-700"
-                  >
-                    ذخیره
-                  </button>
-                </div>
+      <div className="relative z-10 app-min-h flex flex-col lg:flex-row">
+        <aside className="w-full lg:w-[350px] lg:shrink-0 flex flex-col gap-3 p-4 sm:px-6 lg:pt-6 lg:pb-4">
+          <div className="rounded-2xl bg-white/80 border border-teal-500/30 px-4 py-3 shadow flex items-center gap-3">
+            <div className="flex-1 min-w-0">
+              {currentUser ? (
+                <>
+                  <p className="text-xl lg:text-2xl font-black text-blue-950 leading-tight truncate">
+                    {currentUser.displayName}
+                  </p>
+                  <p className="text-xs font-bold text-teal-700">
+                    {roleLabel(currentUser.role)}
+                  </p>
+                </>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => setEditingFiscal(true)}
-                  className="text-2xl font-black text-blue-950 hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded"
-                  title="برای تغییر کلیک کنید"
-                >
-                  {fiscalYear}
-                </button>
+                <div className="text-sm text-gray-600 font-bold">
+                  در حال دریافت کاربر...
+                </div>
               )}
             </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="sm:hidden rounded-xl bg-white/60 border border-teal-500/30 px-3 py-2 text-base font-bold text-blue-900 focus:ring-2 focus:ring-teal-500"
-              aria-expanded={mobileOpen}
-              onClick={() => setMobileOpen((v) => !v)}
-            >
-              منو
-            </button>
             <button
               type="button"
               onClick={handleLogout}
-              className="text-lg font-bold text-gray-700 hover:text-teal-700 transition px-3 py-1.5 rounded-lg hover:bg-white/40 focus:outline-none focus:ring-2 focus:ring-teal-500"
+              className="shrink-0 rounded-xl bg-white/70 border border-teal-500/30 px-3 py-1.5 text-sm font-bold text-blue-900 hover:text-teal-700 hover:bg-white/90 transition focus:outline-none focus:ring-2 focus:ring-teal-500"
             >
               خروج
             </button>
           </div>
-        </header>
 
-        <div className="flex-1 min-h-[280px] sm:min-h-[320px]" />
+          <div className="rounded-2xl bg-white/80 border border-teal-500/30 px-4 py-2.5 shadow flex items-center justify-between gap-2">
+            <span className="text-sm font-bold text-blue-800">سال مالی</span>
+            {editingFiscal ? (
+              <div className="flex items-center gap-2">
+                <input
+                  autoFocus
+                  defaultValue={fiscalYear}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      saveFiscalYear((e.target as HTMLInputElement).value)
+                    }
+                    if (e.key === "Escape") {
+                      e.stopPropagation()
+                      setEditingFiscal(false)
+                    }
+                  }}
+                  className="w-24 rounded-lg border border-teal-500 px-2 py-1 text-lg font-black text-blue-950 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = document.activeElement as HTMLInputElement
+                    saveFiscalYear(el?.value || fiscalYear)
+                  }}
+                  className="text-sm font-bold text-teal-700"
+                >
+                  ذخیره
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setEditingFiscal(true)}
+                className="text-xl font-black text-blue-950 hover:text-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded"
+                title="برای تغییر کلیک کنید"
+              >
+                {fiscalYear}
+              </button>
+            )}
+          </div>
 
-        <div className="pb-8 px-4 sm:px-6" id="main-menu">
-          <div className="max-w-7xl mx-auto">
-            <div
-              className={`bg-white/45 backdrop-blur-xl border border-white/50 rounded-2xl shadow-2xl px-3 sm:px-4 py-5 ${
-                mobileOpen ? "block" : "hidden sm:block"
-              }`}
-            >
-              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-9 gap-2">
-                {menuItems.map((item) => {
+          <button
+            type="button"
+            className="lg:hidden rounded-xl bg-white/80 border border-teal-500/30 px-4 py-2.5 text-base font-bold text-blue-900 focus:ring-2 focus:ring-teal-500"
+            aria-expanded={mobileOpen}
+            aria-controls="main-menu"
+            onClick={() => setMobileOpen((v) => !v)}
+          >
+            منو
+          </button>
+
+          <div
+            id="main-menu"
+            className={`bg-white/45 backdrop-blur-xl border border-white/50 rounded-2xl shadow-2xl p-2 ${
+              mobileOpen ? "block" : "hidden lg:block"
+            }`}
+          >
+            <nav className="flex flex-col gap-1">
+
+        {menuItems.map((item) => {
                   const blockedForProduction =
                     isProductionOnly &&
                     (item.isSales ||
@@ -691,9 +689,9 @@ export default function HomePage() {
                       (item as any).lockedForProduction)
 
                   const iconSvg = (
-                    <div className="w-14 h-14 rounded-xl bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
+                    <div className="w-10 h-10 shrink-0 rounded-lg bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
                       <svg
-                        className="w-8 h-8 text-teal-700"
+                        className="w-5 h-5 text-teal-700"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
@@ -709,7 +707,7 @@ export default function HomePage() {
                   )
 
                   const titleSpan = (
-                    <span className="text-base sm:text-[17px] font-bold text-gray-800 text-center whitespace-nowrap">
+                    <span className="flex-1 text-[15px] sm:text-base font-bold text-gray-800 text-right whitespace-nowrap">
                       {item.title}
                     </span>
                   )
@@ -983,11 +981,13 @@ export default function HomePage() {
                     </Link>
                   )
                 })}
-              </div>
-            </div>
+            </nav>
           </div>
+        </aside>
 
-          <div className="mt-6 flex justify-center items-center gap-6 sm:gap-8 flex-wrap text-base sm:text-lg font-bold text-gray-700">
+        <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex-1 min-h-[160px]" />
+          <div className="pb-6 px-4 flex justify-center items-center gap-6 sm:gap-8 flex-wrap text-sm sm:text-base font-bold text-gray-700">
             <a
               href="https://www.akhavanglass.com"
               target="_blank"
