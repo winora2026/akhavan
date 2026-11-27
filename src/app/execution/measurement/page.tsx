@@ -133,10 +133,10 @@ function guessRegionFromAddress(address?: string | null): string {
   if (!address) return ""
   const a = address.replace(/ي/g, "ی").replace(/ك/g, "ک")
   if (/کرج|فردیس|نظرآباد|هشتگرد/i.test(a)) return "کرج / حومه"
-  if (/ستارخان|صادقیه|پونک|جنت.?آباد|آریاشهر|سعادت.?آباد|شهرک غرب|تهرانپارس غرب|آزادگان|آزادی|اکباتان|تهرانسر|چیتگر|وردآورد/i.test(a))
+  if (/ستارخان|صادقیه|پونک|جنت.?آباد|آریاشهر|سعادت.?آباد|شهرک غرب|آزادگان|آزادی|اکباتان|تهرانسر|چیتگر|وردآورد|مرزداران|کاشانی|فردوس|شهرزیبا|شهران|شهرک هما|باغ فیض|بلوار فردوس/i.test(a))
     return "غرب تهران"
   if (/تهرانپارس|نارمک|رسالت|پیروزی|حکیمیه|لویزان|هنگام|دماوند/i.test(a)) return "شرق تهران"
-  if (/نیاوران|فرمانیه|الهیه|تجریش|ولنجک|زعفرانیه|کاشانک|قیطریه|دزاشیب/i.test(a))
+  if (/نیاوران|فرمانیه|الهیه|تجریش|ولنجک|زعفرانیه|کاشانک|قیطریه|دزاشیب|دربند|پاسداران|اقدسیه|سوهانک|کردستان|حکیم|ونک|گاندی|میرداماد|آرژانتین|شریعتی/i.test(a))
     return "شمال تهران"
   if (/راه‌آهن|نازی.?آباد|خانی.?آباد|جوادیه|شاپور|مولوی|شوش|بازار/i.test(a))
     return "جنوب تهران"
@@ -298,6 +298,7 @@ export default function MeasurementPage() {
 
   const filtered = useMemo(() => {
     if (regionFilter === "همه") return items
+    if (regionFilter === "نامشخص") return items.filter((r) => !regionOf(r))
     return items.filter((r) => regionOf(r) === regionFilter)
   }, [items, regionFilter])
 
@@ -835,6 +836,7 @@ export default function MeasurementPage() {
                   {r}
                 </option>
               ))}
+              <option value="نامشخص">نامشخص</option>
             </select>
           </div>
           <button
@@ -852,9 +854,7 @@ export default function MeasurementPage() {
               <button
                 key={name}
                 type="button"
-                onClick={() =>
-                  setRegionFilter(name === "نامشخص" ? "همه" : name)
-                }
+                onClick={() => setRegionFilter(name)}
                 className="rounded-full bg-white/90 border border-teal-300 px-3 py-1 text-xs font-bold text-blue-900"
               >
                 {name}: {count}
