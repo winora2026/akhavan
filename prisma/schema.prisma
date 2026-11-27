@@ -672,3 +672,47 @@ model MeasurementRequest {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 }
+
+// ====================== نصب ======================
+model InstallationJob {
+  id                  String    @id @default(cuid())
+  orderId             String    @unique
+  orderNumber         String
+  customerName        String
+  customerPhone       String?
+  address             String?
+  region              String?
+
+  installationDate    DateTime?
+  appointmentDate     DateTime?
+  appointmentTimeFrom String?
+  appointmentTimeTo   String?
+  appointmentFixed    Boolean   @default(false)
+
+  status              String    @default("PENDING") // PENDING | PROBLEM | DONE | CANCELLED
+  problemReason       String?
+  problemNotes        String?
+
+  // JSON چک‌لیست
+  checklist           String?
+
+  resultNotes         String?
+  resultMedia         String?
+  voiceNotes          String?
+
+  installerName       String?
+  installerPhone      String?
+  salesRep            String?
+  assignedTo          String?
+
+  isReadyForInstall   Boolean   @default(false)
+  readyAt             DateTime?
+
+  smsSentAt           DateTime?
+  smsStatus           String?
+  notes               String?
+
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+}
