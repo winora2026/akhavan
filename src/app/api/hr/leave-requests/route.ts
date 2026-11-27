@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getSession } from "@/lib/auth"
 import { safeDate } from "@/lib/date"
+import { resolveEmployee } from "@/lib/hr"
 
 function daysBetween(start: Date, end: Date) {
   const s = new Date(start)
@@ -18,19 +19,6 @@ function hoursBetween(startTime: string, endTime: string) {
   const b = eh * 60 + (em || 0)
   const diff = (b - a) / 60
   return diff > 0 ? Math.round(diff * 100) / 100 : 0
-}
-
-async function resolveEmployee(session: {
-  id: string
-  displayName: string
-  role: string
-}) {
-  return prisma.employee.findFirst({
-    where: {
-      OR: [{ userId: session.id }, { displayName: session.displayName }],
-      isActive: true,
-    },
-  })
 }
 
 export async function GET(req: NextRequest) {
@@ -94,7 +82,7 @@ export async function POST(req: NextRequest) {
     }
     if (!employee) {
       return NextResponse.json(
-        { error: "پرسنل شما در سیستم تعریف نشده. از مدیر بخواهید شما را در لیست پرسنل ثبت کند." },
+        { error: "حساب شما به هیچ ردیف پرسنلی وصل نیست. از مدیر بخواهید در صفحه «پرسنل»، حساب شما را به پرسنل مربوطه وصل کند." },
         { status: 400 }
       )
     }

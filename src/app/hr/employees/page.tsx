@@ -18,8 +18,16 @@ type Row = {
   phone?: string | null
   shiftName?: string | null
   employmentType?: string | null
+  userId?: string | null
   isActive: boolean
   leaveBalances?: { year: number; leaveType: string; remaining: number; remainingHours: number }[]
+}
+
+type HrUser = {
+  id: string
+  displayName: string
+  role: string
+  stationName?: string | null
 }
 
 type ProfileCustomer = {
@@ -39,6 +47,7 @@ const EMPTY_FORM = {
   shiftName: "",
   employmentType: "",
   entitledDays: "30",
+  userId: "",
 }
 
 export default function EmployeesPage() {
@@ -53,6 +62,7 @@ export default function EmployeesPage() {
   const [err, setErr] = useState("")
 
   const [candidates, setCandidates] = useState<ProfileCustomer[]>([])
+  const [users, setUsers] = useState<HrUser[]>([])
 
   const load = async () => {
     setLoading(true)
@@ -71,7 +81,15 @@ export default function EmployeesPage() {
     ;(async () => {
       try {
         const me = await fetch("/api/auth/me").then((r) => r.json())
-        setCanEdit(["admin", "finance"].includes(me?.user?.role))
+        const editable = ["admin", "finance"].includes(me?.user?.role)
+        setCanEdit(editable)
+        if (editable) {
+          const ures = await fetch("/api/hr/users")
+          if (ures.ok) {
+            const udata = await ures.json()
+            setUsers(udata.users || [])
+          }
+        }
       } catch {}
       try {
         const res = await fetch("/api/customer-profiles")
@@ -144,6 +162,7 @@ export default function EmployeesPage() {
           shiftName: form.shiftName || undefined,
           employmentType: form.employmentType || undefined,
           entitledDays: Number(form.entitledDays) || 30,
+          userId: form.userId || undefined,
         }),
       })
       const data = await res.json()
@@ -155,6 +174,22 @@ export default function EmployeesPage() {
       setErr(e.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const linkUser = async (id: string, userId: string) => {
+    try {
+      const res = await fetch(`/api/hr/employees/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: userId || null }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "خطا")
+      await load()
+    } catch (e: any) {
+      alert(e.message)
+      await load()
     }
   }
 
@@ -249,6 +284,7 @@ export default function EmployeesPage() {
                   <th className="p-2 border border-teal-800">گروه</th>
                   <th className="p-2 border border-teal-800">موبایل</th>
                   <th className="p-2 border border-teal-800">شیفت</th>
+                  <th className="p-2 border border-teal-800">کاربر سیستم</th>
                   <th className="p-2 border border-teal-800">مانده ۱۴۰۵</th>
                 </tr>
               </thead>
@@ -267,6 +303,24 @@ export default function EmployeesPage() {
                         {e.mobile || e.phone || "—"}
                       </td>
                       <td className="p-2 text-center text-xs">{e.shiftName || "—"}</td>
+                      <td className="p-2 text-center text-xs">
+                        {canEdit ? (
+                          <select
+                            className="rounded-lg border border-teal-300 px-1 py-1 text-xs max-w-[150px]"
+                            value={e.userId || ""}
+                            onChange={(ev) => linkUser(e.id, ev.target.value)}
+                          >
+                            <option value="">— وصل نشده —</option>
+                            {users.map((u) => (
+                              <option key={u.id} value={u.id}>
+                                {u.displayName}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          users.find((u) => u.id === e.userId)?.displayName || "—"
+                        )}
+                      </td>
                       <td className="p-2 text-center font-bold">
                         {bal ? `${bal.remaining} روز` : "—"}
                       </td>
@@ -357,6 +411,21 @@ export default function EmployeesPage() {
                   value={form.employmentType}
                   onChange={(e) => setForm({ ...form, employmentType: e.target.value })}
                 />
+              </div>
+              <div>
+                <label className="text-xs font-bold">کاربر سیستم (برای ورود به مرخصی/تردد)</label>
+                <select
+                  className="w-full rounded-xl border px-3 py-2"
+                  value={form.userId}
+                  onChange={(e) => setForm({ ...form, userId: e.target.value })}
+                >
+                  <option value="">— وصل نشده —</option>
+                  {users.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.displayName} ({u.role})
+                    </option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="text-xs font-bold">مانده استحقاقی ۱۴۰۵ (روز)</label>

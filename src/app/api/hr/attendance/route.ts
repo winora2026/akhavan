@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getSession } from "@/lib/auth"
 import { safeDate } from "@/lib/date"
+import { resolveEmployee } from "@/lib/hr"
 
 function startOfDay(d: Date) {
   const x = new Date(d)
@@ -65,12 +66,7 @@ export async function GET(req: NextRequest) {
 
     // پرسنل غیرمدیر فقط تردد خودش
     if (!["admin", "finance"].includes(session.role)) {
-      const emp = await prisma.employee.findFirst({
-        where: {
-          OR: [{ userId: session.id }, { displayName: session.displayName }],
-          isActive: true,
-        },
-      })
+      const emp = await resolveEmployee(session)
       if (!emp) return NextResponse.json({ items: [], summary: null })
       where.employeeId = emp.id
     }
