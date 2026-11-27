@@ -160,6 +160,11 @@ function buildSmsText(row: {
   )
 }
 
+/** منطقه‌ی مؤثر: مقدار ثبت‌شده، وگرنه حدس از آدرس (برای رکوردهای قدیمی) */
+function regionOf(row: { region?: string | null; address?: string | null }) {
+  return row.region || guessRegionFromAddress(row.address) || ""
+}
+
 /** شروع بازه قرار = تاریخ + ساعت from */
 function appointmentStartMs(row: Measurement): number | null {
   if (!row.appointmentDate || !row.appointmentTimeFrom) return null
@@ -293,7 +298,7 @@ export default function MeasurementPage() {
 
   const filtered = useMemo(() => {
     if (regionFilter === "همه") return items
-    return items.filter((r) => (r.region || "") === regionFilter)
+    return items.filter((r) => regionOf(r) === regionFilter)
   }, [items, regionFilter])
 
   const sorted = useMemo(() => {
@@ -304,8 +309,14 @@ export default function MeasurementPage() {
           Number(a.measurementNumber || 0) - Number(b.measurementNumber || 0)
         return sortDir === "asc" ? diff : -diff
       }
-      const av = String((a as any)[sortKey] ?? "")
-      const bv = String((b as any)[sortKey] ?? "")
+      const av =
+        sortKey === "region"
+          ? regionOf(a)
+          : String((a as any)[sortKey] ?? "")
+      const bv =
+        sortKey === "region"
+          ? regionOf(b)
+          : String((b as any)[sortKey] ?? "")
       if (av < bv) return sortDir === "asc" ? -1 : 1
       if (av > bv) return sortDir === "asc" ? 1 : -1
       // سورت ثانویه روی آدرس برای کارهای هم‌منطقه
@@ -317,7 +328,7 @@ export default function MeasurementPage() {
   const regionCounts = useMemo(() => {
     const m = new Map<string, number>()
     for (const r of items) {
-      const k = r.region || "نامشخص"
+      const k = regionOf(r) || "نامشخص"
       m.set(k, (m.get(k) || 0) + 1)
     }
     return Array.from(m.entries()).sort((a, b) => b[1] - a[1])
@@ -950,7 +961,7 @@ export default function MeasurementPage() {
                         <PhoneLinks raw={row.phones} />
                       </td>
                       <td className="p-2 border border-teal-100 text-center text-xs font-bold">
-                        {row.region || "—"}
+                        {regionOf(row) || "—"}
                       </td>
                       <td className="p-2 border border-teal-100 text-xs max-w-[220px] break-words">
                         {row.address || "—"}
@@ -1250,7 +1261,7 @@ export default function MeasurementPage() {
             </h2>
             <p className="text-sm text-gray-600 mb-1">
               معرف: {detail.introducerName || "—"} | منطقه:{" "}
-              {detail.region || "—"}
+              {regionOf(detail) || "—"}
             </p>
             <p className="text-sm text-gray-600 mb-1">
               آدرس: {detail.address || "—"}
