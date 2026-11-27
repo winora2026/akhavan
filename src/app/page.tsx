@@ -31,6 +31,7 @@ export default function HomePage() {
   const [showExecutionMenu, setShowExecutionMenu] = useState(false)
   const [showProductionMenu, setShowProductionMenu] = useState(false)
   const [showFinanceMenu, setShowFinanceMenu] = useState(false)
+  const [showHrMenu, setShowHrMenu] = useState(false)
   const [showReportsMenu, setShowReportsMenu] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [fiscalYear, setFiscalYear] = useState("1405")
@@ -45,6 +46,7 @@ export default function HomePage() {
   const executionRef = useRef<HTMLDivElement>(null)
   const productionRef = useRef<HTMLDivElement>(null)
   const financeRef = useRef<HTMLDivElement>(null)
+  const hrRef = useRef<HTMLDivElement>(null)
   const reportsRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -137,6 +139,9 @@ export default function HomePage() {
       if (financeRef.current && !financeRef.current.contains(e.target as Node)) {
         setShowFinanceMenu(false)
       }
+      if (hrRef.current && !hrRef.current.contains(e.target as Node)) {
+        setShowHrMenu(false)
+      }
       if (reportsRef.current && !reportsRef.current.contains(e.target as Node)) {
         setShowReportsMenu(false)
       }
@@ -187,6 +192,12 @@ export default function HomePage() {
       icon: "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
       isFinance: true,
       lockedForProduction: true,
+    },
+    {
+      title: "منابع انسانی",
+      href: "#",
+      icon: "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z",
+      isHr: true,
     },
     {
       title: "گزارش‌ها",
@@ -327,6 +338,19 @@ export default function HomePage() {
     },
   ]
 
+  const hrItems: SubItem[] = [
+    {
+      title: "درخواست مرخصی / مأموریت",
+      href: "/hr/leave",
+      icon: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z",
+    },
+    {
+      title: "کارتابل مرخصی (مدیر)",
+      href: "/hr/approvals",
+      icon: "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z",
+    },
+  ]
+
   const reportsItems: SubItem[] = [
     {
       title: "گزارش تولید",
@@ -363,6 +387,7 @@ export default function HomePage() {
     setShowExecutionMenu(false)
     setShowProductionMenu(false)
     setShowFinanceMenu(false)
+    setShowHrMenu(false)
     setShowReportsMenu(false)
   }
 
@@ -841,6 +866,38 @@ export default function HomePage() {
                           renderSubMenu(showFinanceMenu, financeItems, () =>
                             setShowFinanceMenu(false)
                           )}
+                      </div>
+                    )
+                  }
+
+                  if ((item as any).isHr) {
+                    return (
+                      <div
+                        key={item.title}
+                        ref={hrRef}
+                        className="relative"
+                        onMouseEnter={() => {
+                          closeAllMenus()
+                          setShowHrMenu(true)
+                        }}
+                      >
+                        <button
+                          type="button"
+                          aria-haspopup="menu"
+                          aria-expanded={showHrMenu}
+                          onClick={() => {
+                            const next = !showHrMenu
+                            closeAllMenus()
+                            setShowHrMenu(next)
+                          }}
+                          className={menuBtnClass}
+                        >
+                          {iconSvg}
+                          {titleSpan}
+                        </button>
+                        {renderSubMenu(showHrMenu, hrItems, () =>
+                          setShowHrMenu(false)
+                        )}
                       </div>
                     )
                   }

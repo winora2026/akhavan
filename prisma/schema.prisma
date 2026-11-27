@@ -714,5 +714,70 @@ model InstallationJob {
 
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
+}
 
+// ====================== منابع انسانی ======================
+model Employee {
+  id             String   @id @default(cuid())
+  personnelCode  String   @unique // هم‌تراز با شماره پرسنلی دستگاه
+  firstName      String
+  lastName       String
+  displayName    String
+  groupName      String? // کارمندان، توافقی نوری، ...
+  phone          String?
+  userId         String?  @unique // اتصال به User اخوان (اختیاری)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  leaveRequests  LeaveRequest[]
+  leaveBalances  LeaveBalance[]
+  attendanceLogs AttendanceLog[]
+}
+
+model LeaveRequest {
+  id            String    @id @default(cuid())
+  employeeId    String
+  employee      Employee  @relation(fields: [employeeId], references: [id])
+  type          String // استحقاقی | استعلاجی | تشویقی | بدون حقوق | مأموریت | سایر
+  startDate     DateTime
+  endDate       DateTime
+  days          Float     @default(1)
+  description   String?
+  status        String    @default("PENDING") // PENDING | APPROVED | REJECTED | CANCELLED
+  requestedBy   String? // نام نمایشی ثبت‌کننده
+  reviewedBy    String?
+  reviewedAt    DateTime?
+  reviewNote    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model LeaveBalance {
+  id            String   @id @default(cuid())
+  employeeId    String
+  employee      Employee @relation(fields: [employeeId], references: [id])
+  year          Int // شمسی مثل 1405
+  entitledDays  Float    @default(0) // استحقاقی سال
+  usedDays      Float    @default(0)
+  remainingDays Float    @default(0)
+  updatedAt     DateTime @updatedAt
+
+  @@unique([employeeId, year])
+}
+
+model AttendanceLog {
+  id            String   @id @default(cuid())
+  employeeId    String
+  employee      Employee @relation(fields: [employeeId], references: [id])
+  date          DateTime // روز
+  checkIn       String? // "08:21"
+  checkOut      String?
+  deviceName    String?
+  source        String   @default("MANUAL") // MANUAL | IMPORT | API
+  rawStatus     String? // ورود | خروج
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  @@index([employeeId, date])
 }
