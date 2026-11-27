@@ -6,6 +6,36 @@ import Link from "next/link"
 const INSTALLER_NAME = "آقای هادی زنگنه"
 const INSTALLER_PHONE = "09127372431"
 
+const REGION_OPTIONS = [
+  "غرب تهران",
+  "شرق تهران",
+  "شمال تهران",
+  "جنوب تهران",
+  "مرکز تهران",
+  "کرج / حومه",
+  "سایر",
+]
+
+function guessRegionFromAddress(address?: string | null): string {
+  if (!address) return ""
+  const a = address.replace(/ي/g, "ی").replace(/ك/g, "ک")
+  if (/کرج|فردیس|نظرآباد|هشتگرد/i.test(a)) return "کرج / حومه"
+  if (/ستارخان|صادقیه|پونک|جنت.?آباد|آریاشهر|گیشا|کوی نصر|سعادت.?آباد|شهرک غرب|آزادگان|آزادی|اکباتان|تهرانسر|چیتگر|وردآورد|مرزداران|کاشانی|فردوس|شهرزیبا|شهران|شهرک هما|باغ فیض|بلوار فردوس/i.test(a))
+    return "غرب تهران"
+  if (/تهرانپارس|نارمک|رسالت|پیروزی|حکیمیه|لویزان|هنگام|دماوند/i.test(a)) return "شرق تهران"
+  if (/نیاوران|فرمانیه|الهیه|تجریش|ولنجک|زعفرانیه|کاشانک|قیطریه|دزاشیب|دربند|پاسداران|اقدسیه|سوهانک|کردستان|حکیم|ونک|گاندی|میرداماد|آرژانتین|شریعتی/i.test(a))
+    return "شمال تهران"
+  if (/راه‌آهن|نازی.?آباد|خانی.?آباد|جوادیه|شاپور|مولوی|شوش|بازار/i.test(a))
+    return "جنوب تهران"
+  if (/انقلاب|کریم‌خان|ولی.?عصر|مرکز|فردوسی|حسن.?آباد/i.test(a)) return "مرکز تهران"
+  return ""
+}
+
+/** منطقه‌ی مؤثر: مقدار ثبت‌شده، وگرنه حدس از آدرس */
+function regionOf(row: { region?: string | null; address?: string | null }) {
+  return row.region || guessRegionFromAddress(row.address) || ""
+}
+
 type Checklist = {
   yaraq: boolean
   lifting: boolean
@@ -54,6 +84,7 @@ type SortKey =
   | "isReadyForInstall"
   | "status"
   | "salesRep"
+  | "region"
 
 const PROBLEM_REASONS = [
   "کسری قطعه / یراق",
@@ -109,6 +140,7 @@ export default function InstallationPage() {
   const [items, setItems] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
+  const [regionFilter, setRegionFilter] = useState("همه")
   const [sortKey, setSortKey] = useState<SortKey>("installationDate")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
   const [currentUser, setCurrentUser] = useState("")
@@ -157,8 +189,14 @@ export default function InstallationPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
 
+  const filtered = useMemo(() => {
+    if (regionFilter === "همه") return items
+    if (regionFilter === "نامشخص") return items.filter((r) => !regionOf(r))
+    return items.filter((r) => regionOf(r) === regionFilter)
+  }, [items, regionFilter])
+
   const sorted = useMemo(() => {
-    const arr = [...items]
+    const arr = [...filtered]
     arr.sort((a, b) => {
       if (sortKey === "isReadyForInstall") {
         const av = a.isReadyForInstall ? 1 : 0
@@ -170,14 +208,23 @@ export default function InstallationPage() {
         const bv = b.installationDate ? new Date(b.installationDate).getTime() : 0
         return sortDir === "asc" ? av - bv : bv - av
       }
-      const av = String((a as any)[sortKey] ?? "")
-      const bv = String((b as any)[sortKey] ?? "")
+      const av = sortKey === "region" ? regionOf(a) : String((a as any)[sortKey] ?? "")
+      const bv = sortKey === "region" ? regionOf(b) : String((b as any)[sortKey] ?? "")
       if (av < bv) return sortDir === "asc" ? -1 : 1
       if (av > bv) return sortDir === "asc" ? 1 : -1
       return 0
     })
     return arr
-  }, [items, sortKey, sortDir])
+  }, [filtered, sortKey, sortDir])
+
+  const regionCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of items) {
+      const k = regionOf(r) || "نامشخص"
+      m.set(k, (m.get(k) || 0) + 1)
+    }
+    return Array.from(m.entries()).sort((a, b) => b[1] - a[1])
+  }, [items])
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"))
@@ -409,6 +456,24 @@ export default function InstallationPage() {
               className="w-full rounded-xl border border-teal-300 px-3 py-2 font-semibold"
             />
           </div>
+          <div className="min-w-[160px]">
+            <label className="block text-xs font-bold text-blue-900 mb-1">
+              منطقه
+            </label>
+            <select
+              value={regionFilter}
+              onChange={(e) => setRegionFilter(e.target.value)}
+              className="w-full rounded-xl border border-teal-300 px-3 py-2 font-semibold"
+            >
+              <option value="همه">همه مناطق</option>
+              {REGION_OPTIONS.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+              <option value="نامشخص">نامشخص</option>
+            </select>
+          </div>
           <button
             onClick={fetchList}
             className="rounded-xl bg-blue-900 text-white font-bold px-5 py-2"
@@ -416,6 +481,26 @@ export default function InstallationPage() {
             اعمال
           </button>
         </div>
+
+        {/* خلاصه تعداد به تفکیک منطقه */}
+        {regionCounts.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-3">
+            {regionCounts.map(([name, count]) => (
+              <button
+                key={name}
+                type="button"
+                onClick={() => setRegionFilter(name)}
+                className={`rounded-full border px-3 py-1 text-xs font-bold ${
+                  regionFilter === name
+                    ? "bg-teal-600 text-white border-teal-700"
+                    : "bg-white/90 text-blue-900 border-teal-300"
+                }`}
+              >
+                {name}: {count}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="rounded-2xl bg-white/90 border border-teal-200 shadow overflow-x-auto">
           {loading ? (
@@ -443,6 +528,12 @@ export default function InstallationPage() {
                   </th>
                   <th className="p-2 border border-teal-800">تلفن</th>
                   <th className="p-2 border border-teal-800">آدرس نصب</th>
+                  <th
+                    className="p-2 border border-teal-800 cursor-pointer"
+                    onClick={() => toggleSort("region")}
+                  >
+                    منطقه{sortMark("region")}
+                  </th>
                   <th
                     className="p-2 border border-teal-800 cursor-pointer"
                     onClick={() => toggleSort("installationDate")}
@@ -508,6 +599,9 @@ export default function InstallationPage() {
                       <td className="p-2 border border-teal-100 text-xs max-w-[220px] break-words">
                         {row.address || "—"}
                       </td>
+                      <td className="p-2 border border-teal-100 text-center text-xs font-bold text-blue-900">
+                        {regionOf(row) || "—"}
+                      </td>
                       <td className="p-2 border border-teal-100 text-center font-semibold">
                         {formatFa(row.installationDate)}
                       </td>
@@ -555,7 +649,7 @@ export default function InstallationPage() {
               سفارش {detail.orderNumber} — {detail.customerName}
             </h2>
             <p className="text-sm text-gray-600 mb-1">
-              آدرس: {detail.address || "—"}
+              آدرس: {detail.address || "—"} | منطقه: {regionOf(detail) || "—"}
             </p>
             <p className="text-sm text-gray-600 mb-1">
               تلفن:{" "}
