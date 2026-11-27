@@ -4,6 +4,9 @@ import { getSession } from "@/lib/auth"
 import { safeDate } from "@/lib/date"
 import { notifyMeasurementRegistered } from "@/lib/measurementSms"
 
+const DEFAULT_INSTALLER_NAME = "آقای هادی زنگنه"
+const DEFAULT_INSTALLER_PHONE = "09127372431"
+
 // شماره‌ی درخواست: ترتیبی از ۱ (۱، ۲، ۳، ...)
 async function nextMeasurementNumber() {
   const rows = await prisma.measurementRequest.findMany({
@@ -11,7 +14,9 @@ async function nextMeasurementNumber() {
   })
   let max = 0
   for (const r of rows) {
-    const n = Number(String(r.measurementNumber || "").match(/(\d+)$/)?.[1] || 0)
+    const n = Number(
+      String(r.measurementNumber || "").match(/(\d+)$/)?.[1] || 0
+    )
     if (n > max) max = n
   }
   return String(max + 1)
@@ -32,6 +37,7 @@ export async function GET(req: NextRequest) {
         { phones: { contains: q } },
         { address: { contains: q } },
         { introducerName: { contains: q } },
+        { region: { contains: q } },
       ]
     }
 
@@ -56,20 +62,26 @@ export async function POST(req: NextRequest) {
 
     const customerName = String(body.customerName || "").trim()
     if (!customerName) {
-      return NextResponse.json({ error: "نام مشتری الزامی است" }, { status: 400 })
+      return NextResponse.json(
+        { error: "نام مشتری الزامی است" },
+        { status: 400 }
+      )
     }
 
     const phones = Array.isArray(body.phones)
       ? body.phones.map((p: any) => String(p).trim()).filter(Boolean)
       : []
     if (phones.length === 0) {
-      return NextResponse.json({ error: "حداقل یک شماره تلفن لازم است" }, { status: 400 })
+      return NextResponse.json(
+        { error: "حداقل یک شماره تلفن لازم است" },
+        { status: 400 }
+      )
     }
 
     const measurementNumber = await nextMeasurementNumber()
 
     // تاریخ اندازه‌گیری: پیش‌فرض +۲ روز
-    let measurementDate = body.measurementDate
+    const measurementDate = body.measurementDate
       ? safeDate(body.measurementDate)
       : new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)
 
@@ -81,14 +93,24 @@ export async function POST(req: NextRequest) {
         customerName,
         phones: JSON.stringify(phones),
         address: body.address?.trim() || null,
-        addressMedia: body.addressMedia ? JSON.stringify(body.addressMedia) : null,
+        region: body.region?.trim() || null,
+        addressMedia: body.addressMedia
+          ? JSON.stringify(body.addressMedia)
+          : null,
         workTypes: body.workTypes ? JSON.stringify(body.workTypes) : null,
         workTypeOther: body.workTypeOther?.trim() || null,
-        requestDate: body.requestDate ? safeDate(body.requestDate) : new Date(),
+        requestDate: body.requestDate
+          ? safeDate(body.requestDate)
+          : new Date(),
         measurementDate,
         status: "PENDING",
         salesRep: session?.displayName || body.salesRep || null,
         notes: body.notes?.trim() || null,
+        installerName:
+          body.installerName?.trim() || DEFAULT_INSTALLER_NAME,
+        installerPhone:
+          body.installerPhone?.trim() || DEFAULT_INSTALLER_PHONE,
+        appointmentFixed: false,
       },
     })
 

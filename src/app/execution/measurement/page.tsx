@@ -6,6 +6,9 @@ import DatePicker, { DateObject } from "react-multi-date-picker"
 import persian from "react-date-object/calendars/persian"
 import persian_fa from "react-date-object/locales/persian_fa"
 
+const INSTALLER_NAME = "آقای هادی زنگنه"
+const INSTALLER_PHONE = "09127372431"
+
 type Measurement = {
   id: string
   measurementNumber: string
@@ -15,10 +18,18 @@ type Measurement = {
   phones: string
   address?: string | null
   addressMedia?: string | null
+  region?: string | null
   workTypes?: string | null
   workTypeOther?: string | null
   requestDate: string
   measurementDate?: string | null
+  appointmentDate?: string | null
+  appointmentTimeFrom?: string | null
+  appointmentTimeTo?: string | null
+  appointmentFixed?: boolean | null
+  smsSentAt?: string | null
+  installerName?: string | null
+  installerPhone?: string | null
   status: string
   salesRep?: string | null
   assignedTo?: string | null
@@ -33,7 +44,11 @@ type Measurement = {
 type SortKey =
   | "measurementNumber"
   | "customerName"
+  | "introducerName"
+  | "region"
+  | "address"
   | "measurementDate"
+  | "appointmentDate"
   | "requestDate"
   | "salesRep"
   | "status"
@@ -59,6 +74,21 @@ const WORK_OPTIONS = [
   "سایر",
 ]
 
+const REGION_OPTIONS = [
+  "غرب تهران",
+  "شرق تهران",
+  "شمال تهران",
+  "جنوب تهران",
+  "مرکز تهران",
+  "کرج / حومه",
+  "سایر",
+]
+
+const HOUR_OPTIONS = Array.from({ length: 13 }, (_, i) => {
+  const h = i + 8 // 08 تا 20
+  return `${String(h).padStart(2, "0")}:00`
+})
+
 function parseJsonArray(raw?: string | null): string[] {
   if (!raw) return []
   try {
@@ -78,10 +108,66 @@ function formatFa(dt?: string | null) {
   }
 }
 
+function formatFaDateTime(dt?: string | null) {
+  if (!dt) return "—"
+  try {
+    return new Date(dt).toLocaleString("fa-IR", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+  } catch {
+    return "—"
+  }
+}
+
 function defaultMeasurementDate(): DateObject {
   const d = new Date()
   d.setDate(d.getDate() + 2)
   return new DateObject({ date: d, calendar: persian, locale: persian_fa })
+}
+
+function guessRegionFromAddress(address?: string | null): string {
+  if (!address) return ""
+  const a = address.replace(/ي/g, "ی").replace(/ك/g, "ک")
+  if (/کرج|فردیس|نظرآباد|هشتگرد/i.test(a)) return "کرج / حومه"
+  if (/ستارخان|صادقیه|پونک|جنت.?آباد|آریاشهر|سعادت.?آباد|شهرک غرب|تهرانپارس غرب|آزادگان|آزادی|اکباتان|تهرانسر|چیتگر|وردآورد/i.test(a))
+    return "غرب تهران"
+  if (/تهرانپارس|نارمک|رسالت|پیروزی|حکیمیه|لویزان|هنگام|دماوند/i.test(a)) return "شرق تهران"
+  if (/نیاوران|فرمانیه|الهیه|تجریش|ولنجک|زعفرانیه|کاشانک|قیطریه|دزاشیب/i.test(a))
+    return "شمال تهران"
+  if (/راه‌آهن|نازی.?آباد|خانی.?آباد|جوادیه|شاپور|مولوی|شوش|بازار/i.test(a))
+    return "جنوب تهران"
+  if (/انقلاب|کریم‌خان|ولی.?عصر|مرکز|فردوسی|حسن.?آباد/i.test(a)) return "مرکز تهران"
+  return ""
+}
+
+function buildSmsText(row: {
+  customerName: string
+  appointmentDate?: string | null
+  appointmentTimeFrom?: string | null
+  appointmentTimeTo?: string | null
+}) {
+  const dateFa = formatFa(row.appointmentDate)
+  const from = row.appointmentTimeFrom || "—"
+  const to = row.appointmentTimeTo || "—"
+  return (
+    `مشتری گرامی ${row.customerName}،\n` +
+    `${INSTALLER_NAME}، نصاب شرکت شیشه و آینه اخوان، در تاریخ ${dateFa} بین ساعت ${from} تا ${to} برای اندازه‌گیری در محل شما حضور می‌یابد.\n` +
+    `هماهنگی مجدد: ${INSTALLER_PHONE}`
+  )
+}
+
+/** شروع بازه قرار = تاریخ + ساعت from */
+function appointmentStartMs(row: Measurement): number | null {
+  if (!row.appointmentDate || !row.appointmentTimeFrom) return null
+  const d = new Date(row.appointmentDate)
+  const [hh, mm] = row.appointmentTimeFrom.split(":").map(Number)
+  if (Number.isNaN(hh)) return null
+  d.setHours(hh, mm || 0, 0, 0)
+  return d.getTime()
 }
 
 export default function MeasurementPage() {
@@ -89,7 +175,8 @@ export default function MeasurementPage() {
   const [items, setItems] = useState<Measurement[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
-  const [sortKey, setSortKey] = useState<SortKey>("measurementNumber")
+  const [regionFilter, setRegionFilter] = useState("همه")
+  const [sortKey, setSortKey] = useState<SortKey>("region")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
 
   const [showForm, setShowForm] = useState(false)
@@ -103,6 +190,7 @@ export default function MeasurementPage() {
   const [customerName, setCustomerName] = useState("")
   const [phones, setPhones] = useState<string[]>([""])
   const [address, setAddress] = useState("")
+  const [region, setRegion] = useState("")
   const [addressFiles, setAddressFiles] = useState<{ url: string; name: string }[]>([])
   const [workTypes, setWorkTypes] = useState<string[]>([])
   const [workTypeOther, setWorkTypeOther] = useState("")
@@ -122,6 +210,15 @@ export default function MeasurementPage() {
   const recChunksRef = useRef<Blob[]>([])
   const [actionLoading, setActionLoading] = useState(false)
 
+  // هماهنگی وقت
+  const [apptDate, setApptDate] = useState<any>(null)
+  const [apptFrom, setApptFrom] = useState("10:00")
+  const [apptTo, setApptTo] = useState("11:00")
+  const [reminders, setReminders] = useState<
+    { id: string; title: string; body: string }[]
+  >([])
+  const remindedRef = useRef<Set<string>>(new Set())
+
   useEffect(() => {
     ;(async () => {
       try {
@@ -132,12 +229,20 @@ export default function MeasurementPage() {
         }
       } catch {}
     })()
+    // اجازه نوتیفیکیشن مرورگر (برای یادآوری ۳۰ دقیقه قبل)
+    if (typeof window !== "undefined" && "Notification" in window) {
+      if (Notification.permission === "default") {
+        Notification.requestPermission().catch(() => {})
+      }
+    }
   }, [])
 
   const fetchList = async () => {
     setLoading(true)
     try {
-      const res = await fetch(`/api/measurements?status=${tab}&q=${encodeURIComponent(search)}`)
+      const res = await fetch(
+        `/api/measurements?status=${tab}&q=${encodeURIComponent(search)}`
+      )
       const data = await res.json()
       setItems(data.items || [])
     } catch {
@@ -152,22 +257,71 @@ export default function MeasurementPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
 
+  // یادآوری حدود ۳۰ دقیقه قبل از قرار
+  useEffect(() => {
+    const tick = () => {
+      const now = Date.now()
+      const next: { id: string; title: string; body: string }[] = []
+      for (const row of items) {
+        if (row.status === "DONE" || !row.appointmentFixed) continue
+        const start = appointmentStartMs(row)
+        if (start == null) continue
+        const diff = start - now
+        // پنجره ۱۵ تا ۳۵ دقیقه قبل (هر بار رفرش لیست هم چک می‌شود)
+        if (diff > 15 * 60 * 1000 && diff <= 35 * 60 * 1000) {
+          const key = `${row.id}-${row.appointmentDate}-${row.appointmentTimeFrom}`
+          if (remindedRef.current.has(key)) continue
+          remindedRef.current.add(key)
+          const title = `یادآوری اندازه‌گیری`
+          const body = `${row.customerName} — ${formatFa(row.appointmentDate)} ساعت ${row.appointmentTimeFrom} تا ${row.appointmentTimeTo}\n${row.address || ""}`
+          next.push({ id: row.id, title, body })
+          if (typeof window !== "undefined" && "Notification" in window) {
+            if (Notification.permission === "granted") {
+              try {
+                new Notification(title, { body, dir: "rtl" })
+              } catch {}
+            }
+          }
+        }
+      }
+      if (next.length) setReminders((prev) => [...next, ...prev].slice(0, 5))
+    }
+    tick()
+    const t = setInterval(tick, 60 * 1000)
+    return () => clearInterval(t)
+  }, [items])
+
+  const filtered = useMemo(() => {
+    if (regionFilter === "همه") return items
+    return items.filter((r) => (r.region || "") === regionFilter)
+  }, [items, regionFilter])
+
   const sorted = useMemo(() => {
-    const arr = [...items]
+    const arr = [...filtered]
     arr.sort((a, b) => {
-      // شماره‌ی اندازه‌گیری عددی مقایسه می‌شود (۲ قبل از ۱۰)
       if (sortKey === "measurementNumber") {
-        const diff = Number(a.measurementNumber || 0) - Number(b.measurementNumber || 0)
+        const diff =
+          Number(a.measurementNumber || 0) - Number(b.measurementNumber || 0)
         return sortDir === "asc" ? diff : -diff
       }
-      const av = (a as any)[sortKey] ?? ""
-      const bv = (b as any)[sortKey] ?? ""
+      const av = String((a as any)[sortKey] ?? "")
+      const bv = String((b as any)[sortKey] ?? "")
       if (av < bv) return sortDir === "asc" ? -1 : 1
       if (av > bv) return sortDir === "asc" ? 1 : -1
-      return 0
+      // سورت ثانویه روی آدرس برای کارهای هم‌منطقه
+      return String(a.address || "").localeCompare(String(b.address || ""), "fa")
     })
     return arr
-  }, [items, sortKey, sortDir])
+  }, [filtered, sortKey, sortDir])
+
+  const regionCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of items) {
+      const k = r.region || "نامشخص"
+      m.set(k, (m.get(k) || 0) + 1)
+    }
+    return Array.from(m.entries()).sort((a, b) => b[1] - a[1])
+  }, [items])
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"))
@@ -198,6 +352,7 @@ export default function MeasurementPage() {
     setCustomerName("")
     setPhones([""])
     setAddress("")
+    setRegion("")
     setAddressFiles([])
     setWorkTypes([])
     setWorkTypeOther("")
@@ -212,7 +367,6 @@ export default function MeasurementPage() {
     setShowForm(true)
   }
 
-  // پر کردن فرم با اطلاعات ردیف برای ویرایش
   const openEdit = (row: Measurement) => {
     setEditing(row)
     setIntroducerName(row.introducerName || "")
@@ -221,6 +375,7 @@ export default function MeasurementPage() {
     const ph = parseJsonArray(row.phones)
     setPhones(ph.length ? ph : [""])
     setAddress(row.address || "")
+    setRegion(row.region || guessRegionFromAddress(row.address) || "")
     setAddressFiles(
       parseJsonArray(row.addressMedia).map((url) => ({
         url,
@@ -231,12 +386,20 @@ export default function MeasurementPage() {
     setWorkTypeOther(row.workTypeOther || "")
     setRequestDate(
       row.requestDate
-        ? new DateObject({ date: new Date(row.requestDate), calendar: persian, locale: persian_fa })
+        ? new DateObject({
+            date: new Date(row.requestDate),
+            calendar: persian,
+            locale: persian_fa,
+          })
         : new DateObject({ calendar: persian, locale: persian_fa })
     )
     setMeasurementDate(
       row.measurementDate
-        ? new DateObject({ date: new Date(row.measurementDate), calendar: persian, locale: persian_fa })
+        ? new DateObject({
+            date: new Date(row.measurementDate),
+            calendar: persian,
+            locale: persian_fa,
+          })
         : defaultMeasurementDate()
     )
     setNotes(row.notes || "")
@@ -249,7 +412,12 @@ export default function MeasurementPage() {
   }
 
   const deleteRow = async (row: Measurement) => {
-    if (!confirm(`درخواست شماره ${row.measurementNumber} (${row.customerName}) حذف شود؟`)) return
+    if (
+      !confirm(
+        `درخواست شماره ${row.measurementNumber} (${row.customerName}) حذف شود؟`
+      )
+    )
+      return
     try {
       const res = await fetch(`/api/measurements/${row.id}`, { method: "DELETE" })
       const data = await res.json().catch(() => ({}))
@@ -265,6 +433,9 @@ export default function MeasurementPage() {
     const cleanPhones = phones.map((p) => p.trim()).filter(Boolean)
     if (!cleanPhones.length) return alert("حداقل یک شماره تلفن لازم است")
 
+    const resolvedRegion =
+      region || guessRegionFromAddress(address) || null
+
     setSaving(true)
     try {
       const res = await fetch(
@@ -278,14 +449,18 @@ export default function MeasurementPage() {
             customerName,
             phones: cleanPhones,
             address,
+            region: resolvedRegion,
             addressMedia: addressFiles.map((f) => f.url),
             workTypes,
             workTypeOther,
-            requestDate: requestDate?.toDate?.()?.toISOString?.() || new Date().toISOString(),
+            requestDate:
+              requestDate?.toDate?.()?.toISOString?.() || new Date().toISOString(),
             measurementDate:
               measurementDate?.toDate?.()?.toISOString?.() ||
               new Date(Date.now() + 2 * 86400000).toISOString(),
             notes,
+            installerName: INSTALLER_NAME,
+            installerPhone: INSTALLER_PHONE,
             ...(editing ? {} : { salesRep: currentUser }),
           }),
         }
@@ -314,14 +489,36 @@ export default function MeasurementPage() {
     setDetail(row)
     setResultNotes(row.resultNotes || "")
     setResultFiles(
-      parseJsonArray(row.resultMedia).map((url) => ({ url, name: url.split("/").pop() || "file" }))
+      parseJsonArray(row.resultMedia).map((url) => ({
+        url,
+        name: url.split("/").pop() || "file",
+      }))
     )
     setVoiceFiles(
-      parseJsonArray(row.voiceNotes).map((url) => ({ url, name: url.split("/").pop() || "voice" }))
+      parseJsonArray(row.voiceNotes).map((url) => ({
+        url,
+        name: url.split("/").pop() || "voice",
+      }))
     )
+    setApptDate(
+      row.appointmentDate
+        ? new DateObject({
+            date: new Date(row.appointmentDate),
+            calendar: persian,
+            locale: persian_fa,
+          })
+        : row.measurementDate
+          ? new DateObject({
+              date: new Date(row.measurementDate),
+              calendar: persian,
+              locale: persian_fa,
+            })
+          : defaultMeasurementDate()
+    )
+    setApptFrom(row.appointmentTimeFrom || "10:00")
+    setApptTo(row.appointmentTimeTo || "11:00")
   }
 
-  // ضبط ویس با میکروفون (MediaRecorder) و آپلود خودکار
   const toggleRecording = async () => {
     if (recording) {
       mediaRecorderRef.current?.stop()
@@ -337,10 +534,14 @@ export default function MeasurementPage() {
       }
       rec.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop())
-        const blob = new Blob(recChunksRef.current, { type: rec.mimeType || "audio/webm" })
+        const blob = new Blob(recChunksRef.current, {
+          type: rec.mimeType || "audio/webm",
+        })
         if (!blob.size) return
         const ext = (rec.mimeType || "").includes("mp4") ? "m4a" : "webm"
-        const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: blob.type })
+        const file = new File([blob], `voice-${Date.now()}.${ext}`, {
+          type: blob.type,
+        })
         try {
           const up = await uploadFile(file)
           setVoiceFiles((prev) => [...prev, up])
@@ -352,7 +553,108 @@ export default function MeasurementPage() {
       mediaRecorderRef.current = rec
       setRecording(true)
     } catch {
-      alert("دسترسی به میکروفون ممکن نشد. از دکمه‌ی «انتخاب فایل ویس» استفاده کنید.")
+      alert(
+        "دسترسی به میکروفون ممکن نشد. از دکمه‌ی «انتخاب فایل ویس» استفاده کنید."
+      )
+    }
+  }
+
+  const sendAppointmentSms = async (row: Measurement, payload: {
+    appointmentDate: string
+    appointmentTimeFrom: string
+    appointmentTimeTo: string
+  }) => {
+    const phoneList = parseJsonArray(row.phones)
+    if (!phoneList.length) return { ok: false, error: "شماره مشتری ثبت نشده" }
+    const text = buildSmsText({
+      customerName: row.customerName,
+      ...payload,
+    })
+    try {
+      const res = await fetch("/api/sms/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: phoneList,
+          text,
+          measurementId: row.id,
+          kind: "measurement_appointment",
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        // اگر پنل پیامک هنوز وصل نیست، فقط هشدار می‌دهیم
+        return {
+          ok: false,
+          error: data.error || "ارسال پیامک انجام نشد (پنل پیامک را بررسی کنید)",
+        }
+      }
+      if (data.mock) {
+        return {
+          ok: false,
+          error: "پنل پیامک در حالت آزمایشی است — پیامک واقعی ارسال نشد",
+        }
+      }
+      return { ok: true }
+    } catch {
+      return { ok: false, error: "ارتباط با سرویس پیامک برقرار نشد" }
+    }
+  }
+
+  /** فیکس یا موکول کردن وقت + پیامک */
+  const saveAppointment = async (reschedule: boolean) => {
+    if (!detail) return
+    if (!apptDate) return alert("تاریخ را انتخاب کنید")
+    if (!apptFrom || !apptTo) return alert("بازه ساعت را مشخص کنید")
+    if (apptFrom >= apptTo) return alert("ساعت پایان باید بعد از شروع باشد")
+
+    const iso =
+      apptDate?.toDate?.()?.toISOString?.() ||
+      new Date().toISOString()
+
+    setActionLoading(true)
+    try {
+      const body = {
+        appointmentDate: iso,
+        appointmentTimeFrom: apptFrom,
+        appointmentTimeTo: apptTo,
+        appointmentFixed: true,
+        measurementDate: iso,
+        installerName: INSTALLER_NAME,
+        installerPhone: INSTALLER_PHONE,
+        assignedTo: currentUser || INSTALLER_NAME,
+        status: "PENDING",
+        ...(reschedule
+          ? { notes: `${detail.notes || ""}\n[موکول] به ${formatFa(iso)} ${apptFrom}-${apptTo}`.trim() }
+          : {}),
+      }
+      const res = await fetch(`/api/measurements/${detail.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "خطا در ذخیره وقت")
+
+      const sms = await sendAppointmentSms(detail, {
+        appointmentDate: iso,
+        appointmentTimeFrom: apptFrom,
+        appointmentTimeTo: apptTo,
+      })
+
+      alert(
+        sms.ok
+          ? reschedule
+            ? "وقت جدید ثبت و پیامک برای مشتری ارسال شد."
+            : "وقت فیکس شد و پیامک برای مشتری ارسال شد."
+          : `وقت ذخیره شد. پیامک: ${sms.error || "ارسال نشد"}`
+      )
+      setDetail(null)
+      fetchList()
+    } catch (e: any) {
+      alert(e.message || "خطا")
+    } finally {
+      setActionLoading(false)
     }
   }
 
@@ -368,7 +670,9 @@ export default function MeasurementPage() {
           resultMedia: resultFiles.map((f) => f.url),
           voiceNotes: voiceFiles.map((f) => f.url),
           status: markDone ? "DONE" : detail.status,
-          assignedTo: currentUser || undefined,
+          assignedTo: currentUser || INSTALLER_NAME,
+          installerName: INSTALLER_NAME,
+          installerPhone: INSTALLER_PHONE,
         }),
       })
       const data = await res.json()
@@ -382,6 +686,25 @@ export default function MeasurementPage() {
     }
   }
 
+  const PhoneLinks = ({ raw }: { raw?: string | null }) => {
+    const list = parseJsonArray(raw)
+    if (!list.length) return <span>—</span>
+    return (
+      <span className="inline-flex flex-col gap-0.5 items-center">
+        {list.map((p) => (
+          <a
+            key={p}
+            href={`tel:${p.replace(/[^\d+]/g, "")}`}
+            className="text-teal-800 font-bold underline dir-ltr"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {p}
+          </a>
+        ))}
+      </span>
+    )
+  }
+
   return (
     <div
       className="min-h-screen p-4 md:p-6 bg-cover bg-center bg-fixed"
@@ -393,6 +716,37 @@ export default function MeasurementPage() {
       }}
     >
       <div className="max-w-7xl mx-auto">
+        {/* یادآوری پاپ‌آپ */}
+        {reminders.length > 0 && (
+          <div className="fixed top-4 left-4 right-4 z-[60] flex flex-col gap-2 md:left-auto md:w-96">
+            {reminders.map((r) => (
+              <div
+                key={r.id + r.title}
+                className="rounded-2xl border border-amber-400 bg-amber-50 shadow-xl p-4"
+              >
+                <p className="font-black text-amber-900">{r.title}</p>
+                <p className="text-sm text-amber-900 whitespace-pre-line mt-1">
+                  {r.body}
+                </p>
+                <p className="text-xs text-amber-800 mt-1">
+                  نصاب: {INSTALLER_NAME} —{" "}
+                  <a className="underline" href={`tel:${INSTALLER_PHONE}`}>
+                    {INSTALLER_PHONE}
+                  </a>
+                </p>
+                <button
+                  className="mt-2 text-xs font-bold text-amber-900 underline"
+                  onClick={() =>
+                    setReminders((prev) => prev.filter((x) => x.id !== r.id))
+                  }
+                >
+                  بستن
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-3">
             <Link
@@ -401,7 +755,15 @@ export default function MeasurementPage() {
             >
               بازگشت
             </Link>
-            <h1 className="text-xl md:text-2xl font-black text-blue-950">اندازه‌گیری</h1>
+            <h1 className="text-xl md:text-2xl font-black text-blue-950">
+              اندازه‌گیری
+            </h1>
+          </div>
+          <div className="text-xs md:text-sm font-bold text-blue-900 bg-white/80 rounded-xl px-3 py-2 border border-teal-200">
+            نصاب: {INSTALLER_NAME}{" "}
+            <a href={`tel:${INSTALLER_PHONE}`} className="text-teal-700 underline dir-ltr">
+              {INSTALLER_PHONE}
+            </a>
           </div>
           <button
             onClick={openNew}
@@ -411,7 +773,6 @@ export default function MeasurementPage() {
           </button>
         </div>
 
-        {/* تب‌ها */}
         <div className="flex gap-2 mb-4">
           <button
             onClick={() => setTab("PENDING")}
@@ -438,13 +799,32 @@ export default function MeasurementPage() {
         {/* فیلتر */}
         <div className="rounded-2xl bg-white/85 backdrop-blur border border-teal-200 p-4 mb-4 shadow flex flex-wrap gap-3 items-end">
           <div className="flex-1 min-w-[200px]">
-            <label className="block text-xs font-bold text-blue-900 mb-1">جستجو</label>
+            <label className="block text-xs font-bold text-blue-900 mb-1">
+              جستجو
+            </label>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="نام، تلفن، شماره اندازه‌گیری، آدرس..."
+              placeholder="نام، تلفن، معرف، شماره، آدرس..."
               className="w-full rounded-xl border border-teal-300 px-3 py-2 font-semibold"
             />
+          </div>
+          <div className="min-w-[160px]">
+            <label className="block text-xs font-bold text-blue-900 mb-1">
+              منطقه
+            </label>
+            <select
+              value={regionFilter}
+              onChange={(e) => setRegionFilter(e.target.value)}
+              className="w-full rounded-xl border border-teal-300 px-3 py-2 font-semibold"
+            >
+              <option value="همه">همه مناطق</option>
+              {REGION_OPTIONS.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
           </div>
           <button
             onClick={fetchList}
@@ -454,10 +834,29 @@ export default function MeasurementPage() {
           </button>
         </div>
 
-        {/* جدول */}
+        {/* خلاصه تعداد به تفکیک منطقه */}
+        {regionCounts.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-3">
+            {regionCounts.map(([name, count]) => (
+              <button
+                key={name}
+                type="button"
+                onClick={() =>
+                  setRegionFilter(name === "نامشخص" ? "همه" : name)
+                }
+                className="rounded-full bg-white/90 border border-teal-300 px-3 py-1 text-xs font-bold text-blue-900"
+              >
+                {name}: {count}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="rounded-2xl bg-white/90 border border-teal-200 shadow overflow-x-auto">
           {loading ? (
-            <p className="p-6 text-center font-bold text-blue-800">در حال بارگذاری...</p>
+            <p className="p-6 text-center font-bold text-blue-800">
+              در حال بارگذاری...
+            </p>
           ) : sorted.length === 0 ? (
             <p className="p-6 text-center font-bold text-gray-600">موردی نیست</p>
           ) : (
@@ -469,7 +868,7 @@ export default function MeasurementPage() {
                     className="p-2 border border-teal-800 cursor-pointer"
                     onClick={() => toggleSort("measurementNumber")}
                   >
-                    شماره اندازه‌گیری{sortMark("measurementNumber")}
+                    شماره{sortMark("measurementNumber")}
                   </th>
                   <th
                     className="p-2 border border-teal-800 cursor-pointer"
@@ -477,20 +876,37 @@ export default function MeasurementPage() {
                   >
                     مشتری{sortMark("customerName")}
                   </th>
+                  <th
+                    className="p-2 border border-teal-800 cursor-pointer"
+                    onClick={() => toggleSort("introducerName")}
+                  >
+                    معرف{sortMark("introducerName")}
+                  </th>
                   <th className="p-2 border border-teal-800">تلفن</th>
-                  <th className="p-2 border border-teal-800">آدرس</th>
+                  <th
+                    className="p-2 border border-teal-800 cursor-pointer"
+                    onClick={() => toggleSort("region")}
+                  >
+                    منطقه{sortMark("region")}
+                  </th>
+                  <th
+                    className="p-2 border border-teal-800 cursor-pointer"
+                    onClick={() => toggleSort("address")}
+                  >
+                    آدرس{sortMark("address")}
+                  </th>
                   <th className="p-2 border border-teal-800">نوع کار</th>
                   <th
                     className="p-2 border border-teal-800 cursor-pointer"
                     onClick={() => toggleSort("requestDate")}
                   >
-                    تاریخ ثبت{sortMark("requestDate")}
+                    ثبت{sortMark("requestDate")}
                   </th>
                   <th
                     className="p-2 border border-teal-800 cursor-pointer"
-                    onClick={() => toggleSort("measurementDate")}
+                    onClick={() => toggleSort("appointmentDate")}
                   >
-                    تاریخ اندازه‌گیری{sortMark("measurementDate")}
+                    وقت هماهنگی{sortMark("appointmentDate")}
                   </th>
                   <th
                     className="p-2 border border-teal-800 cursor-pointer"
@@ -504,32 +920,54 @@ export default function MeasurementPage() {
               </thead>
               <tbody>
                 {sorted.map((row, idx) => {
-                  const ph = parseJsonArray(row.phones).join(" / ")
                   const wt = [
                     ...parseJsonArray(row.workTypes),
                     row.workTypeOther || "",
                   ]
                     .filter(Boolean)
                     .join("، ")
+                  const apptLabel = row.appointmentFixed
+                    ? `${formatFa(row.appointmentDate)} ${row.appointmentTimeFrom || ""}–${row.appointmentTimeTo || ""}`
+                    : formatFa(row.measurementDate)
                   return (
-                    <tr key={row.id} className="odd:bg-white even:bg-teal-50/40 hover:bg-teal-100/50">
+                    <tr
+                      key={row.id}
+                      className="odd:bg-white even:bg-teal-50/40 hover:bg-teal-100/50"
+                    >
                       <td className="p-2 border border-teal-100 text-center font-bold">
                         {idx + 1}
                       </td>
                       <td className="p-2 border border-teal-100 text-center font-black text-teal-800">
                         {row.measurementNumber}
                       </td>
-                      <td className="p-2 border border-teal-100 font-bold">{row.customerName}</td>
-                      <td className="p-2 border border-teal-100 text-center dir-ltr">{ph || "—"}</td>
-                      <td className="p-2 border border-teal-100 text-xs max-w-[240px] break-words">
+                      <td className="p-2 border border-teal-100 font-bold">
+                        {row.customerName}
+                      </td>
+                      <td className="p-2 border border-teal-100 text-center text-xs">
+                        {row.introducerName || "—"}
+                      </td>
+                      <td className="p-2 border border-teal-100 text-center">
+                        <PhoneLinks raw={row.phones} />
+                      </td>
+                      <td className="p-2 border border-teal-100 text-center text-xs font-bold">
+                        {row.region || "—"}
+                      </td>
+                      <td className="p-2 border border-teal-100 text-xs max-w-[220px] break-words">
                         {row.address || "—"}
                       </td>
-                      <td className="p-2 border border-teal-100 text-xs">{wt || "—"}</td>
+                      <td className="p-2 border border-teal-100 text-xs">
+                        {wt || "—"}
+                      </td>
                       <td className="p-2 border border-teal-100 text-center">
                         {formatFa(row.requestDate)}
                       </td>
-                      <td className="p-2 border border-teal-100 text-center font-semibold">
-                        {formatFa(row.measurementDate)}
+                      <td className="p-2 border border-teal-100 text-center font-semibold text-xs">
+                        {apptLabel}
+                        {row.appointmentFixed ? (
+                          <span className="block text-[10px] text-green-700">
+                            فیکس‌شده
+                          </span>
+                        ) : null}
                       </td>
                       <td className="p-2 border border-teal-100 text-center">
                         {row.salesRep || "—"}
@@ -551,7 +989,9 @@ export default function MeasurementPage() {
                             onClick={() => openDetail(row)}
                             className="rounded-lg bg-blue-900 text-white text-xs font-bold px-2.5 py-1.5"
                           >
-                            {row.status === "PENDING" ? "ثبت نتیجه / اتمام" : "مشاهده"}
+                            {row.status === "PENDING"
+                              ? "نصاب / وقت"
+                              : "مشاهده"}
                           </button>
                           <button
                             onClick={() => openEdit(row)}
@@ -576,7 +1016,9 @@ export default function MeasurementPage() {
         </div>
 
         <p className="mt-2 text-xs text-blue-900/80 font-semibold">
-          ثبت درخواست توسط کارشناس فروش است. تکمیل عکس/توضیح و اتمام کار توسط نصاب انجام می‌شود.
+          ثبت درخواست توسط کارشناس فروش است. تعیین وقت، پیامک مشتری و تکمیل
+          نتیجه توسط نصاب ({INSTALLER_NAME}) انجام می‌شود. برای تماس مستقیم روی
+          شماره تلفن بزنید.
         </p>
       </div>
 
@@ -585,7 +1027,9 @@ export default function MeasurementPage() {
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[92vh] overflow-y-auto p-5 shadow-2xl">
             <h2 className="text-lg font-black text-blue-950 mb-4">
-              {editing ? `ویرایش درخواست اندازه‌گیری (${editing.measurementNumber})` : "ثبت درخواست اندازه‌گیری"}
+              {editing
+                ? `ویرایش درخواست اندازه‌گیری (${editing.measurementNumber})`
+                : "ثبت درخواست اندازه‌گیری"}
             </h2>
 
             <div className="space-y-3">
@@ -602,7 +1046,10 @@ export default function MeasurementPage() {
                 <label className="text-xs font-bold mb-1 block">ورودی از کجا؟</label>
                 <div className="flex flex-wrap gap-2">
                   {SOURCE_OPTIONS.map((s) => (
-                    <label key={s} className="flex items-center gap-1 text-sm border rounded-lg px-2 py-1">
+                    <label
+                      key={s}
+                      className="flex items-center gap-1 text-sm border rounded-lg px-2 py-1"
+                    >
                       <input
                         type="checkbox"
                         checked={sources.includes(s)}
@@ -641,7 +1088,9 @@ export default function MeasurementPage() {
                       <button
                         type="button"
                         className="text-red-600 font-bold px-2"
-                        onClick={() => setPhones(phones.filter((_, j) => j !== i))}
+                        onClick={() =>
+                          setPhones(phones.filter((_, j) => j !== i))
+                        }
                       >
                         ×
                       </button>
@@ -663,8 +1112,27 @@ export default function MeasurementPage() {
                   className="w-full rounded-xl border px-3 py-2"
                   rows={2}
                   value={address}
-                  onChange={(e) => setAddress(e.target.value)}
+                  onChange={(e) => {
+                    setAddress(e.target.value)
+                    if (!region) {
+                      const g = guessRegionFromAddress(e.target.value)
+                      if (g) setRegion(g)
+                    }
+                  }}
                 />
+                <label className="text-xs font-bold mt-2 block">منطقه</label>
+                <select
+                  className="w-full rounded-xl border px-3 py-2"
+                  value={region}
+                  onChange={(e) => setRegion(e.target.value)}
+                >
+                  <option value="">— انتخاب منطقه —</option>
+                  {REGION_OPTIONS.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
                 <input
                   type="file"
                   accept="image/*,.pdf"
@@ -693,7 +1161,10 @@ export default function MeasurementPage() {
                 <label className="text-xs font-bold mb-1 block">نوع کار</label>
                 <div className="flex flex-wrap gap-2">
                   {WORK_OPTIONS.map((w) => (
-                    <label key={w} className="flex items-center gap-1 text-sm border rounded-lg px-2 py-1">
+                    <label
+                      key={w}
+                      className="flex items-center gap-1 text-sm border rounded-lg px-2 py-1"
+                    >
                       <input
                         type="checkbox"
                         checked={workTypes.includes(w)}
@@ -727,7 +1198,7 @@ export default function MeasurementPage() {
                 </div>
                 <div>
                   <label className="text-xs font-bold block mb-1">
-                    تاریخ اندازه‌گیری (پیش‌فرض +۲ روز)
+                    تاریخ پیشنهادی اندازه‌گیری
                   </label>
                   <DatePicker
                     value={measurementDate}
@@ -777,16 +1248,109 @@ export default function MeasurementPage() {
             <h2 className="text-lg font-black text-blue-950 mb-1">
               {detail.measurementNumber} — {detail.customerName}
             </h2>
+            <p className="text-sm text-gray-600 mb-1">
+              معرف: {detail.introducerName || "—"} | منطقه:{" "}
+              {detail.region || "—"}
+            </p>
+            <p className="text-sm text-gray-600 mb-1">
+              آدرس: {detail.address || "—"}
+            </p>
             <p className="text-sm text-gray-600 mb-3">
-              آدرس: {detail.address || "—"} | تلفن:{" "}
-              {parseJsonArray(detail.phones).join(" / ")}
+              تلفن:{" "}
+              {parseJsonArray(detail.phones).map((p, i) => (
+                <span key={p}>
+                  {i > 0 ? " / " : ""}
+                  <a className="text-teal-800 font-bold underline dir-ltr" href={`tel:${p}`}>
+                    {p}
+                  </a>
+                </span>
+              ))}
             </p>
             <p className="text-xs text-blue-800 mb-3">
-              کارشناس ثبت‌کننده: {detail.salesRep || "—"} | اندازه‌گیری:{" "}
-              {formatFa(detail.measurementDate)}
+              کارشناس: {detail.salesRep || "—"} | نصاب: {INSTALLER_NAME}{" "}
+              <a className="underline dir-ltr" href={`tel:${INSTALLER_PHONE}`}>
+                {INSTALLER_PHONE}
+              </a>
             </p>
 
-            <label className="text-xs font-bold">توضیحات نصاب / نتیجه اندازه‌گیری</label>
+            {/* هماهنگی وقت */}
+            {detail.status !== "DONE" && (
+              <div className="mb-4 rounded-xl border border-teal-300 bg-teal-50/50 p-3">
+                <p className="text-sm font-black text-blue-950 mb-2">
+                  هماهنگی وقت اندازه‌گیری
+                </p>
+                {detail.appointmentFixed && (
+                  <p className="text-xs text-green-800 font-bold mb-2">
+                    وقت فعلی: {formatFa(detail.appointmentDate)} ساعت{" "}
+                    {detail.appointmentTimeFrom} تا {detail.appointmentTimeTo}
+                    {detail.smsSentAt
+                      ? ` — پیامک: ${formatFaDateTime(detail.smsSentAt)}`
+                      : ""}
+                  </p>
+                )}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
+                  <div>
+                    <label className="text-xs font-bold block mb-1">تاریخ</label>
+                    <DatePicker
+                      value={apptDate}
+                      onChange={setApptDate}
+                      calendar={persian}
+                      locale={persian_fa}
+                      calendarPosition="bottom-right"
+                      inputClass="w-full rounded-xl border px-2 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold block mb-1">از ساعت</label>
+                    <select
+                      className="w-full rounded-xl border px-2 py-2 text-sm"
+                      value={apptFrom}
+                      onChange={(e) => setApptFrom(e.target.value)}
+                    >
+                      {HOUR_OPTIONS.map((h) => (
+                        <option key={h} value={h}>
+                          {h}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold block mb-1">تا ساعت</label>
+                    <select
+                      className="w-full rounded-xl border px-2 py-2 text-sm"
+                      value={apptTo}
+                      onChange={(e) => setApptTo(e.target.value)}
+                    >
+                      {HOUR_OPTIONS.map((h) => (
+                        <option key={h} value={h}>
+                          {h}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={() => saveAppointment(false)}
+                    className="rounded-xl bg-teal-600 text-white text-xs font-bold px-3 py-2 disabled:opacity-50"
+                  >
+                    فیکس وقت + پیامک به مشتری
+                  </button>
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={() => saveAppointment(true)}
+                    className="rounded-xl bg-amber-500 text-white text-xs font-bold px-3 py-2 disabled:opacity-50"
+                  >
+                    موکول به تاریخ جدید + پیامک
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <label className="text-xs font-bold">توضیحات نصاب / نتیجه</label>
             <textarea
               className="w-full rounded-xl border px-3 py-2 mb-2"
               rows={3}
@@ -816,7 +1380,12 @@ export default function MeasurementPage() {
               <ul className="text-xs text-teal-800 mb-3">
                 {resultFiles.map((f) => (
                   <li key={f.url}>
-                    <a href={f.url} target="_blank" rel="noreferrer" className="underline">
+                    <a
+                      href={f.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline"
+                    >
                       {f.name}
                     </a>
                   </li>
@@ -824,7 +1393,6 @@ export default function MeasurementPage() {
               </ul>
             )}
 
-            {/* ویس نصاب: ضبط با میکروفون یا انتخاب فایل صوتی */}
             <div className="mb-3 rounded-xl border border-teal-200 bg-teal-50/40 p-3">
               <p className="text-xs font-bold text-blue-900 mb-2">ویس نصاب</p>
               {detail.status !== "DONE" && (
@@ -833,7 +1401,9 @@ export default function MeasurementPage() {
                     type="button"
                     onClick={toggleRecording}
                     className={`rounded-xl px-4 py-2 text-sm font-bold text-white ${
-                      recording ? "bg-red-600 hover:bg-red-700" : "bg-teal-600 hover:bg-teal-700"
+                      recording
+                        ? "bg-red-600 hover:bg-red-700"
+                        : "bg-teal-600 hover:bg-teal-700"
                     }`}
                   >
                     {recording ? "توقف و ذخیره ویس" : "ضبط ویس"}
@@ -878,7 +1448,9 @@ export default function MeasurementPage() {
                           type="button"
                           className="px-1 font-bold text-red-600"
                           onClick={() =>
-                            setVoiceFiles((prev) => prev.filter((x) => x.url !== f.url))
+                            setVoiceFiles((prev) =>
+                              prev.filter((x) => x.url !== f.url)
+                            )
                           }
                         >
                           ×

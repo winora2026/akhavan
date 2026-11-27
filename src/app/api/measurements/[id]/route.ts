@@ -23,19 +23,39 @@ export async function PATCH(
     const session = await getSession()
 
     const data: any = {}
+
     if (body.introducerName !== undefined) data.introducerName = body.introducerName
     if (body.sources !== undefined) data.sources = JSON.stringify(body.sources)
     if (body.customerName !== undefined) data.customerName = body.customerName
     if (body.phones !== undefined) data.phones = JSON.stringify(body.phones)
     if (body.address !== undefined) data.address = body.address
+    if (body.region !== undefined) data.region = body.region
     if (body.addressMedia !== undefined)
       data.addressMedia = JSON.stringify(body.addressMedia)
     if (body.workTypes !== undefined) data.workTypes = JSON.stringify(body.workTypes)
     if (body.workTypeOther !== undefined) data.workTypeOther = body.workTypeOther
+
     if (body.measurementDate !== undefined)
       data.measurementDate = safeDate(body.measurementDate)
     if (body.requestDate !== undefined)
       data.requestDate = safeDate(body.requestDate)
+
+    // وقت هماهنگی نصاب
+    if (body.appointmentDate !== undefined)
+      data.appointmentDate = body.appointmentDate
+        ? safeDate(body.appointmentDate)
+        : null
+    if (body.appointmentTimeFrom !== undefined)
+      data.appointmentTimeFrom = body.appointmentTimeFrom
+    if (body.appointmentTimeTo !== undefined)
+      data.appointmentTimeTo = body.appointmentTimeTo
+    if (body.appointmentFixed !== undefined)
+      data.appointmentFixed = Boolean(body.appointmentFixed)
+
+    // نصاب
+    if (body.installerName !== undefined) data.installerName = body.installerName
+    if (body.installerPhone !== undefined) data.installerPhone = body.installerPhone
+
     if (body.resultNotes !== undefined) data.resultNotes = body.resultNotes
     if (body.resultMedia !== undefined)
       data.resultMedia = JSON.stringify(body.resultMedia)
@@ -45,6 +65,11 @@ export async function PATCH(
     if (body.assignedTo !== undefined) data.assignedTo = body.assignedTo
     if (body.orderId !== undefined) data.orderId = body.orderId
     if (body.orderNumber !== undefined) data.orderNumber = body.orderNumber
+
+    // پیامک
+    if (body.smsSentAt !== undefined)
+      data.smsSentAt = body.smsSentAt ? safeDate(body.smsSentAt) : null
+    if (body.smsStatus !== undefined) data.smsStatus = body.smsStatus
 
     if (body.status === "DONE") {
       data.status = "DONE"
@@ -72,12 +97,19 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params
-    const existing = await prisma.measurementRequest.findUnique({ where: { id } })
-    if (!existing) return NextResponse.json({ error: "یافت نشد" }, { status: 404 })
+    const existing = await prisma.measurementRequest.findUnique({
+      where: { id },
+    })
+    if (!existing) {
+      return NextResponse.json({ error: "یافت نشد" }, { status: 404 })
+    }
     await prisma.measurementRequest.delete({ where: { id } })
     return NextResponse.json({ success: true })
   } catch (e: any) {
     console.error(e)
-    return NextResponse.json({ error: e.message || "خطا در حذف" }, { status: 500 })
+    return NextResponse.json(
+      { error: e.message || "خطا در حذف" },
+      { status: 500 }
+    )
   }
 }

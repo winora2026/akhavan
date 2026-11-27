@@ -630,6 +630,7 @@ model MeasurementRequest {
   phones             String    // JSON آرایه شماره
   address            String?
   addressMedia       String?   // JSON آرایه URL عکس لوکیشن/آدرس
+  region             String?   // غرب تهران | شرق تهران | ...
 
   // نوع کار
   workTypes          String?   // JSON: ["آینه دکوراتیو","پارتیشن",...]
@@ -638,6 +639,16 @@ model MeasurementRequest {
   // تاریخ‌ها
   requestDate        DateTime  @default(now())
   measurementDate    DateTime?
+
+  // وقت هماهنگی‌شده با مشتری (توسط نصاب)
+  appointmentDate      DateTime?
+  appointmentTimeFrom  String?   // مثلا "10:00"
+  appointmentTimeTo    String?   // مثلا "11:00"
+  appointmentFixed     Boolean   @default(false)
+
+  // نصاب
+  installerName      String?
+  installerPhone     String?
 
   // وضعیت
   status             String    @default("PENDING") // PENDING | DONE | CANCELLED
@@ -653,7 +664,7 @@ model MeasurementRequest {
   orderId            String?
   orderNumber        String?
 
-  // پیامک
+  // پیامک وقت اندازه‌گیری
   smsSentAt          DateTime?
   smsStatus          String?
 
