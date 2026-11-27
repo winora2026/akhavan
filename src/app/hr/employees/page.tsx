@@ -31,10 +31,18 @@ type HrUser = {
 }
 
 type ProfileCustomer = {
-  id: string
-  customerCode?: string | null
+  code: string
   name: string
   phone?: string | null
+}
+
+/** یکسان‌سازی نام برای مقایسه: ی/ي، ک/ك، حذف فاصله */
+function normName(s: string) {
+  return String(s || "")
+    .replace(/[يى]/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/\s+/g, "")
+    .trim()
 }
 
 const EMPTY_FORM = {
@@ -92,14 +100,10 @@ export default function EmployeesPage() {
         }
       } catch {}
       try {
-        const res = await fetch("/api/customer-profiles")
+        const res = await fetch("/api/hr/personnel-candidates")
         if (res.ok) {
-          const list: ProfileCustomer[] = await res.json()
-          setCandidates(
-            (list || []).filter(
-              (c) => c.name && c.name.includes("پرسنل") && c.customerCode
-            )
-          )
+          const data = await res.json()
+          setCandidates(data.items || [])
         }
       } catch {}
       load()
@@ -118,26 +122,59 @@ export default function EmployeesPage() {
 
   const available = useMemo(() => {
     const codes = new Set(items.map((e) => e.personnelCode))
-    const names = new Set(items.map((e) => e.displayName.replace(/\s+/g, " ")))
+    const names = new Set(items.map((e) => normName(e.displayName)))
     return candidates.filter((c) => {
-      const code = String(c.customerCode || "").trim()
-      const clean = c.name.replace(/\(?\s*پرسنل\s*\)?/g, "").replace(/\s+/g, " ").trim()
-      return !codes.has(code) && !names.has(clean)
+      const code = String(c.code || "").trim()
+      return !(code && codes.has(code)) && !names.has(normName(c.name))
     })
   }, [candidates, items])
 
   const startFromCustomer = (c: ProfileCustomer) => {
-    const clean = c.name.replace(/\(?\s*پرسنل\s*\)?/g, "").replace(/\s+/g, " ").trim()
+    const clean = c.name.replace(/\s+/g, " ").trim()
     const parts = clean.split(" ")
     setForm({
       ...EMPTY_FORM,
-      personnelCode: String(c.customerCode || "").trim(),
+      personnelCode: String(c.code || "").trim(),
       firstName: parts[0] || clean,
       lastName: parts.slice(1).join(" ") || "-",
       mobile: c.phone || "",
     })
     setErr("")
     setShowForm(true)
+  }
+
+  const [bulkSaving, setBulkSaving] = useState(false)
+
+  const addAllAvailable = async () => {
+    if (!available.length) return
+    if (!confirm(`همه ${available.length} نفر به لیست پرسنل اضافه شوند؟`)) return
+    setBulkSaving(true)
+    let ok = 0
+    let fail = 0
+    for (const c of available) {
+      const clean = c.name.replace(/\s+/g, " ").trim()
+      const parts = clean.split(" ")
+      try {
+        const res = await fetch("/api/hr/employees", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            personnelCode: String(c.code || "").trim() || `P-${Date.now()}`,
+            firstName: parts[0] || clean,
+            lastName: parts.slice(1).join(" ") || "-",
+            mobile: c.phone || undefined,
+            entitledDays: 30,
+          }),
+        })
+        if (res.ok) ok++
+        else fail++
+      } catch {
+        fail++
+      }
+    }
+    setBulkSaving(false)
+    alert(`افزوده شد: ${ok}${fail ? ` | ناموفق: ${fail}` : ""}`)
+    load()
   }
 
   const submit = async (e: React.FormEvent) => {
@@ -238,17 +275,26 @@ export default function EmployeesPage() {
 
         {canEdit && available.length > 0 && (
           <div className="rounded-2xl bg-amber-50/90 border border-amber-300 p-3 mb-4">
-            <p className="text-xs font-bold text-amber-900 mb-2">
-              در لیست مشتریان، {available.length} نفر با پسوند «پرسنل» ثبت شده‌اند که در لیست پرسنل نیستند — برای پیش‌پر کردن فرم انتخاب کنید:
-            </p>
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              <p className="text-xs font-bold text-amber-900 flex-1">
+                در اسامی مشتریان، {available.length} نفر با پسوند «پرسنل» ثبت شده‌اند که در لیست پرسنل نیستند:
+              </p>
+              <button
+                onClick={addAllAvailable}
+                disabled={bulkSaving}
+                className="rounded-xl bg-amber-600 text-white text-xs font-bold px-3 py-1.5 disabled:opacity-50"
+              >
+                {bulkSaving ? "..." : `افزودن همه (${available.length} نفر)`}
+              </button>
+            </div>
             <div className="flex flex-wrap gap-2">
-              {available.map((c) => (
+              {available.map((c, i) => (
                 <button
-                  key={c.id}
+                  key={`${c.code}-${i}`}
                   onClick={() => startFromCustomer(c)}
                   className="rounded-full bg-white border border-amber-300 px-3 py-1 text-xs font-bold text-amber-900 hover:bg-amber-100"
                 >
-                  {c.customerCode} — {c.name}
+                  {c.code} — {c.name}
                 </button>
               ))}
             </div>

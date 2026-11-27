@@ -568,7 +568,7 @@ export default function HomePage() {
     ) : null
 
   const menuBtnClass =
-    "w-full flex flex-col items-center gap-2.5 p-3.5 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
+    "w-full flex flex-col items-center gap-2.5 px-1 py-3 rounded-xl hover:bg-white/30 focus:bg-white/30 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
 
   return (
     <div
@@ -674,13 +674,13 @@ export default function HomePage() {
         <div className="flex-1 min-h-[280px] sm:min-h-[320px]" />
 
         <div className="pb-8 px-4 sm:px-6" id="main-menu">
-          <div className="max-w-6xl mx-auto">
+          <div className="max-w-7xl mx-auto">
             <div
               className={`bg-white/45 backdrop-blur-xl border border-white/50 rounded-2xl shadow-2xl px-3 sm:px-4 py-5 ${
                 mobileOpen ? "block" : "hidden sm:block"
               }`}
             >
-              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-8 gap-2">
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-9 gap-2">
                 {menuItems.map((item) => {
                   const blockedForProduction =
                     isProductionOnly &&
@@ -709,7 +709,7 @@ export default function HomePage() {
                   )
 
                   const titleSpan = (
-                    <span className="text-base sm:text-lg font-bold text-gray-800 text-center">
+                    <span className="text-base sm:text-[17px] font-bold text-gray-800 text-center whitespace-nowrap">
                       {item.title}
                     </span>
                   )
