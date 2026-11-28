@@ -411,7 +411,7 @@ export async function POST(req: Request) {
 
     if (!isCutStation(stationRow.station.name)) {
       const cut = item.stations.find((s: any) => isCutStation(s.station.name))
-      if (cut && cut.status !== "تکمیل شده") {
+      if (cut && !isStationClosed(cut.status)) {
         return NextResponse.json(
           {
             error: "ابتدا ایستگاه برش باید تکمیل شود",
