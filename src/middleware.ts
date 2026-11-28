@@ -30,7 +30,30 @@ export async function middleware(req: NextRequest) {
   }
 
   try {
-    await jwtVerify(token, SECRET)
+    const { payload } = await jwtVerify(token, SECRET)
+
+    // نصاب: فقط «نصب» و «اندازه‌گیری» (و منوی اصلی برای رفتن بین این دو)
+    if (String(payload.role || "") === "installer") {
+      const allowed =
+        pathname === "/" ||
+        pathname === "/execution/install" ||
+        pathname.startsWith("/execution/install/") ||
+        pathname === "/execution/measurement" ||
+        pathname.startsWith("/execution/measurement/") ||
+        pathname.startsWith("/api/auth/") ||
+        pathname.startsWith("/api/installations") ||
+        pathname.startsWith("/api/measurements") ||
+        pathname === "/api/upload" ||
+        pathname.startsWith("/api/uploads/") ||
+        pathname === "/api/sms/send"
+      if (!allowed) {
+        if (pathname.startsWith("/api/")) {
+          return NextResponse.json({ error: "دسترسی ندارید" }, { status: 403 })
+        }
+        return NextResponse.redirect(new URL("/execution/install", req.url))
+      }
+    }
+
     return NextResponse.next()
   } catch {
     const res = NextResponse.redirect(new URL("/login", req.url))

@@ -151,6 +151,7 @@ export default function HomePage() {
   }, [])
 
   const isProductionOnly = currentUser?.role === "production"
+  const isInstaller = currentUser?.role === "installer"
   const canOpenSales = !isProductionOnly
   const canOpenExecution = !isProductionOnly
   const canOpenFinance = !isProductionOnly
@@ -386,6 +387,8 @@ export default function HomePage() {
         return "مدیریت"
       case "designer":
         return "طراح"
+      case "installer":
+        return "نصاب"
       default:
         return role
     }
@@ -620,6 +623,7 @@ export default function HomePage() {
             </button>
           </div>
 
+          {!isInstaller && (
           <div className="rounded-2xl bg-white/80 border border-teal-500/30 px-4 py-2.5 shadow flex items-center justify-between gap-2">
             <span className="text-sm font-bold text-blue-800">سال مالی</span>
             {editingFiscal ? (
@@ -660,6 +664,7 @@ export default function HomePage() {
               </button>
             )}
           </div>
+          )}
 
           <button
             type="button"
@@ -687,6 +692,9 @@ export default function HomePage() {
                       (item as any).isFinance ||
                       (item as any).isReports ||
                       (item as any).lockedForProduction)
+
+                  // نصاب فقط منوی «اجرا» (نصب و اندازه‌گیری) را می‌بیند
+                  if (isInstaller && !(item as any).isExecution) return null
 
                   const iconSvg = (
                     <div className="w-10 h-10 shrink-0 rounded-lg bg-teal-500/15 flex items-center justify-center border border-teal-500/20">
