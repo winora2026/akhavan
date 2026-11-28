@@ -861,6 +861,19 @@ export async function syncProductionOrderFromSales(
     return want === have
   }
 
+  // قاعده‌ی برشِ اجرتی: قطعه‌ی سفارش اجرتی فقط با «اجرت برش» ردیف برش دارد.
+  // اگر خط تولید بعد از ساخت قطعه‌ها عوض شده باشد، امضا تغییر نمی‌کند ولی مسیر باید اصلاح شود.
+  const cutStationIds = allStations
+    .filter((s) => norm(s.name) === "برش")
+    .map((s) => s.id)
+  const cutRouteOk = (p: any, si: any) => {
+    const hasCutRow = p.stations.some((s: any) =>
+      cutStationIds.includes(s.stationId)
+    )
+    const wantCut = !isRental || hasCuttingWage(si)
+    return hasCutRow === wantCut
+  }
+
   const unchangedPairs: { p: any; si: any; hadSig: boolean; full: string }[] = []
   const inplacePairs: { p: any; si: any; labelChanged: boolean }[] = []
   const corePairs: { p: any; si: any; oldQ: number; newQ: number }[] = []
@@ -871,7 +884,7 @@ export async function syncProductionOrderFromSales(
       usedNew.has(x.si.id)
         ? false
         : o.sig
-          ? x.full === o.sig
+          ? x.full === o.sig && cutRouteOk(o.p, x.si)
           : x.core === o.core && routeEqual(o.p, x.si)
     )
     if (n) {
