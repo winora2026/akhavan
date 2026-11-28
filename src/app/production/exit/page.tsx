@@ -850,7 +850,8 @@ export default function ExitSlipPage() {
             visibility: visible;
           }
           #exit-print-area {
-            position: static !important;
+            position: absolute !important;
+            inset: 0 !important;
             width: 100% !important;
             max-width: 100% !important;
             overflow: visible !important;
