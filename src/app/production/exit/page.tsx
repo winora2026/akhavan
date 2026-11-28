@@ -330,6 +330,33 @@ export default function ExitSlipPage() {
     }
   }, [currentSlip])
 
+  /** ردیف‌های یکسان برگه‌ی خروج (کالا + ابعاد + خدمات + توضیحات) در یک سطر با تعداد جمع‌شده */
+  const printItems = useMemo(() => {
+    const list = currentSlip?.items || []
+    const map = new Map<string, ExitSlip["items"][number]>()
+    for (const it of list) {
+      const key = [
+        it.orderNumber ?? "",
+        it.productName ?? "",
+        it.length ?? "",
+        it.width ?? "",
+        it.installationCode ?? "",
+        it.servicesText ?? "",
+        it.notes ?? "",
+      ]
+        .map((v) => String(v).trim())
+        .join("||")
+      const cur = map.get(key)
+      if (cur) {
+        cur.quantity = (cur.quantity || 0) + (it.quantity || 0)
+        cur.meterage = (Number(cur.meterage) || 0) + (Number(it.meterage) || 0)
+      } else {
+        map.set(key, { ...it, meterage: it.meterage != null ? Number(it.meterage) : null })
+      }
+    }
+    return Array.from(map.values())
+  }, [currentSlip])
+
   return (
     <div
       className="min-h-screen p-4 bg-cover bg-center bg-fixed print:bg-white print:p-0"
@@ -689,7 +716,7 @@ export default function ExitSlipPage() {
             {/* محتوای برگه خروج */}
             <div className="p-6 text-black print:p-0" dir="rtl" id="exit-print-area">
               <div className="text-center mb-4">
-                <h1 className="text-xl font-black">
+                <h1 className="text-2xl font-black">
                   خروج کالا
                 </h1>
               </div>
@@ -742,7 +769,7 @@ export default function ExitSlipPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {currentSlip.items.map((it, idx) => (
+                  {printItems.map((it, idx) => (
                     <tr key={it.id}>
                       <td className="border border-black p-1 text-center font-bold">
                         {idx + 1}
@@ -842,7 +869,8 @@ export default function ExitSlipPage() {
         @media print {
           @page {
             size: A4 portrait;
-            margin: 6mm;
+            /* حاشیه با padding خود برگه اعمال می‌شود تا چاپگر لبه‌ها را نبرد */
+            margin: 0;
           }
           html,
           body {
@@ -871,7 +899,9 @@ export default function ExitSlipPage() {
             position: static !important;
             width: 100% !important;
             max-width: 100% !important;
-            padding: 0 !important;
+            /* حاشیه‌ی امن داخل کاغذ؛ حتی وقتی کاغذ با حاشیه‌ی صفر چاپ شود لبه‌ها بریده نمی‌شوند */
+            padding: 8mm !important;
+            box-sizing: border-box !important;
             overflow: visible !important;
           }
           #exit-print-area table {
