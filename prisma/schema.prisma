@@ -659,6 +659,7 @@ model MeasurementRequest {
   resultNotes        String?
   resultMedia        String?   // JSON عکس/فیلم
   voiceNotes         String?   // JSON فایل ویس
+  resultLocation     String?   // JSON لوکیشن {lat,lng,accuracy}
 
   // لینک بعدی به پیش‌فاکتور
   orderId            String?
@@ -699,6 +700,7 @@ model InstallationJob {
   resultNotes         String?
   resultMedia         String?
   voiceNotes          String?
+  resultLocation      String?
 
   installerName       String?
   installerPhone      String?

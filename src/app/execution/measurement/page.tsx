@@ -36,6 +36,8 @@ type Measurement = {
   resultNotes?: string | null
   resultMedia?: string | null
   voiceNotes?: string | null
+  /** JSON: {lat,lng,accuracy} — لوکیشن ثبت‌شده توسط نصاب در محل */
+  resultLocation?: string | null
   orderNumber?: string | null
   notes?: string | null
   createdAt: string
@@ -97,6 +99,23 @@ function parseJsonArray(raw?: string | null): string[] {
   } catch {
     return []
   }
+}
+
+type GeoPoint = { lat: number; lng: number; accuracy?: number }
+
+function parseLocation(raw?: string | null): GeoPoint | null {
+  if (!raw) return null
+  try {
+    const v = JSON.parse(raw)
+    if (typeof v?.lat === "number" && typeof v?.lng === "number") {
+      return { lat: v.lat, lng: v.lng, accuracy: v.accuracy ?? undefined }
+    }
+  } catch {}
+  return null
+}
+
+function mapLink(p: GeoPoint) {
+  return `https://maps.google.com/?q=${p.lat},${p.lng}`
 }
 
 function formatFa(dt?: string | null) {
@@ -210,6 +229,8 @@ export default function MeasurementPage() {
   const [resultNotes, setResultNotes] = useState("")
   const [resultFiles, setResultFiles] = useState<{ url: string; name: string; type?: string }[]>([])
   const [voiceFiles, setVoiceFiles] = useState<{ url: string; name: string }[]>([])
+  const [resultLocation, setResultLocation] = useState<GeoPoint | null>(null)
+  const [locLoading, setLocLoading] = useState(false)
   const [recording, setRecording] = useState(false)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const recChunksRef = useRef<Blob[]>([])
@@ -500,6 +521,7 @@ export default function MeasurementPage() {
   const openDetail = (row: Measurement) => {
     setDetail(row)
     setResultNotes(row.resultNotes || "")
+    setResultLocation(parseLocation(row.resultLocation))
     setResultFiles(
       parseJsonArray(row.resultMedia).map((url) => ({
         url,
@@ -531,10 +553,41 @@ export default function MeasurementPage() {
     setApptTo(row.appointmentTimeTo || "11:00")
   }
 
+  const captureLocation = () => {
+    if (!("geolocation" in navigator)) {
+      alert("این مرورگر از لوکیشن پشتیبانی نمی‌کند.")
+      return
+    }
+    setLocLoading(true)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setResultLocation({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: Math.round(pos.coords.accuracy || 0),
+        })
+        setLocLoading(false)
+      },
+      (err) => {
+        setLocLoading(false)
+        alert(
+          err.code === err.PERMISSION_DENIED
+            ? "اجازه‌ی دسترسی به لوکیشن داده نشد؛ در تنظیمات مرورگر اجازه دهید."
+            : "گرفتن لوکیشن ممکن نشد. اگر صفحه با http باز شده باشد، لوکیشن فقط روی HTTPS کار می‌کند."
+        )
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    )
+  }
+
   const toggleRecording = async () => {
     if (recording) {
       mediaRecorderRef.current?.stop()
       setRecording(false)
+      return
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert("ضبط صدا فقط روی اتصال امن (HTTPS) یا localhost کار می‌کند؛ فعلاً از «انتخاب فایل ویس» استفاده کنید.")
       return
     }
     try {
@@ -566,7 +619,7 @@ export default function MeasurementPage() {
       setRecording(true)
     } catch {
       alert(
-        "دسترسی به میکروفون ممکن نشد. از دکمه‌ی «انتخاب فایل ویس» استفاده کنید."
+        "دسترسی به میکروفون ممکن نشد (روی گوشی فقط با HTTPS کار می‌کند). از دکمه‌ی «انتخاب فایل ویس» استفاده کنید."
       )
     }
   }
@@ -681,6 +734,7 @@ export default function MeasurementPage() {
           resultNotes,
           resultMedia: resultFiles.map((f) => f.url),
           voiceNotes: voiceFiles.map((f) => f.url),
+          resultLocation: resultLocation ? JSON.stringify(resultLocation) : null,
           status: markDone ? "DONE" : detail.status,
           assignedTo: currentUser || INSTALLER_NAME,
           installerName: INSTALLER_NAME,
@@ -1471,6 +1525,38 @@ export default function MeasurementPage() {
                   ))}
                 </ul>
               )}
+            </div>
+
+            {/* لوکیشن محل */}
+            <div className="mb-3 rounded-xl border border-teal-200 bg-teal-50/40 p-3">
+              <p className="text-xs font-bold text-blue-900 mb-2">لوکیشن محل</p>
+              <div className="flex flex-wrap items-center gap-2">
+                {detail.status !== "DONE" && (
+                  <button
+                    type="button"
+                    onClick={captureLocation}
+                    disabled={locLoading}
+                    className="rounded-xl bg-teal-600 text-white text-sm font-bold px-4 py-2 disabled:opacity-50"
+                  >
+                    {locLoading ? "در حال گرفتن لوکیشن..." : "ثبت لوکیشن"}
+                  </button>
+                )}
+                {resultLocation ? (
+                  <a
+                    href={mapLink(resultLocation)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs font-bold text-teal-800 underline"
+                  >
+                    <bdi dir="ltr">
+                      {resultLocation.lat.toFixed(6)}, {resultLocation.lng.toFixed(6)}
+                    </bdi>{" "}
+                    — مشاهده روی نقشه
+                  </a>
+                ) : (
+                  <span className="text-xs text-gray-500">لوکیشنی ثبت نشده است</span>
+                )}
+              </div>
             </div>
 
             <div className="flex flex-wrap gap-2 justify-end">

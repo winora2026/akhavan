@@ -58,6 +58,13 @@ export async function PATCH(
       data.resultMedia = JSON.stringify(body.resultMedia)
     if (body.voiceNotes !== undefined)
       data.voiceNotes = JSON.stringify(body.voiceNotes)
+    if (body.resultLocation !== undefined)
+      data.resultLocation =
+        typeof body.resultLocation === "string"
+          ? body.resultLocation
+          : body.resultLocation
+            ? JSON.stringify(body.resultLocation)
+            : null
     if (body.notes !== undefined) data.notes = body.notes
 
     if (body.problemReason !== undefined) data.problemReason = body.problemReason

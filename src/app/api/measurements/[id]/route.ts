@@ -61,6 +61,7 @@ export async function PATCH(
       data.resultMedia = JSON.stringify(body.resultMedia)
     if (body.voiceNotes !== undefined)
       data.voiceNotes = JSON.stringify(body.voiceNotes)
+    if (body.resultLocation !== undefined) data.resultLocation = body.resultLocation
     if (body.notes !== undefined) data.notes = body.notes
     if (body.assignedTo !== undefined) data.assignedTo = body.assignedTo
     if (body.orderId !== undefined) data.orderId = body.orderId

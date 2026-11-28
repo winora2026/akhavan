@@ -67,6 +67,7 @@ type Job = {
   resultNotes?: string | null
   resultMedia?: string | null
   voiceNotes?: string | null
+  resultLocation?: string | null
   installerName?: string | null
   installerPhone?: string | null
   salesRep?: string | null
@@ -126,6 +127,23 @@ function parseJsonArray(raw?: string | null): string[] {
   }
 }
 
+type GeoPoint = { lat: number; lng: number; accuracy?: number }
+
+function parseLocation(raw?: string | null): GeoPoint | null {
+  if (!raw) return null
+  try {
+    const v = JSON.parse(raw)
+    if (typeof v?.lat === "number" && typeof v?.lng === "number") {
+      return { lat: v.lat, lng: v.lng, accuracy: v.accuracy ?? undefined }
+    }
+  } catch {}
+  return null
+}
+
+function mapLink(p: GeoPoint) {
+  return `https://maps.google.com/?q=${p.lat},${p.lng}`
+}
+
 function formatFa(dt?: string | null) {
   if (!dt) return "—"
   try {
@@ -150,6 +168,8 @@ export default function InstallationPage() {
   const [resultNotes, setResultNotes] = useState("")
   const [resultFiles, setResultFiles] = useState<{ url: string; name: string }[]>([])
   const [voiceFiles, setVoiceFiles] = useState<{ url: string; name: string }[]>([])
+  const [resultLocation, setResultLocation] = useState<GeoPoint | null>(null)
+  const [locLoading, setLocLoading] = useState(false)
   const [problemReason, setProblemReason] = useState("")
   const [problemNotes, setProblemNotes] = useState("")
   const [actionLoading, setActionLoading] = useState(false)
@@ -261,14 +281,46 @@ export default function InstallationPage() {
         name: url.split("/").pop() || "voice",
       }))
     )
+    setResultLocation(parseLocation(row.resultLocation))
     setProblemReason(row.problemReason || "")
     setProblemNotes(row.problemNotes || "")
+  }
+
+  const captureLocation = () => {
+    if (!("geolocation" in navigator)) {
+      alert("این مرورگر از لوکیشن پشتیبانی نمی‌کند.")
+      return
+    }
+    setLocLoading(true)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setResultLocation({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: Math.round(pos.coords.accuracy || 0),
+        })
+        setLocLoading(false)
+      },
+      (err) => {
+        setLocLoading(false)
+        alert(
+          err.code === err.PERMISSION_DENIED
+            ? "اجازه‌ی دسترسی به لوکیشن داده نشد؛ در تنظیمات مرورگر اجازه دهید."
+            : "گرفتن لوکیشن ممکن نشد. اگر صفحه با http باز شده باشد، لوکیشن فقط روی HTTPS کار می‌کند."
+        )
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    )
   }
 
   const toggleRecording = async () => {
     if (recording) {
       mediaRecorderRef.current?.stop()
       setRecording(false)
+      return
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert("ضبط صدا فقط روی اتصال امن (HTTPS) یا localhost کار می‌کند؛ فعلاً از «انتخاب فایل» استفاده کنید.")
       return
     }
     try {
@@ -329,6 +381,7 @@ export default function InstallationPage() {
       resultNotes,
       resultMedia: resultFiles.map((f) => f.url),
       voiceNotes: voiceFiles.map((f) => f.url),
+      resultLocation: resultLocation ? JSON.stringify(resultLocation) : null,
       problemReason: problemReason || null,
       problemNotes: problemNotes || null,
       assignedTo: currentUser || INSTALLER_NAME,
@@ -346,6 +399,7 @@ export default function InstallationPage() {
       resultNotes,
       resultMedia: resultFiles.map((f) => f.url),
       voiceNotes: voiceFiles.map((f) => f.url),
+      resultLocation: resultLocation ? JSON.stringify(resultLocation) : null,
       problemReason,
       problemNotes,
       status: "PROBLEM",
@@ -361,6 +415,7 @@ export default function InstallationPage() {
       resultNotes,
       resultMedia: resultFiles.map((f) => f.url),
       voiceNotes: voiceFiles.map((f) => f.url),
+      resultLocation: resultLocation ? JSON.stringify(resultLocation) : null,
       problemReason: null,
       problemNotes: null,
       status: "DONE",
@@ -827,6 +882,38 @@ export default function InstallationPage() {
                   <span className="text-xs">ویس {i + 1}</span>
                 </div>
               ))}
+            </div>
+
+            {/* لوکیشن محل */}
+            <div className="mb-3 rounded-xl border border-teal-200 bg-teal-50/40 p-3">
+              <p className="text-xs font-bold text-blue-900 mb-2">لوکیشن محل</p>
+              <div className="flex flex-wrap items-center gap-2">
+                {detail.status !== "DONE" && (
+                  <button
+                    type="button"
+                    onClick={captureLocation}
+                    disabled={locLoading}
+                    className="rounded-xl bg-teal-600 text-white text-sm font-bold px-4 py-2 disabled:opacity-50"
+                  >
+                    {locLoading ? "در حال گرفتن لوکیشن..." : "ثبت لوکیشن"}
+                  </button>
+                )}
+                {resultLocation ? (
+                  <a
+                    href={mapLink(resultLocation)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs font-bold text-teal-800 underline"
+                  >
+                    <bdi dir="ltr">
+                      {resultLocation.lat.toFixed(6)}, {resultLocation.lng.toFixed(6)}
+                    </bdi>{" "}
+                    — مشاهده روی نقشه
+                  </a>
+                ) : (
+                  <span className="text-xs text-gray-500">لوکیشنی ثبت نشده است</span>
+                )}
+              </div>
             </div>
 
             <div className="flex flex-wrap gap-2 justify-end">
