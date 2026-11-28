@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useMemo, useRef } from "react"
+import { createPortal } from "react-dom"
 import Link from "next/link"
 import DatePicker from "react-multi-date-picker"
 import persian from "react-date-object/calendars/persian"
@@ -4304,8 +4305,14 @@ export default function StationQueuePage() {
         </div>
       )}
 
-      {showPrint && currentSlip && (
-        <div className="fixed inset-0 z-40 overflow-auto bg-black/40 p-4 print:static print:bg-white print:p-0">
+      {showPrint &&
+        currentSlip &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            id="exit-print-portal"
+            className="fixed inset-0 z-40 overflow-auto bg-black/40 p-4 print:static print:bg-white print:p-0"
+          >
           <div
             className={`mx-auto bg-white shadow print:shadow-none print:max-w-none print:w-full ${
               paper === "A4"
@@ -4490,8 +4497,9 @@ export default function StationQueuePage() {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+          document.body
+        )}
 
       <style jsx global>{`
         @media print {
@@ -4507,18 +4515,31 @@ export default function StationQueuePage() {
           body {
             background: #fff !important;
           }
-          body * {
-            visibility: hidden;
+          /* همه‌ی صفحه مخفی؛ فقط برگه‌ی خروج که با پورتال مستقیم زیر body است چاپ می‌شود.
+             display:none باعث می‌شود برگه از بالای کاغذ شروع شود و لبه‌ها بریده نشوند. */
+          body > * {
+            display: none !important;
           }
-          #exit-print-area,
-          #exit-print-area * {
-            visibility: visible;
+          body > #exit-print-portal {
+            display: block !important;
+            position: static !important;
+            inset: auto !important;
+            width: 100% !important;
+            padding: 0 !important;
+            background: #fff !important;
+            overflow: visible !important;
+          }
+          #exit-print-portal > div {
+            max-width: none !important;
+            width: 100% !important;
+            margin: 0 !important;
+            box-shadow: none !important;
           }
           #exit-print-area {
-            position: absolute !important;
-            inset: 0 !important;
+            position: static !important;
             width: 100% !important;
             max-width: 100% !important;
+            padding: 0 !important;
             overflow: visible !important;
           }
           #exit-print-area table {
