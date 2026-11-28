@@ -1071,7 +1071,12 @@ export default function StationQueuePage() {
 
     const skipPair = isBevelName(curName)
     const later = steps
-      .filter((s) => s.sequence > curSeq && !(skipPair && isBevelName(s.name)))
+      .filter(
+        (s) =>
+          s.sequence > curSeq &&
+          s.sequence < 9000 && // ایستگاه‌های آرشیوشده (خارج از مسیر فعال)
+          !(skipPair && isBevelName(s.name))
+      )
       .sort((a, b) => a.sequence - b.sequence)
     return later[0] || null
   }

@@ -59,6 +59,11 @@ function isBevelPair(name: string) {
   return c.startsWith("تراش") && !c.includes("الگویی")
 }
 
+/** «انجام در ایستگاه دیگر» یعنی از مسیر فعال خارج شده؛ مثل تکمیل‌شده بسته است */
+function isClosed(status: string) {
+  return status === "تکمیل شده" || status === "انجام در ایستگاه دیگر"
+}
+
 const canon = (s: string) => norm(s).replace(/\s+/g, "")
 
 /** نام ایستگاه کارتابل با ایستگاهِ نگاشت‌شده‌ی یک خدمت یکی است؟ */
@@ -286,17 +291,17 @@ export async function GET(req: Request) {
       // بقیه: اگر قطعه ایستگاه برش دارد، فقط بعد از تکمیل برش نمایش داده می‌شود.
       // قطعه‌ی بدون ایستگاه برش (سفارش اجرتیِ بدون «اجرت برش») از همان ابتدا
       // در کارتابل ایستگاه‌های خودش (مثلاً دیاموند) دیده می‌شود.
-      if (cut && cut.status !== "تکمیل شده") return false
+      if (cut && !isClosed(cut.status)) return false
 
       // انبار آماده تحویل: وقتی نیمه‌ساخته رد شده یا همه میانی‌ها تمام شده
       if (isReadyWh(station.name)) {
         const semi = all.find((s) => isSemiFinished(s.station.name))
-        if (semi && semi.status === "تکمیل شده") return true
+        if (semi && isClosed(semi.status)) return true
         const pendingMid = all.filter(
           (s) =>
             !isReadyWh(s.station.name) &&
             !isLoading(s.station.name) &&
-            s.status !== "تکمیل شده"
+            !isClosed(s.status)
         )
         return pendingMid.length === 0
       }
