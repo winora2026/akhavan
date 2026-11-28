@@ -105,10 +105,14 @@ export function mapServiceToStation(serviceName: string): string | null {
     return "UV"
   }
 
+  // نورپردازی و فیتینگ هم در کارتابل LED انجام می‌شوند
   if (
     name.includes("led") ||
     name.includes("ال ای دی") ||
-    name.includes("ال‌ای‌دی")
+    name.includes("ال‌ای‌دی") ||
+    name.includes("نورپرداز") ||
+    name.includes("فیتینگ") ||
+    name.includes("فيتينگ")
   ) {
     return "LED"
   }

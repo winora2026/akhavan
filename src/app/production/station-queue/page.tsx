@@ -253,10 +253,10 @@ function sumServiceMeasures(list: (ServiceMeasure[] | null | undefined)[]) {
   return Array.from(map.values())
 }
 
-/** خدمات قابل نمایش در ستون «سختی کار» همین ایستگاه */
+/** خدمات قابل نمایش در ستون «خدمات»: همه‌ی خدمات کالا (مثل کارتابل برش) */
 function stationServiceLines(pi: { servicesText?: string; stationServicesText?: string }) {
-  const own = servicesLines(pi.stationServicesText)
-  return own.length > 0 ? own : servicesLines(pi.servicesText)
+  const all = servicesLines(pi.servicesText)
+  return all.length > 0 ? all : servicesLines(pi.stationServicesText)
 }
 
 /** خدمات دیگری که روی این قطعه باید انجام شود (غیر از خدمت همین ایستگاه) */
@@ -307,6 +307,15 @@ function norm(s: string) {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase()
+}
+
+/** نرمال‌سازی جستجو: ي/ى → ی ، ك → ک ، حذف نیم‌فاصله و فاصله‌ها */
+function searchNorm(s: string) {
+  return norm(s)
+    .replace(/[يى]/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/[ةۀ]/g, "ه")
+    .replace(/\s+/g, " ")
 }
 
 /** تراش ۱ / تراش ۲ (دو دستگاه موازی) */
@@ -1027,6 +1036,11 @@ export default function StationQueuePage() {
     )
   }
 
+  const isSemiWhName = (name: string) => {
+    const n = norm(name)
+    return n.includes("نیمه") || n === norm("انبار محصول یک")
+  }
+
   /** ایستگاه بعد از ایستگاه فعلی (برای تراش ۱/۲ که موازی‌اند، از بین خودشان انتخاب نمی‌شود) */
   const nextStationOf = (row: QueueItem): RouteStep | null => {
     const steps = routeStepsOf(row)
@@ -1036,6 +1050,25 @@ export default function StationQueuePage() {
       steps.find((s) => s.sequence === row.sequence)
     const curSeq = cur ? cur.sequence : row.sequence
     const curName = cur?.name || selectedStationName
+
+    // در انبار نیمه‌ساخته و آماده تحویل: ایستگاهی که هنوز خدمتش انجام نشده
+    if (isSemiWhName(selectedStationName) || isReadyWhStation) {
+      const pendingService = steps
+        .filter(
+          (s) =>
+            s.id !== row.id &&
+            !isSemiWhName(s.name) &&
+            !isReadyWhName(s.name) &&
+            !isLoadingName(s.name) &&
+            !stepClosedIn(steps, s)
+        )
+        .sort((a, b) => a.sequence - b.sequence)[0]
+      if (pendingService) return pendingService
+      if (isReadyWhStation) {
+        return steps.find((s) => isLoadingName(s.name)) || null
+      }
+    }
+
     const skipPair = isBevelName(curName)
     const later = steps
       .filter((s) => s.sequence > curSeq && !(skipPair && isBevelName(s.name)))
@@ -1187,7 +1220,7 @@ export default function StationQueuePage() {
   }, [readyItems])
 
   const filteredCustomers = useMemo(() => {
-    const q = norm(customerQuery)
+    const q = searchNorm(customerQuery)
     const source =
       exitFilter === "pending"
         ? loadingCustomers
@@ -1200,7 +1233,9 @@ export default function StationQueuePage() {
             ).values()
           )
     if (!q) return source.slice(0, 25)
-    return source.filter((c) => norm(c.name).includes(q)).slice(0, 25)
+    return source
+      .filter((c) => searchNorm(c.name).includes(q))
+      .slice(0, 25)
   }, [customerQuery, exitFilter, exitHistory, loadingCustomers])
 
   const displayPendingItems = useMemo(() => {
@@ -1428,9 +1463,9 @@ export default function StationQueuePage() {
       )
     }
     if (search.trim()) {
-      const tokens = norm(search).split(" ").filter(Boolean)
+      const tokens = searchNorm(search).split(" ").filter(Boolean)
       result = result.filter((q) => {
-        const haystack = norm(
+        const haystack = searchNorm(
           [
             q.productionItem.productionOrder.order?.orderNumber,
             q.productionItem.productionOrder.order?.customer?.name,
@@ -2259,20 +2294,12 @@ export default function StationQueuePage() {
     <div
       className={`${
         queueMode ? "app-h overflow-hidden" : "min-h-screen"
-      } p-4 print:bg-white print:p-0 ${
-        mainTab === "exit" && isLoadingStation
-          ? "bg-white"
-          : "bg-cover bg-center bg-fixed"
-      }`}
-      style={
-        mainTab === "exit" && isLoadingStation
-          ? { fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif" }
-          : {
-              backgroundImage:
-                "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
-              fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif",
-            }
-      }
+      } bg-cover bg-center bg-fixed p-4 print:bg-white print:p-0`}
+      style={{
+        backgroundImage:
+          "url('https://i.postimg.cc/k4QL4Dsd/1F9CD217-645E-43FC-8039-84DC1134B6DA.png')",
+        fontFamily: "Vazirmatn, Tahoma, Arial, sans-serif",
+      }}
       dir="rtl"
     >
       <div
@@ -2369,6 +2396,18 @@ export default function StationQueuePage() {
                   if (layerCountRef.current > 0) {
                     e.preventDefault()
                     closeTopRef.current()
+                    return
+                  }
+                  // در کارتابل بارگیری داخل خود کارتابل بماند (مشتری/سابقه انتخاب‌شده بسته شود)
+                  if (isLoadingStation) {
+                    e.preventDefault()
+                    if (exitFilter === "pending" && lockedCustomer) {
+                      void unlockCustomer()
+                      return
+                    }
+                    if (exitFilter === "done" && doneCustomer) {
+                      setDoneCustomer(null)
+                    }
                   }
                 }}
                 className="rounded-lg border border-teal-500/40 bg-white px-3 py-1.5 text-sm shadow-sm font-bold text-blue-900"
@@ -2645,7 +2684,7 @@ export default function StationQueuePage() {
                           {sortTh("تعداد (باقی)", "quantity", itemSort, setItemSort)}
                           {sortTh("رد شده", "quantityOut", itemSort, setItemSort)}
                           {sortTh("مقدار کار", "meterage", itemSort, setItemSort)}
-                          {sortTh("سختی کار", "services", itemSort, setItemSort)}
+                          {sortTh("خدمات", "services", itemSort, setItemSort)}
                           {sortTh("توضیحات", "notes", itemSort, setItemSort)}
                           {sortTh("وضعیت", "status", itemSort, setItemSort)}
                           <th className={thS}>عملیات</th>
@@ -2979,7 +3018,7 @@ export default function StationQueuePage() {
                         {sortTh("جمع مقدار کار", "totalMeterage", orderSort, setOrderSort)}
                         {sortTh("تاریخ سفارش", "orderDate", orderSort, setOrderSort)}
                         {sortTh("تاریخ تحویل", "deliveryDate", orderSort, setOrderSort)}
-                        {sortTh("سختی کار", "services", orderSort, setOrderSort)}
+                        {sortTh("خدمات", "services", orderSort, setOrderSort)}
                       </tr>
                     </thead>
                     <tbody>
@@ -2993,8 +3032,8 @@ export default function StationQueuePage() {
                             setSelectedRowId(null)
                           }}
                         >
-                          <td className="border border-gray-400 px-2 py-1 text-center">
-                            {!isReadyWhStation && (
+                          {!isReadyWhStation && (
+                            <td className="border border-gray-400 px-2 py-1 text-center">
                               <input
                                 type="checkbox"
                                 checked={checkedGroupKeys.includes(g.key)}
@@ -3007,8 +3046,8 @@ export default function StationQueuePage() {
                                   )
                                 }
                               />
-                            )}
-                          </td>
+                            </td>
+                          )}
                           <td className="border border-gray-400 px-2 py-1 text-center font-bold">
                             {i + 1}
                           </td>
@@ -4263,7 +4302,7 @@ export default function StationQueuePage() {
       {showPrint && currentSlip && (
         <div className="fixed inset-0 z-40 overflow-auto bg-black/40 p-4 print:static print:bg-white print:p-0">
           <div
-            className={`mx-auto bg-white shadow print:shadow-none ${
+            className={`mx-auto bg-white shadow print:shadow-none print:max-w-none print:w-full ${
               paper === "A4"
                 ? "max-w-[210mm]"
                 : paper === "A5"
@@ -4308,44 +4347,46 @@ export default function StationQueuePage() {
               </button>
             </div>
             <div
-              className={`${paper === "A4" ? "p-6" : "p-3"} ${
+              className={`${paper === "A4" ? "p-6" : "p-3"} print:p-0 ${
                 paper === "A4" ? "" : "text-[11px]"
               }`}
               dir="rtl"
               id="exit-print-area"
             >
-              <div className="mb-2 flex items-start justify-between gap-2">
-                <div className="text-right">
-                  <h1 className={paper === "A4" ? "text-xl font-black" : "text-base font-black"}>
-                    فرم خروج کالا
-                  </h1>
-                  <h2 className="font-bold">شیشه و آینه اخوان</h2>
+              <div className={`text-center ${paper === "A4" ? "mb-3" : "mb-2"}`}>
+                <h1 className={paper === "A4" ? "text-xl font-black" : "text-base font-black"}>
+                  فرم خروج کالا و شیشه و آینه اخوان
+                </h1>
+              </div>
+              <div className="mb-2 flex justify-between gap-4 rounded-xl border border-gray-300 p-3 text-sm leading-7">
+                <div>
                   {currentSlip.customerCode ? (
-                    <p className="mt-1 text-sm font-bold">
-                      کد مشتری:{" "}
-                      <strong dir="ltr" className="font-black">
-                        {currentSlip.customerCode}
-                      </strong>
+                    <p>
+                      <strong>کد مشتری:</strong> <bdi>{currentSlip.customerCode}</bdi>
+                    </p>
+                  ) : null}
+                  <p>
+                    <strong>نام مشتری:</strong> {currentSlip.customerName}
+                  </p>
+                  {currentSlip.customerPhone ? (
+                    <p>
+                      <strong>شماره تماس:</strong>{" "}
+                      <bdi dir="ltr">{currentSlip.customerPhone}</bdi>
                     </p>
                   ) : null}
                 </div>
-                <div className="text-left" dir="rtl">
-                  <p className="text-xs">شماره خروج</p>
-                  <p className={`${paper === "A4" ? "text-xl" : "text-lg"} font-black leading-none`}>
-                    {toFaDigits(currentSlip.exitNumber)}
+                <div className="text-left">
+                  <p>
+                    <strong>شماره خروج:</strong> {toFaDigits(currentSlip.exitNumber)}
+                  </p>
+                  <p>
+                    <strong>تاریخ خروج:</strong> {formatFaDate(currentSlip.exitDate)}
+                  </p>
+                  <p>
+                    <strong>ساعت خروج:</strong>{" "}
+                    {formatFaTime(currentSlip.exitDate) || "—"}
                   </p>
                 </div>
-              </div>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm mb-2">
-                <span>
-                  مشتری: <strong>{currentSlip.customerName}</strong>
-                </span>
-                <span>
-                  تاریخ: <strong>{formatFaDate(currentSlip.exitDate)}</strong>
-                </span>
-                <span>
-                  ساعت خروج: <strong>{formatFaTime(currentSlip.exitDate) || "—"}</strong>
-                </span>
               </div>
               <table className="w-full border-collapse border border-black text-xs">
                 <thead>
@@ -4365,13 +4406,13 @@ export default function StationQueuePage() {
                 <tbody>
                   {currentSlip.items.map((it, idx) => (
                     <tr key={it.id}>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1 text-center font-bold">
                         {idx + 1}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1 text-center font-bold">
                         {it.orderNumber}
                       </td>
-                      <td className="border border-black p-1">
+                      <td className="border border-black p-1 font-bold">
                         {it.productName}
                       </td>
                       <td className={`border border-black p-1 text-center ${dimCls}`}>
@@ -4380,21 +4421,21 @@ export default function StationQueuePage() {
                       <td className={`border border-black p-1 text-center ${dimCls}`}>
                         {it.width}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1 text-center font-bold">
                         {it.quantity}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1 text-center font-bold">
                         {it.meterage != null
                           ? Number(it.meterage).toFixed(4)
                           : ""}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1 text-center font-bold">
                         {it.installationCode || ""}
                       </td>
-                      <td className="border border-black p-1">
+                      <td className="border border-black p-1 font-bold">
                         {it.servicesText || ""}
                       </td>
-                      <td className="border border-black p-1">
+                      <td className="border border-black p-1 font-bold">
                         {it.notes || ""}
                       </td>
                     </tr>
@@ -4413,11 +4454,11 @@ export default function StationQueuePage() {
                   </tr>
                 </tbody>
               </table>
-              <p className="mt-3 text-sm leading-6">
+              <p className="mt-3 text-sm font-bold leading-6">
                 اجناس فوق سالم و شمارش‌شده تحویل اینجانب گردید و تا تسویه نهایی
                 به‌صورت امانی نزد اینجانب می‌باشد.
               </p>
-              <div className="mt-2 grid grid-cols-2 gap-1 text-sm">
+              <div className="mt-2 grid grid-cols-2 gap-1 text-sm font-bold">
                 <p>
                   راننده: <strong>{currentSlip.driverName || "—"}</strong>
                 </p>
@@ -4455,7 +4496,11 @@ export default function StationQueuePage() {
               : paper === "A5"
                 ? "A5 portrait"
                 : "A5 landscape"};
-            margin: 8mm;
+            margin: 6mm;
+          }
+          html,
+          body {
+            background: #fff !important;
           }
           body * {
             visibility: hidden;
@@ -4465,9 +4510,23 @@ export default function StationQueuePage() {
             visibility: visible;
           }
           #exit-print-area {
-            position: absolute;
-            inset: 0;
-            width: 100%;
+            position: static !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            overflow: visible !important;
+          }
+          #exit-print-area table {
+            width: 100% !important;
+            table-layout: fixed;
+          }
+          #exit-print-area * {
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          tr,
+          td,
+          th {
+            page-break-inside: avoid;
           }
         }
       `}</style>

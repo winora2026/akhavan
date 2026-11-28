@@ -29,6 +29,7 @@ type ReadyItem = {
 type ExitSlip = {
   id: string
   exitNumber: string
+  customerCode?: string | null
   customerName: string
   customerPhone?: string | null
   exitDate: string
@@ -305,6 +306,18 @@ export default function ExitSlipPage() {
       return new Date(iso).toLocaleDateString("fa-IR")
     } catch {
       return "—"
+    }
+  }
+
+  const formatFaTime = (iso?: string | null) => {
+    if (!iso) return ""
+    try {
+      return new Date(iso).toLocaleTimeString("fa-IR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    } catch {
+      return ""
     }
   }
 
@@ -640,7 +653,7 @@ export default function ExitSlipPage() {
       {/* پیش‌نمایش چاپ */}
       {showPrint && currentSlip && (
         <div className="fixed inset-0 z-40 overflow-auto bg-black/40 p-4 print:static print:bg-white print:p-0 print:inset-auto">
-          <div className="mx-auto max-w-[210mm] bg-white shadow-xl print:shadow-none">
+          <div className="mx-auto max-w-[210mm] bg-white shadow-xl print:shadow-none print:max-w-none print:w-full">
             <div className="flex gap-2 p-3 print:hidden border-b">
               <button
                 type="button"
@@ -669,26 +682,43 @@ export default function ExitSlipPage() {
             </div>
 
             {/* محتوای برگه خروج */}
-            <div className="p-6 text-black" dir="rtl" id="exit-print-area">
+            <div className="p-6 text-black print:p-0" dir="rtl" id="exit-print-area">
               <div className="text-center mb-4">
-                <h1 className="text-xl font-black">فرم خروج کالا</h1>
-                <h2 className="text-lg font-bold">شیشه و آینه اخوان</h2>
+                <h1 className="text-xl font-black">
+                  فرم خروج کالا و شیشه و آینه اخوان
+                </h1>
               </div>
-              <div className="flex flex-wrap justify-between text-sm mb-3 gap-2">
-                <span>
-                  نام مشتری: <strong>{currentSlip.customerName}</strong>
-                </span>
-                <span>
-                  شماره خروجی: <strong>{currentSlip.exitNumber}</strong>
-                </span>
-                <span>
-                  تاریخ: <strong>{formatFa(currentSlip.exitDate)}</strong>
-                </span>
-                {currentSlip.customerPhone && (
-                  <span>
-                    تلفن: <strong>{currentSlip.customerPhone}</strong>
-                  </span>
-                )}
+              <div className="mb-3 flex justify-between gap-4 rounded-xl border border-gray-300 p-3 text-sm leading-7">
+                <div>
+                  {currentSlip.customerCode && (
+                    <p>
+                      <strong>کد مشتری:</strong>{" "}
+                      <bdi>{currentSlip.customerCode}</bdi>
+                    </p>
+                  )}
+                  <p>
+                    <strong>نام مشتری:</strong> {currentSlip.customerName}
+                  </p>
+                  {currentSlip.customerPhone && (
+                    <p>
+                      <strong>شماره تماس:</strong>{" "}
+                      <bdi dir="ltr">{currentSlip.customerPhone}</bdi>
+                    </p>
+                  )}
+                </div>
+                <div className="text-left">
+                  <p>
+                    <strong>شماره خروج:</strong> {currentSlip.exitNumber}
+                  </p>
+                  <p>
+                    <strong>تاریخ خروج:</strong>{" "}
+                    {formatFa(currentSlip.exitDate)}
+                  </p>
+                  <p>
+                    <strong>ساعت خروج:</strong>{" "}
+                    {formatFaTime(currentSlip.exitDate) || "—"}
+                  </p>
+                </div>
               </div>
 
               <table className="w-full border-collapse border border-black text-xs">
@@ -709,36 +739,36 @@ export default function ExitSlipPage() {
                 <tbody>
                   {currentSlip.items.map((it, idx) => (
                     <tr key={it.id}>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1 text-center font-bold">
                         {idx + 1}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1 text-center font-bold">
                         {it.orderNumber || "—"}
                       </td>
-                      <td className="border border-black p-1">
+                      <td className="border border-black p-1 font-bold">
                         {it.productName}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1 text-center font-bold">
                         {it.length ?? "—"}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1 text-center font-bold">
                         {it.width ?? "—"}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1 text-center font-bold">
                         {it.quantity}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1 text-center font-bold">
                         {it.meterage != null
                           ? Number(it.meterage).toFixed(4)
                           : "—"}
                       </td>
-                      <td className="border border-black p-1 text-center">
+                      <td className="border border-black p-1 text-center font-bold">
                         {it.installationCode || ""}
                       </td>
-                      <td className="border border-black p-1">
+                      <td className="border border-black p-1 font-bold">
                         {it.servicesText || ""}
                       </td>
-                      <td className="border border-black p-1">
+                      <td className="border border-black p-1 font-bold">
                         {it.notes || ""}
                       </td>
                     </tr>
@@ -758,12 +788,12 @@ export default function ExitSlipPage() {
                 </tbody>
               </table>
 
-              <p className="mt-4 text-sm leading-7">
+              <p className="mt-4 text-sm font-bold leading-7">
                 اجناس فوق سالم و شمارش‌شده تحویل اینجانب گردید و تا تسویه نهایی
                 به‌صورت امانی نزد اینجانب می‌باشد.
               </p>
 
-              <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+              <div className="mt-3 grid grid-cols-2 gap-2 text-sm font-bold">
                 <p>
                   راننده / تحویل‌گیرنده:{" "}
                   <strong>{currentSlip.driverName || "—"}</strong>
@@ -804,6 +834,14 @@ export default function ExitSlipPage() {
 
       <style jsx global>{`
         @media print {
+          @page {
+            size: A4 portrait;
+            margin: 6mm;
+          }
+          html,
+          body {
+            background: #fff !important;
+          }
           body * {
             visibility: hidden;
           }
@@ -812,9 +850,23 @@ export default function ExitSlipPage() {
             visibility: visible;
           }
           #exit-print-area {
-            position: absolute;
-            inset: 0;
-            width: 100%;
+            position: static !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            overflow: visible !important;
+          }
+          #exit-print-area table {
+            width: 100% !important;
+            table-layout: fixed;
+          }
+          #exit-print-area * {
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          tr,
+          td,
+          th {
+            page-break-inside: avoid;
           }
         }
       `}</style>
