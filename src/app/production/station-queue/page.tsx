@@ -4355,7 +4355,7 @@ export default function StationQueuePage() {
             >
               <div className={`text-center ${paper === "A4" ? "mb-3" : "mb-2"}`}>
                 <h1 className={paper === "A4" ? "text-xl font-black" : "text-base font-black"}>
-                  فرم خروج کالا و شیشه و آینه اخوان
+                  خروج کالا
                 </h1>
               </div>
               <div className="mb-2 flex justify-between gap-4 rounded-xl border border-gray-300 p-3 text-sm leading-7">

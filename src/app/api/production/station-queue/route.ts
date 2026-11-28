@@ -43,6 +43,16 @@ function isReadyWh(name: string) {
 function isLoading(name: string) {
   return norm(name).includes("بارگیری")
 }
+/** ایستگاه نورپردازی/فیتینگ (LED) */
+function isLed(name: string) {
+  const n = norm(name)
+  return (
+    n.includes("led") ||
+    n.includes("نورپرداز") ||
+    n.includes("فیتینگ") ||
+    n.includes("فيتينگ")
+  )
+}
 /** تراش ۱ و تراش ۲ (نه تراش الگویی) */
 function isBevelPair(name: string) {
   const c = norm(name).replace(/\s+/g, "")
@@ -295,6 +305,12 @@ export async function GET(req: Request) {
       if (isLoading(station.name)) {
         const ready = all.find((s) => isReadyWh(s.station.name))
         return !!ready && ready.status === "تکمیل شده"
+      }
+
+      // کارتابل LED: قلمی که بارگیری‌اش تکمیل شده (خارج شده) دیگر نمایش داده نشود
+      if (isLed(station.name)) {
+        const load = all.find((s) => isLoading(s.station.name))
+        if (load && load.status === "تکمیل شده") return false
       }
 
       // خدمات + انبار نیمه‌ساخته: بعد از برش (یا از ابتدا، اگر برش ندارد) هم‌زمان در صف

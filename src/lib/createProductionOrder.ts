@@ -189,7 +189,6 @@ function buildRouteStationNames(salesItem: any, includeCut = true): string[] {
     "چاپ (رنگ‌کاری)",
     "قاب",
     "خم‌کاری",
-    "LED",
     "MDF",
     "لیمینت",
     "دوجداره",
@@ -206,6 +205,8 @@ function buildRouteStationNames(salesItem: any, includeCut = true): string[] {
   }
 
   route.push("شست و شو")
+  // نورپردازی/فیتینگ بعد از شست و شو و قبل از انبارها انجام می‌شود
+  if (serviceStationSet.has("LED")) route.push("LED")
   if (hasPackaging) route.push("بسته بندی")
   route.push("انبار کالای نیمه‌ساخته")
   route.push("انبار آماده تحویل")

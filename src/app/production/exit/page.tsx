@@ -685,7 +685,7 @@ export default function ExitSlipPage() {
             <div className="p-6 text-black print:p-0" dir="rtl" id="exit-print-area">
               <div className="text-center mb-4">
                 <h1 className="text-xl font-black">
-                  فرم خروج کالا و شیشه و آینه اخوان
+                  خروج کالا
                 </h1>
               </div>
               <div className="mb-3 flex justify-between gap-4 rounded-xl border border-gray-300 p-3 text-sm leading-7">

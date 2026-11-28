@@ -33,10 +33,18 @@ function isLoadingName(name: string) {
     .includes("بارگیری")
 }
 
-/** کد مشتری هر برگه را از جدول مشتری می‌آورد (برای چاپ بالای برگه‌ی خروج) */
+/** کد و شماره تماس مشتری هر برگه را از جدول مشتری می‌آورد (برای چاپ بالای برگه‌ی خروج) */
 async function withCustomerCodes<
-  T extends { customerId: string | null; customerName: string }
->(slips: T[]): Promise<(T & { customerCode: string | null })[]> {
+  T extends {
+    customerId: string | null
+    customerName: string
+    customerPhone?: string | null
+  }
+>(
+  slips: T[]
+): Promise<
+  (T & { customerCode: string | null; customerPhone: string | null })[]
+> {
   if (slips.length === 0) return []
   const ids = Array.from(
     new Set(slips.map((s) => s.customerId).filter((x): x is string => !!x))
@@ -47,27 +55,34 @@ async function withCustomerCodes<
   const byIdRows = ids.length
     ? await prisma.customer.findMany({
         where: { id: { in: ids } },
-        select: { id: true, customerCode: true },
+        select: { id: true, customerCode: true, phone: true },
       })
     : []
   const byNameRows = names.length
     ? await prisma.customer.findMany({
         where: { name: { in: names } },
-        select: { name: true, customerCode: true },
+        select: { name: true, customerCode: true, phone: true },
       })
     : []
-  const byId = new Map<string, string | null>()
-  byIdRows.forEach((c) => byId.set(c.id, c.customerCode))
-  const byName = new Map<string, string | null>()
-  byNameRows.forEach((c) => byName.set(c.name, c.customerCode))
+  const byId = new Map<string, { code: string | null; phone: string | null }>()
+  byIdRows.forEach((c) =>
+    byId.set(c.id, { code: c.customerCode, phone: c.phone })
+  )
+  const byName = new Map<string, { code: string | null; phone: string | null }>()
+  byNameRows.forEach((c) =>
+    byName.set(c.name, { code: c.customerCode, phone: c.phone })
+  )
 
-  return slips.map((s) => ({
-    ...s,
-    customerCode:
-      (s.customerId ? byId.get(s.customerId) : null) ??
-      byName.get(s.customerName) ??
-      null,
-  }))
+  return slips.map((s) => {
+    const c =
+      (s.customerId ? byId.get(s.customerId) : undefined) ??
+      byName.get(s.customerName)
+    return {
+      ...s,
+      customerCode: c?.code ?? null,
+      customerPhone: s.customerPhone ?? c?.phone ?? null,
+    }
+  })
 }
 
 /**
@@ -282,7 +297,10 @@ export async function POST(req: Request) {
             exitNumber,
             customerId: customerId || null,
             customerName,
-            customerPhone: customerPhone || null,
+            customerPhone:
+              customerPhone ||
+              productionItems[0]?.productionOrder?.order?.customer?.phone ||
+              null,
             driverName: driverName || null,
             driverNationalId: driverNationalId || null,
             driverPhone: driverPhone || null,
